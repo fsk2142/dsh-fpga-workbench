@@ -13,7 +13,7 @@
 //   3. 任何一步失败都**明确打印恢复命令**,绝不把"删了但没装回去"当成功 ——
 //      那种状态会让 profile 的 bundles 列着一个不存在的包,DSH 启动会直接失败。
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -103,6 +103,37 @@ if (checkOnly) {
   const expectedTail = ["profiles", PROFILE_NAME, "node_modules", PACKAGE_NAME].join(sep);
   if (!INSTALLED.endsWith(expectedTail)) {
     console.error(`拒绝删除:路径形状不符合预期\n  实际: ${INSTALLED}\n  期望结尾: ${expectedTail}`);
+    process.exit(1);
+  }
+
+  // 3. 可写性预检:先往 profile 目录写一个临时文件再删掉。
+  //
+  // 这一步是为了堵住一个真实事故:pnpm 需要在 profile 目录里建临时文件,而受限沙箱
+  // (例如由别的 agent 进程代跑)会以 EPERM 拒绝 —— 于是"删掉旧副本"成功、"装回去"
+  // 失败,profile 的 bundles 就列着一个不存在的包目录,DSH 启动直接失败。
+  // 写不了就什么都不做,让用户在自己的终端里跑。
+  const probe = join(PROFILE_DIR, `_fpga_install_probe_${String(process.pid)}`);
+  try {
+    writeFileSync(probe, "probe");
+    rmSync(probe, { force: true });
+  } catch (error) {
+    console.error(
+      [
+        `无法写入 profile 目录:${error.message}`,
+        "",
+        "本脚本必须在你自己的终端里运行(受限沙箱不允许 pnpm 在 profile 目录建临时文件)。",
+        "未做任何改动,状态仍然可用。",
+        "",
+        "请手动执行:",
+        `  ${RECOVERY}`,
+        ""
+      ].join("\n")
+    );
+    try {
+      rmSync(probe, { force: true });
+    } catch {
+      /* 清不掉也无所谓,名字带 pid、不影响加载 */
+    }
     process.exit(1);
   }
 

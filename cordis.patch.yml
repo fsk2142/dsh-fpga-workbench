@@ -8,6 +8,16 @@
 # 没有这个声明会怎样:包只是被装成一个普通依赖,客户端半侧可能被别的加载器
 # (例如插件市场的 client-only shim)挂进浏览器,但宿主半侧永远不加载 ——
 # 于是入口看得见、点开却是"无法读取工作台数据"。
+#
+# config.registry 必须显式给出。宿主默认读的是**包旁边**的 workbench.json,而
+# profile 安装会把包装进 profile 的 node_modules —— 那份是没人会去编辑的副本。
+# 指向工作区这份,你加的 FPGA 项目才有唯一可信的位置,而且改了立刻生效(宿主每次
+# 请求都重读)。
+#
+# 注意这是绝对路径:插件本身就是从绝对路径安装的,这里保持一致。换工作区目录时,
+# 这一行要跟着改(这也是将来要做设置分区的原因 —— 改成在界面里填)。
 - insert:
     - id: fpga-workbench
       name: 'dsh-fpga-workbench'
+      config:
+        registry: 'C:\Work\dsh-fpga-workbench\workbench.json'

@@ -92,6 +92,25 @@ function findButton(node, text) {
 }
 
 /**
+ * 在渲染树里找带某个 prop 的节点。
+ * @param node - createElement 的产物。
+ * @param predicate - 对 props 的判断。
+ * @returns 找到的节点,或 undefined。
+ */
+function findByProp(node, predicate) {
+  if (node === null || typeof node !== "object") return undefined;
+  if (predicate(node.props ?? {})) return node;
+  for (const child of node.children ?? []) {
+    const found = findByProp(child, predicate);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/** 过滤框的识别条件(按占位文字,不依赖 class)。 */
+const FILTER_BOX = (props) => typeof props.placeholder === "string" && props.placeholder.includes("打字过滤");
+
+/**
  * 跑一遍客户端 bundle:喂假的 window / document / fetch / react,返回它注册的那份 spec。
  *
  * 组件里会碰 document(注入样式表)与 fetch(两条路由),Node 里都没有,所以按参数注入,
@@ -211,9 +230,6 @@ const scope = {
 };
 let captured;
 let browserRequested = 0;
-let pickRequested = 0;
-/** 由测试按需改写:系统对话框这一路返回什么。 */
-let pickResponse = { cancelled: true };
 const payload = {
   tools: [
     { key: "compiler", label: "用哪个编译器", hint: "选一个", required: false, skips: [], path: "verilator", configured: true, present: true, group: "编译器", control: "select", options: [{ value: "verilator", label: "Verilator" }, { value: "other", label: "其他" }], default: "verilator" },
@@ -235,10 +251,6 @@ const browsePayload = {
 };
 const fetchStub = (url) => {
   const target = String(url);
-  if (target.includes("/pick")) {
-    pickRequested += 1;
-    return Promise.resolve({ ok: true, json: () => Promise.resolve(pickResponse) });
-  }
   if (target.includes("/browse")) {
     browserRequested += 1;
     return Promise.resolve({ ok: true, json: () => Promise.resolve(browsePayload) });
@@ -286,46 +298,48 @@ for (const expected of ["用哪个编译器", "编译器路径", "库目录", "�
   check(rendered.includes(expected), `渲染结果里出现「${expected}」`);
 }
 check(!rendered.includes("旧键里的路径"), "隐藏字段没有被渲染出来");
-check(browserRequested === 0 && pickRequested === 0, "没点「浏览…」时不会去请求接口(不白跑)");
+check(browserRequested === 0, "没点「浏览…」时不会去请求接口(不白跑)");
 
-// 点「浏览…」的第一条路:系统对话框选中了 → 必须把结果写进设置,不该再开页面内浏览
+// 点「浏览…」:列目录 → 面板出现(带过滤框)
+let browsing;
 try {
-  pickResponse = { path: "D:\\Tools\\vivado.bat" };
   const button = findButton(secondTree, "浏览…");
   check(button !== undefined, "渲染树里找得到「浏览…」按钮");
   button.props.onClick();
   await new Promise((resolve) => setImmediate(resolve));
-  check(pickRequested === 1, `点按钮先请宿主弹系统对话框(实际请求 ${pickRequested} 次)`);
-  check(browserRequested === 0, "系统对话框这条路不额外去列目录");
-  check(
-    written.some(([key, value]) => key === "compilerPath" && value === "D:\\Tools\\vivado.bat"),
-    "选中的路径被写进了设置",
-    JSON.stringify(written)
-  );
+  check(browserRequested === 1, `点按钮后去列了目录(实际请求 ${browserRequested} 次)`);
   fake.reset();
-  captured();
-} catch (error) {
-  check(false, "系统对话框这条路能走通", String(error));
-}
-
-// 第二条路:系统对话框弹不出来 → 退回页面内浏览,并说明原因
-try {
-  pickResponse = { error: "powershell spawn ENOENT" };
-  written.length = 0;
-  fake.reset();
-  const before = captured();
-  findButton(before, "浏览…").props.onClick();
-  await new Promise((resolve) => setImmediate(resolve));
-  fake.reset();
-  const withBrowse = captured();
-  const browseRendered = JSON.stringify(withBrowse ?? {});
-  check(browserRequested === 1, `弹不出来时退回列目录(实际请求 ${browserRequested} 次)`);
-  check(browseRendered.includes("系统窗口弹不出来"), "界面说明为什么退回页面内选择");
+  browsing = captured();
+  const browseRendered = JSON.stringify(browsing ?? {});
   check(browseRendered.includes("verilator_bin.exe"), "浏览面板列出目录里的文件");
   check(browseRendered.includes("用这个目录"), "浏览面板提供「用这个目录」(XSim 那种要目录的路径)");
   check(browseRendered.includes("↑ 上级"), "浏览面板能回上级目录");
+  check(
+    findByProp(browsing, FILTER_BOX) !== undefined,
+    "浏览面板带过滤框(一个 bin 目录几十上百项,靠它几秒钟找到目标)"
+  );
 } catch (error) {
   check(false, "浏览面板能渲染", String(error));
+}
+
+// 过滤 + 回车:打几个字母只剩一项,回车直接选中并写入设置
+try {
+  findByProp(browsing, FILTER_BOX).props.onChange({ target: { value: "veril" } });
+  fake.reset();
+  const filtered = captured();
+  const filteredText = JSON.stringify(filtered ?? {});
+  check(filteredText.includes("verilator_bin.exe"), "过滤后目标还在");
+  // 按**列表项的写法**判断:光看 "mingw64" 会撞上路径本身(C:\msys64\mingw64\bin)
+  check(!filteredText.includes("📁 mingw64"), "过滤把不匹配的项去掉(只剩一项才好回车)");
+  written.length = 0;
+  findByProp(filtered, FILTER_BOX).props.onKeyDown({ key: "Enter" });
+  check(
+    written.some(([key, value]) => key === "compilerPath" && value === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe"),
+    "过滤到唯一一项后回车直接选中并写进设置",
+    JSON.stringify(written)
+  );
+} catch (error) {
+  check(false, "过滤与回车能选中", String(error));
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

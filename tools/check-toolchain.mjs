@@ -93,6 +93,15 @@ check(clientSource.includes("skips"), "客户端用宿主返回的 skips 渲染�
 for (const step of ["比特流生成", "RTL 功能仿真", "厂商原语仿真"]) {
   check(!clientSource.includes(step), `客户端没有硬编码步骤「${step}」(必须来自宿主)`);
 }
+// 写入必须等落地再刷新状态。
+// scope.set 是排队的 mutation,不等它就去问宿主会拿到旧值 —— 实机现象是"填完路径要
+// 关掉设置再打开才显示已就绪"。这条只能靠源码断言守住:它是时序契约,不是纯逻辑。
+check(
+  clientSource.includes("return Promise.resolve(pending)"),
+  "写入函数把 scope.set 的 promise 返回出去(不等结算就会显示旧状态)"
+);
+check(/writeField\([\s\S]{0,120}?\.then\(/u.test(clientSource), "刷新状态写在写入结算之后(.then 里)");
+
 // 不再往会话提示里注入任何东西 —— 这是刻意的设计决定
 check(!readFileSync(new URL("../lib/index.js", import.meta.url), "utf8").includes("systemPrompt"), "宿主不注册 systemPrompt 段");
 

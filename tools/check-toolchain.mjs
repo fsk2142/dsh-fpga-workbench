@@ -86,7 +86,16 @@ check(clientSource.includes(`"${NS}"`), `客户端命名空间与宿主一致(${
 check(clientSource.includes("/plugins/fpga-workbench/toolchain"), "客户端用的状态路由与宿主一致");
 for (const field of FIELDS) {
   check(clientSource.includes(`"${field.key}"`), `客户端有字段 ${field.key}`);
+  // 说明文字两边必须逐字一致 —— 说法不一致会让人去填一个不存在的文件名。
+  // 真实教训:hint 只写"可执行文件",用户就会去找 Windows 上并不存在的 vivado.exe。
+  // 比的是**源码文本**,所以把宿主运行时的反斜杠转义成源码里的写法再比。
+  const literal = field.hint.replace(/\\/gu, "\\\\");
+  check(clientSource.includes(literal), `客户端 hint 与宿主一致:${field.key}`);
 }
+// 说明里要给确切文件名,不能含糊成"可执行文件"
+check(FIELDS.find((field) => field.key === "vivadoPath")?.hint.includes("vivado.bat"), "Vivado 说明写了确切文件名 vivado.bat");
+check(FIELDS.find((field) => field.key === "modelsimPath")?.hint.includes("vsim.exe"), "ModelSim 说明写了确切文件名 vsim.exe");
+check(FIELDS.find((field) => field.key === "verilatorPath")?.hint.includes("verilator_bin.exe"), "Verilator 说明写了确切文件名 verilator_bin.exe");
 // 客户端要按宿主返回的 skips 显示"会跳过什么",不能自己另写一份跳过清单
 // (只检查几个只可能来自宿主的步骤名,别用"综合"这种会撞上提示文案的词)
 check(clientSource.includes("skips"), "客户端用宿主返回的 skips 渲染提示");

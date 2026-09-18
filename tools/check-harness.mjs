@@ -260,11 +260,9 @@ if (plugin !== null) {
   // 父槽已声明
   slots.declare(ENTRY_SLOT);
   slots.declare("main");
-  slots.declare("sidebar.workspaces");
   plugin.apply(ctx);
   const row = (slots.entries.get(ENTRY_SLOT) ?? [])[0];
   const panel = (slots.entries.get("main") ?? [])[0];
-  const sidebarEntry = (slots.entries.get("sidebar.workspaces") ?? [])[0];
   check(row !== undefined && panel !== undefined, "两个槽都注册了行");
   check(row?.options.id === PANEL_ID, `入口行 id 正确(${row?.options.id})`);
   check(row?.options.label === LABEL, `入口行 label 正确(${row?.options.label})`);
@@ -356,79 +354,6 @@ if (plugin !== null) {
     );
   } catch (error) {
     check(false, "面板组件", error.stack);
-  }
-
-  // ── 会话区替换(盖掉官方那一个)────────────────────────────────────────────
-  try {
-    check(sidebarEntry !== undefined, "注册进了 sidebar.workspaces");
-
-    // 必须用负数优先级:single 槽"优先级低的赢",官方在 0;若用 >=0 同优先级会直接抛错。
-    check(
-      typeof sidebarEntry?.options.priority === "number" && sidebarEntry.options.priority < 0,
-      `会话区替换用负数优先级(实际 ${String(sidebarEntry?.options.priority)})`
-    );
-    // 不能声明子槽 —— 声明已被声明的子槽会抛错(插件加载失败 → 桌面端起不来)
-    check(sidebarEntry?.options.children === undefined, "替换条目没有声明子槽");
-
-    const tree = sidebarEntry.component();
-    check(tree?.__element === true, "会话区组件返回元素");
-
-    // 关键:必须列出**所有**工作区,否则用户没法导航到别的会话
-    const names = elements(tree, (n) => n.props?.className === "fpga-sb-name");
-    check(names.length === 2, `列出全部 2 个工作区(实际 ${names.length})`);
-    check(textOf(names[0]) === LABEL, `工作台分组排最前且显示为「${LABEL}」(实际 ${textOf(names[0])})`);
-    check(textOf(names[1]) === "FPGA_Files", `其余工作区保留自己的名字(实际 ${textOf(names[1])})`);
-    check(
-      elements(tree, (n) => n.props?.className === "fpga-sb-path").length === 2,
-      "每个分组都显示工作文件夹路径"
-    );
-
-    // 点工作区**名字** = 在该工作区新建会话(用户指定的交互)
-    uiWorkspace.calls.length = 0;
-    names[1].props.onClick();
-    check(
-      uiWorkspace.calls.length === 1 && uiWorkspace.calls[0] === "ws-other",
-      `点工作区名字在该工作区新建会话(实际 ${JSON.stringify(uiWorkspace.calls)})`
-    );
-
-    // 点会话名 = 打开它
-    const sessionBtns = elements(tree, (n) => n.props?.className === "fpga-sb-session");
-    check(sessionBtns.length === 3, `列出全部会话(完整套 3 个,含别的工作区的)(实际 ${sessionBtns.length})`);
-    uiWorkspace.opened.length = 0;
-    sessionBtns[0].props.onClick();
-    check(uiWorkspace.opened.length === 1, `点会话会打开它(实际 ${uiWorkspace.opened.length} 次)`);
-
-    // 收起箭头:收起后该分组的会话不再渲染
-    const carets = elements(tree, (n) => n.props?.className === "fpga-sb-caret");
-    check(carets.length === 2, `每个分组一个收起箭头(实际 ${carets.length})`);
-    check(carets[0].props["aria-expanded"] === "true", "默认展开");
-    carets[0].props.onClick();
-    const collapsedTree = sidebarEntry.component();
-    const collapsedSessions = elements(collapsedTree, (n) => n.props?.className === "fpga-sb-session");
-    check(collapsedSessions.length === 1, `收起第一个分组后只剩另一组的会话(实际 ${collapsedSessions.length})`);
-    const collapsedCaret = elements(collapsedTree, (n) => n.props?.className === "fpga-sb-caret")[0];
-    check(collapsedCaret?.props["aria-expanded"] === "false", "收起后 aria-expanded 为 false");
-    collapsedCaret.props.onClick();
-    check(
-      elements(sidebarEntry.component(), (n) => n.props?.className === "fpga-sb-session").length === 3,
-      "再点一次恢复展开"
-    );
-
-    // 搜索:只留有命中的分组与会话
-    const searchBox = elements(tree, (n) => n.props?.className === "fpga-sb-search")[0];
-    check(searchBox !== undefined, "会话区有搜索框");
-    searchBox.props.onChange({ target: { value: "测试" } });
-    const searched = sidebarEntry.component();
-    const searchedSessions = elements(searched, (n) => n.props?.className === "fpga-sb-session");
-    check(searchedSessions.length === 1, `搜索「测试」只留 1 个会话(实际 ${searchedSessions.length})`);
-    check(textOf(searchedSessions[0]).includes("测试"), "留下的是命中的那个");
-    searchBox.props.onChange({ target: { value: "" } });
-    check(
-      elements(sidebarEntry.component(), (n) => n.props?.className === "fpga-sb-session").length === 3,
-      "清空搜索后恢复全部会话"
-    );
-  } catch (error) {
-    check(false, "会话区替换", error.stack);
   }
 
   // 路径匹配的健壮性:大小写与结尾分隔符不该影响结果

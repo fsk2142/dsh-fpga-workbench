@@ -1,0 +1,71 @@
+---
+name: fpga-lint
+description: Use after the RTL has been written and before simulation — running the Verilator lint gate on an FPGA module, checking RTL against this project's coding conventions (file header, nine section blocks, port types and alignment, tabs, line endings, design assertions, testbench self-fail), or working out why lint reports errors or warnings. This is the check stage that follows writing RTL; simulation, comparison, synthesis, timing and review each have their own skill.
+---
+
+# lint:写完 RTL 之后统一跑一次
+
+节奏是**一口气写完 RTL,再统一检查** —— 不要边写边跑,但也别跳过这一关。这一关过了才进仿真。
+
+## 前置
+
+1. 找约定文件 `.fpga-workbench.json`(在模块根;找不到就问用户,见 `fpga-spec`)
+2. 读 `spec/spec.md`:接口、判据、器件在那里 —— 规范检查的例外也要按它判
+3. 确认要查的源码(默认 `rtl/` 下的 `.v` / `.sv`,递归)
+
+## 第一步:Verilator
+
+工具路径看会话开头那段「本机 FPGA 工具链」。
+
+```powershell
+& "<verilatorPath>" --lint-only -Wall --top-module <顶层模块名> <文件...>
+```
+
+- **只查 `rtl/`**,不要把 `ip/` 的仿真模型丢进去
+- 报 `module not found`、而那个模块定义在 `ip/` 下 —— 这是正常的,它的定义不在 rtl/ 里。
+  做法:把 IP 的端口 wrapper 一起传进去,或临时生成一个只有端口的黑盒 stub 加进命令行。
+  **不要为了让 lint 过就改端口**
+- warning 必须清零。确实要压的,在源码里**就地豁免**(`/* verilator lint_off XXX */` …
+  `/* verilator lint_on XXX */`)并在旁边写明为什么;**禁止用 `-Wno-XXX` 全局屏蔽**
+
+## 第二步:逐条对规范
+
+**格式以模板为准** —— RTL / 测试平台 / 约束各有模板,用哪一份看会话开头那段「本机 FPGA 工具链」
+里的模板那一节(你没提供就写的是插件自带那份),**先读模板再对**。下面是核对清单。
+
+**写 RTL 的时候就该照这些写**(照模板改),这里是写完后的核对。
+
+格式类 —— 机械的,一眼能判:
+
+- 禁 Tab
+- 代码行禁非英文(注释例外)
+- 行尾统一,一个文件里不许混
+
+结构类 —— 要读代码判:
+
+- **文件头 11 行**字段齐全:File Name / Module Name / Created Date / Updated Date / Version /
+  Author / Copyright / Open Source(专有声明),再跟 2–5 行模块功能说明(数据流、输出格式)
+- 开头 `` `resetall `` + `` `timescale `` + `` `default_nettype none ``,结尾把 nettype 收回来
+- 端口类型只许 `input wire` / `output logic` / `inout tri`;端口名与类型**对齐到第 69 列**
+- `end else begin` 写在同一行
+- `always_ff` 只用 `posedge`
+- 复位高有效
+- **九个小节块一个不少、顺序不变**:Local Parameters / Types / Registers / Combinational Logic /
+  Sequential Logic / Functions Module / Task Module / Module Instantiation / Assertions
+- 每个 RTL 都要有设计断言,说明写清 Purpose / Trigger / Failure
+- **一个 always 块里不混放不相关的信号** —— 除非它们共用同一套控制逻辑(同一状态机、同一事务
+  生命周期、同一寄存器组控制)。说不清它们的关系就拆开
+- 测试平台必须含 `$fatal` / `$error`:仿真失败要能被自动抓住,不能靠人看波形
+
+## 产物
+
+写 `<阶段根>/lint/lint.md`:
+
+- **结论**:`PASS` / `FAIL` / `BLOCKED` / `NOT_APPLICABLE`
+- 跑过的**命令原文**(能直接复制复现)
+- Verilator 的 error / warning 逐条处理:改了哪里,或者就地豁免的理由
+- 逐条规范的核对结果;没过的写清 `文件:行`
+- `BLOCKED` 的情形:verilator 没就绪(设置里标了「未就绪」)→ 如实说明并停下,**不要假装跑过**
+- `NOT_APPLICABLE`:`rtl/` 下还没有源码
+
+结论和证据都要能指回去。**没跑 lint 就进仿真,等于把问题推到下游。**

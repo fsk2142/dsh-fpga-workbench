@@ -12,7 +12,8 @@
 // 只 import lib/toolchain.js:它只用 node 内置模块,而 lib/index.js 要 schemastery,
 // 后者只在 profile 的 node_modules 里,从仓库 import 会解析失败。
 import { readFileSync } from "node:fs";
-import { FIELDS, NS, describeEnv, inspectTools } from "../lib/toolchain.js";
+import { join } from "node:path";
+import { FIELDS, NS, describeEnv, inspectTools, probeFilesystem, resolveTemplates } from "../lib/toolchain.js";
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -28,22 +29,31 @@ const missingKeys = (tools) => tools.filter((tool) => tool.required === true && 
 
 // ── 字段定义 ────────────────────────────────────────────────────────────────
 const KEYS = FIELDS.map((field) => field.key);
-check(KEYS.length === 5, `字段共 5 个(实际 ${KEYS.length})`);
+const REQUIRED_FIELDS = FIELDS.filter((field) => field.required === true);
+check(KEYS.length === 6, `字段共 6 个:五个路径 + 模板目录(实际 ${KEYS.length})`);
 check(KEYS.includes("cachePath"), "含缓存目录字段");
 check(
-  FIELDS.filter((field) => field.required === true).length === FIELDS.length,
-  `五个路径全部必填(实际 ${FIELDS.filter((field) => field.required === true).length}/${FIELDS.length})`
+  REQUIRED_FIELDS.length === 5,
+  `五个路径全部必填(实际 ${REQUIRED_FIELDS.length}/${FIELDS.length})`
 );
 check(
-  FIELDS.every((field) => field.skips.length > 0),
-  "每一项都写清了没就绪会跳过哪些步骤(否则界面上会出现空的跳过清单)"
+  FIELDS.filter((field) => field.required !== true).map((field) => field.key).join(",") === "templateDir",
+  "只有模板目录可选 —— 缺了就退回插件自带的模板,不挡路"
+);
+check(
+  REQUIRED_FIELDS.every((field) => field.skips.length > 0),
+  "每个必填项都写清了没就绪会跳过哪些步骤(否则界面上会出现空的跳过清单)"
+);
+check(
+  FIELDS.filter((field) => field.required !== true).every((field) => field.skips.length === 0),
+  "可选字段不报'会跳过什么'(它缺了并不跳过任何环节)"
 );
 
 // ── 存在性判定 ──────────────────────────────────────────────────────────────
 const empty = inspectTools({}, probeWith([]));
-check(empty.length === 5, "空设置也返回全部字段");
+check(empty.length === 6, "空设置也返回全部字段");
 check(empty.every((tool) => tool.configured === false && tool.present === false), "空设置下全部未配置且不可用");
-check(missingKeys(empty).length === 5, "空设置下五项都算未就绪");
+check(missingKeys(empty).length === 5, "空设置下五项必填都算未就绪(模板目录不算)");
 
 const partial = inspectTools(
   { vivadoPath: "C:\\vivado.bat", modelsimPath: "C:\\missing\\vsim.exe", cachePath: "C:\\cache" },
@@ -133,6 +143,39 @@ check(!noCacheText.includes("不要污染 RTL 源码目录"), "缓存目录没�
 
 const unreadable = describeEnv(undefined, probeWith([]));
 check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设置时如实说读不到,而不是当成没配");
+
+// ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
+//
+// 写法规范由模板承载(文件头、九个小节、对齐这些),不写死在技能正文里 —— 所以
+// "用哪一份"必须在提示里说清,否则 agent 只能猜,而猜错就是格式不一致。
+const bundled = resolveTemplates({}, probeFilesystem);
+check(bundled.length === 3, `认三种模板:RTL / 测试平台 / 约束(实际 ${bundled.length})`);
+check(
+  bundled.every((template) => template.present),
+  "插件自带的模板都在包里(少一份,agent 就只能自己编格式)",
+  bundled.filter((template) => !template.present).map((template) => template.path).join(", ")
+);
+check(bundled.every((template) => template.source === "bundled"), "没填模板目录时用自带那份");
+
+const USER_DIR = "C:\\my-templates";
+const allUser = resolveTemplates({ templateDir: USER_DIR }, () => true);
+check(allUser.every((template) => template.source === "user"), "填了模板目录就优先用用户那份");
+check(allUser[0].path === join(USER_DIR, "rtl.sv"), `用户模板按同名文件取(实际 ${allUser[0].path})`);
+
+const mixed = resolveTemplates({ templateDir: USER_DIR }, (path) => path === join(USER_DIR, "tb.sv"));
+check(mixed.find((template) => template.kind === "tb").source === "user", "用户目录里有的那份优先用");
+check(
+  mixed.find((template) => template.kind === "rtl").source === "bundled",
+  "用户目录里缺的那份退回自带(而不是报错或留空)"
+);
+
+const bundledText = describeEnv(prepared, () => true);
+check(bundledText.includes("rtl.sv") && bundledText.includes("插件自带"), "提示里说清模板用哪一份");
+const userText = describeEnv(
+  { ...prepared, templateDir: USER_DIR },
+  (path) => path.startsWith(USER_DIR) || Object.values(prepared).includes(path)
+);
+check(userText.includes("你提供的"), "用户提供了模板时,提示里标明是他提供的");
 
 // 注册在**模式半侧**:插件行是全局作用域,普通会话也会看到 FPGA 工具链信息
 const modeSource = readFileSync(new URL("../lib/mode.js", import.meta.url), "utf8");

@@ -1,6 +1,6 @@
 ---
 name: fpga-lint
-description: Use after the RTL has been written and before simulation — running the Verilator lint gate on an FPGA module, checking RTL against this project's coding conventions (file header, nine section blocks, port types and alignment, tabs, line endings, design assertions, testbench self-fail), or working out why lint reports errors or warnings. This is the check stage that follows writing RTL; simulation, comparison, synthesis, timing and review each have their own skill.
+description: 在 RTL 写完之后、进仿真之前用:对这个 FPGA 模块跑 Verilator 检查、逐条核对编码规范(文件头、九个小节块、端口类型与对齐、Tab、行尾、设计断言、测试平台自检),或者排查 lint 报出来的 error 与 warning。这是写完 RTL 后的检查阶段;仿真、比对、综合、时序、审查各有自己的技能。
 ---
 
 # lint:写完 RTL 之后统一跑一次

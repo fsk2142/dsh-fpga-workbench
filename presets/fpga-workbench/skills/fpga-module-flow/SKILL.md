@@ -1,6 +1,6 @@
 ---
 name: fpga-module-flow
-description: Use when developing or checking an FPGA module in this workbench — writing RTL or a testbench, running lint or simulation, synthesizing, reading a timing report, or deciding whether a module may be called done. Carries the pass criteria for each stage, where the artifacts have to land, and what counts as evidence.
+description: (已弃用,只是早期草稿)以前用它做 FPGA 模块开发与检查,产物目录那套已经被分阶段技能取代。模块开发请分别用 fpga-spec / fpga-lint / fpga-sim / fpga-comp / fpga-synth / fpga-timing / fpga-review,不要用这一个。
 ---
 
 # FPGA 模块开发流程

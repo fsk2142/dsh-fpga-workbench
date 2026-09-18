@@ -1,6 +1,6 @@
 ---
 name: fpga-synth
-description: Use when synthesizing an FPGA module with Vivado in batch mode — creating the module project, running synth_design, judging whether synthesis actually passed, or explaining synthesis errors, resource numbers and reported Fmax. Also use when a module's target device, part or synthesis strategy has to be decided or changed. Timing analysis of the report, implementation/bitstream and review have their own skills.
+description: 在用 Vivado 批处理综合 FPGA 模块时用:建模块工程、跑 synth_design、判断综合到底过没过、或者解释综合报错、资源占用与实测 Fmax;也用于确定或更换模块的目标器件与综合策略。时序报告分析、实现与 bitstream、审查各有自己的技能。
 ---
 
 # synth:工程综合

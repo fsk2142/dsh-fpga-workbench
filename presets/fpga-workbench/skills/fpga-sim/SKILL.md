@@ -1,6 +1,6 @@
 ---
 name: fpga-sim
-description: Use when running or debugging an FPGA module's functional simulation with ModelSim — writing or updating a testbench, compiling RTL, running vsim in command-line mode, deciding whether a simulation actually passed, or working out why a run failed, hung or timed out. Covers the testbench self-check contract (err_cnt + $fatal), the watchdog, the dump format, and where logs and waves go. This is the stage after lint; comparison against a reference model, synthesis, timing and review have their own skills.
+description: 在用 ModelSim 跑或排查 FPGA 模块的功能仿真时用:写或改测试平台、编译 RTL、用命令行模式跑 vsim、判断一次仿真到底算不算过、或者查为什么失败/挂死/超时。包含测试平台自检契约(err_cnt + $fatal)、看门狗、输出数据格式、日志与波形落在哪。这是 lint 之后的阶段;与参考模型比对、综合、时序、审查各有自己的技能。
 ---
 
 # sim:功能仿真

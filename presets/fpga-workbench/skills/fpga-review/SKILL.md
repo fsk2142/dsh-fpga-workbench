@@ -1,6 +1,6 @@
 ---
 name: fpga-review
-description: Use when reviewing a finished FPGA module before accepting it — checking RTL structure and naming, clock/reset and CDC handling, interface handshakes, design assertions, acceptance-criteria coverage, reference-model independence and timing constraints, then recording approved, changes requested or blocked. Also use when re-checking a module that was reviewed earlier, or when the user asks 审一下 / 复查这个模块.
+description: 在验收一个做完的 FPGA 模块时用:审查 RTL 结构与命名、时钟复位与跨时钟域处理、接口握手、设计断言、验收判据覆盖、参考模型独立性、时序约束,然后给出 approved / changes requested / blocked;也用于复查之前审过的模块,或用户说"审一下/复查这个模块"的时候。
 ---
 
 # review:代码审查

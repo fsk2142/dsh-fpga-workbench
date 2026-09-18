@@ -1,6 +1,6 @@
 ---
 name: fpga-timing
-description: Use when reading an FPGA module's post-synthesis timing report — checking whether the constraints were actually applied, judging whether timing is acceptable, explaining WNS/TNS or unconstrained-path warnings, working out why the report says there is no clock, or looking at CDC crossings. Covers the OBSERVE_ONLY policy, the constraint_status gate and CDC counts. Synthesis itself and review have their own skills.
+description: 在读 FPGA 模块综合后的时序报告时用:核对约束有没有真的被应用、判断时序算不算过、解释 WNS/TNS 或未约束路径告警、查为什么报告说"没有时钟"、看 CDC 跨时钟计数。包含 OBSERVE_ONLY 策略、约束状态门禁与 CDC 计数口径。综合本身与审查各有自己的技能。
 ---
 
 # timing:时序

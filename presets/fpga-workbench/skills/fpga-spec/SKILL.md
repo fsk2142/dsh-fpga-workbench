@@ -1,6 +1,6 @@
 ---
 name: fpga-spec
-description: Use when starting an FPGA module or reshaping what it must do, before any RTL exists — talking through the function and interfaces with the user, reading reference documents or specifications, prototyping an algorithm in Python to check feasibility, or pinning down acceptance criteria and the verification plan. Also use when an existing module's specification has to change, or when the user asks 要做什么 / 怎么做 / 有没有参考资料. This is the first stage of the FPGA module flow; the later stages (lint, simulation, comparison, synthesis, timing, review) have their own skills, and this one only settles the specification.
+description: 在开始一个 FPGA 模块、或要改动它做什么的时候用:和用户把功能与接口谈清楚、翻参考资料或规格书、用 Python 写原型验证算法可行性、定下验收判据与验证方案;也用于规格需要变更,或用户问"要做什么/怎么做/有没有参考资料"的时候。这是模块流程的第一阶段,只负责把规格定下来 —— 后面的 lint、仿真、比对、综合、时序、审查各有自己的技能。
 ---
 
 # 阶段 0:讨论与规格

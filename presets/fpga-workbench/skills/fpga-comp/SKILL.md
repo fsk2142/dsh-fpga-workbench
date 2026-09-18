@@ -1,6 +1,6 @@
 ---
 name: fpga-comp
-description: Use when verifying an FPGA module against a reference model or golden data — writing the independent reference model, running the sample-by-sample or pixel-by-pixel comparison, deciding whether a mismatch means the RTL is wrong, or working out why the comparison is blocked. Covers the three comparison formats, reference-model independence, and how to attribute mismatches. Comparison is its own stage; functional simulation, synthesis, timing and review have their own skills.
+description: 在把 FPGA 模块与参考模型或 golden 数据做比对时用:写独立的参考模型、跑逐拍或逐像素比对、判断不一致到底是 RTL 错还是模型错、或者查比对为什么被挡住。包含三种比对格式、参考模型独立性要求、以及差异归属的判法。比对是独立阶段;功能仿真、综合、时序、审查各有自己的技能。
 ---
 
 # comp:算法验证(与参考模型比对)

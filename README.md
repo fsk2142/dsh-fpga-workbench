@@ -40,8 +40,28 @@ presets/fpga-workbench/
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
     templates/                自带模板:rtl.sv / tb.sv / constraints.xdc(写法规范的载体)
-tools/                        7 个自检 + install.mjs + 依赖安全/锁文件比对
+    tools/                    自带命令:check-rtl.mjs(规范检查)/ stage-status.mjs(阶段汇总)
+tools/                        8 个自检 + install.mjs + 依赖安全/锁文件比对
 ```
+
+## 自带命令:只做"一条命令能判成败"的事
+
+技能的判据写在文档里,靠 AI 逐条看;**能用一条命令判定成败的,做成脚本** —— 这类检查脚本比
+人可靠,而且每次代价一样:
+
+| 命令 | 干什么 | 退出码 |
+|---|---|---|
+| `node presets/fpga-workbench/tools/check-rtl.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
+| `node presets/fpga-workbench/tools/stage-status.mjs <目录>` | 阶段状态汇总:读各阶段结果里的 `结论:...`,一眼看出做到哪了 | 0 正常 / 2 找不到 `.fpga-workbench.json` |
+
+两条规则与旧包一致,别自己加严:
+
+- **Tab / 代码行非英文 / 行尾混用 只算警告**,不阻塞门禁
+- **纯格式检查要宽容**:文件头只要求"顶部有分隔条 + 前 15 行字段齐全";九个小节块只要求名字作为
+  banner 存在(宽度容忍 84–86),不校验列宽与顺序
+
+会话提示里会列出这两个命令的**绝对路径**,AI 照用即可。`tools/check-fpga-tools.mjs` 断言
+**插件自带的模板必须过自己的检查器** —— 模板与检查器不能互相矛盾。
 
 ## 写法规范放在模板里,不放在技能正文里
 
@@ -104,6 +124,7 @@ pnpm 安装 `file:` 依赖时按 `files` 打包,白名单外的东西**不会被
 
 ```powershell
 node tools/check-toolchain.mjs     # 字段/存在性/警告措辞/两侧契约/提示文案三种状态
+node tools/check-fpga-tools.mjs    # 自带命令的判定正确性 + 自带模板自洽 + CLI 退出码
 node tools/check-preset-root.mjs   # 预设路径求值 + 组装结构 + 模式行 + 自带技能
 node tools/check-preset-sync.mjs   # 预设底座与官方 standard 的漂移(行 id / 包名)
 node tools/check-patch-file.mjs    # 补丁字节合法 + 形状

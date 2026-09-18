@@ -61,6 +61,10 @@
       工程级的结论写进工作区根下的 project/。下一阶段**先读上一阶段的结果**再动手,不要凭记忆
       接着做。哪个阶段适用、哪些可以跳过,由规格决定 —— 不适用就写 NOT_APPLICABLE,不要硬造一个。
 
+      每个阶段的结果文件里都要有一行 `结论:PASS`(或 FAIL / BLOCKED / NOT_APPLICABLE)——
+      自带的汇总命令靠这一行读出"做到哪了",写成别的措辞它就读不到。开工前先跑一次汇总命令
+      看看现状,比重读一堆文件快。
+
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'
   config:

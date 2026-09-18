@@ -113,11 +113,13 @@ function loadBundle(src) {
   // ── 3. 父槽已声明时 apply 的行为 ────────────────────────────────────────
   let row = null;
   let panel = null;
+  let sidebarEntry = null;
   try {
     slots.entries.clear();
     slots.injectCalls.length = 0;
     slots.declare(ENTRY_SLOT);
     slots.declare("main");
+    slots.declare("sidebar.workspaces");
     // apply 会拉一次注册表来解析目标工作区,所以必须在它之前把 fetch 替换掉。
     const FETCHED = { workspace: "C:\\Work\\dsh-fpga-workbench", projects: [] };
     window.fetch = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(FETCHED) });
@@ -125,6 +127,7 @@ function loadBundle(src) {
 
     row = (slots.entries.get(ENTRY_SLOT) ?? [])[0];
     panel = (slots.entries.get("main") ?? [])[0];
+    sidebarEntry = (slots.entries.get("sidebar.workspaces") ?? [])[0];
 
     check(row !== undefined, `往 ${ENTRY_SLOT} 注册了入口`);
     check(panel !== undefined, "往 main 注册了面板");
@@ -268,6 +271,103 @@ function loadBundle(src) {
     }
   } catch (error) {
     fatal("第 7 步：面板组件", error);
+  }
+
+  // ── 8. 会话区替换（盖掉官方那一个）──────────────────────────────────────
+  try {
+    if (sidebarEntry === null) throw new Error("没有注册进 sidebar.workspaces");
+
+    // 必须用负数优先级：single 槽「优先级低的赢」，官方在 0；用 >=0 同优先级会直接抛错。
+    check(
+      typeof sidebarEntry.options.priority === "number" && sidebarEntry.options.priority < 0,
+      `会话区替换用负数优先级（实际 ${String(sidebarEntry.options.priority)}）`
+    );
+    // 不能声明子槽 —— 声明已被声明的子槽会抛错（插件加载失败 → 桌面端起不来）
+    check(sidebarEntry.options.children === undefined, "替换条目没有声明子槽");
+
+    /** 递归收集元素。 */
+    const els = (root, pred) => {
+      const found = [];
+      (function walk(node) {
+        if (node === null || typeof node !== "object") return;
+        if (node.__element === true && (pred === undefined || pred(node))) found.push(node);
+        for (const child of node.children ?? []) walk(child);
+      })(root);
+      return found;
+    };
+    const txt = (el) => {
+      const parts = [];
+      (function walk(node) {
+        if (node === null || node === undefined) return;
+        if (typeof node === "string") { parts.push(node); return; }
+        if (typeof node !== "object") return;
+        for (const child of node.children ?? []) walk(child);
+      })(el);
+      return parts.join("");
+    };
+
+    const tree = sidebarEntry.component();
+    check(tree?.__element === true, "会话区组件返回元素");
+
+    // 关键：必须列出所有工作区，否则用户没法导航到别的会话
+    const names = els(tree, (n) => n.props?.className === "fpga-sb-name");
+    check(names.length === 2, `列出全部 2 个工作区（实际 ${names.length}）`);
+    check(txt(names[0]) === LABEL, `工作台分组排最前且显示为「${LABEL}」（实际 ${txt(names[0])}）`);
+    check(txt(names[1]) === "FPGA_Files", `其余工作区保留自己的名字（实际 ${txt(names[1])}）`);
+    check(els(tree, (n) => n.props?.className === "fpga-sb-path").length === 2, "每个分组都显示工作文件夹路径");
+
+    // 点工作区名字 = 在该工作区新建会话
+    const workspace = window.__harness.uiWorkspace;
+    workspace.calls.length = 0;
+    names[1].props.onClick();
+    check(
+      workspace.calls.length === 1 && workspace.calls[0] === "ws-other",
+      `点工作区名字在该工作区新建会话（实际 ${JSON.stringify(workspace.calls)}）`
+    );
+
+    // 点会话名 = 打开它
+    const sessionBtns = els(tree, (n) => n.props?.className === "fpga-sb-session");
+    check(sessionBtns.length === 3, `列出全部会话（3 个）（实际 ${sessionBtns.length}）`);
+    workspace.opened.length = 0;
+    sessionBtns[0].props.onClick();
+    check(workspace.opened.length === 1, `点会话会打开它（实际 ${workspace.opened.length} 次）`);
+
+    // 收起箭头
+    const carets = els(tree, (n) => n.props?.className === "fpga-sb-caret");
+    check(carets.length === 2, `每个分组一个收起箭头（实际 ${carets.length}）`);
+    check(carets[0].props["aria-expanded"] === "true", "默认展开");
+    carets[0].props.onClick();
+    const collapsedTree = sidebarEntry.component();
+    check(
+      els(collapsedTree, (n) => n.props?.className === "fpga-sb-session").length === 1,
+      "收起第一个分组后只剩另一组的会话"
+    );
+    check(
+      els(collapsedTree, (n) => n.props?.className === "fpga-sb-caret")[0]?.props["aria-expanded"] === "false",
+      "收起后 aria-expanded 为 false"
+    );
+    els(collapsedTree, (n) => n.props?.className === "fpga-sb-caret")[0].props.onClick();
+    check(
+      els(sidebarEntry.component(), (n) => n.props?.className === "fpga-sb-session").length === 3,
+      "再点一次恢复展开"
+    );
+
+    // 搜索
+    const searchBox = els(tree, (n) => n.props?.className === "fpga-sb-search")[0];
+    check(searchBox !== undefined, "会话区有搜索框");
+    searchBox.props.onChange({ target: { value: "测试" } });
+    const searched = sidebarEntry.component();
+    check(
+      els(searched, (n) => n.props?.className === "fpga-sb-session").length === 1,
+      "搜索「测试」只留 1 个会话"
+    );
+    searchBox.props.onChange({ target: { value: "" } });
+    check(
+      els(sidebarEntry.component(), (n) => n.props?.className === "fpga-sb-session").length === 3,
+      "清空搜索后恢复全部会话"
+    );
+  } catch (error) {
+    fatal("第 8 步：会话区替换", error);
   }
 
   const failed = window.__harness.failed;

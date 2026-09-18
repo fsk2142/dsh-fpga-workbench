@@ -25,7 +25,7 @@ for (const match of bundle.matchAll(/slots\.register\(\s*\{\s*name:\s*"([^"]+)"/
   registered.add(match[1]);
 }
 console.log(`bundle 注册的槽:${[...registered].join(", ")}`);
-check(registered.size === 2, `bundle 注册了 2 个槽(实际 ${registered.size})`);
+check(registered.size === 3, `bundle 注册了 3 个槽(实际 ${registered.size})`);
 
 // 1. 每个注册的槽都要被两处测试覆盖
 for (const slot of registered) {
@@ -56,6 +56,21 @@ check(registered.has("main"), "面板挂在 main");
 for (const single of ["conversation.hero.workspace", "conversation.hero.agentPreset", "conversation.hero.brand.mark"]) {
   check(!registered.has(single), `没有注册 ${single}(single 槽,会被官方占用)`);
 }
+
+// 3b. 会话区替换必须用**负数优先级**才可能盖过官方。
+//
+// single 槽允许多注册只要优先级不同,且"优先级低的赢"(dsh-client-ui-slots)。
+// 官方 workspace 插件注册在默认优先级 0 —— 如果我们用了 >= 0,不仅盖不住,
+// 还会因为同优先级已有占用而**直接抛错**(插件加载失败 → 桌面端起不来)。
+const workspacesReg = /slots\.register\(\{\s*name:\s*"sidebar\.workspaces",\s*priority:\s*(-?\d+)/.exec(bundle);
+check(workspacesReg !== null, "会话区替换显式写了 priority");
+if (workspacesReg !== null) {
+  const priority = Number(workspacesReg[1]);
+  check(priority < 0, `会话区替换用负数优先级盖过官方 priority 0(实际 ${priority})`);
+}
+// 反向防呆:替换条目**不能**声明子槽 —— 声明已被声明的子槽会抛错(启动即失败)
+const workspacesHasChildren = /name:\s*"sidebar\.workspaces",[\s\S]{0,200}?children:/.test(bundle);
+check(!workspacesHasChildren, "会话区替换没有声明子槽(声明已被声明的槽会抛错)");
 
 // 4. bundle 的模块 id 必须等于 package.json 的包名
 const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>DSH 插件加载测试 — dsh-fpga-workbench</title>
+<style>
+  body { font: 13px/1.6 ui-monospace, Consolas, monospace; margin: 0; padding: 16px; background: #12141a; color: #dfe3ea; }
+  h1 { font-size: 15px; margin: 0 0 4px; }
+  .hint { opacity: .6; margin-bottom: 12px; }
+  #out { white-space: pre-wrap; background: #0b0d12; border: 1px solid #262b36; border-radius: 6px; padding: 12px; min-height: 240px; }
+  button { font: inherit; padding: 6px 12px; margin-bottom: 12px; background: #2a3040; color: inherit; border: 1px solid #3a4258; border-radius: 5px; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>DSH 客户端插件加载测试</h1>
+<div class="hint">被测 bundle：<code>/lib/client.js</code>　用真实内核语义加载，不接触 DSH。</div>
+<button id="copy">复制全部结果</button>
+<pre id="out">正在加载…</pre>
+
+<!-- 内核必须在 bundle 之前就位：bundle 的顶层会调用 window.__ModuleLoader__.load -->
+<script src="./kernel.js"></script>
+
+<script>
+// 同步插入 bundle，保证它先完成注册，后面的断言才跑。
+// 用 document.write 而不是 defer，是因为 bundle 的顶层就是 window.__ModuleLoader__.load(...)。
+document.write('<script src="/lib/client.js"><\/script>');
+
+(function run() {
+  const { kernel, slots, layout, ctx, check, fatal } = window.__harness;
+
+  // 两个标识符不是一回事：bundle 的模块 id 是包名，面板 id/key 是 fpga-workbench。
+  const MODULE_ID = "dsh-fpga-workbench";
+  const PANEL_ID = "fpga-workbench";
+  const LABEL = "FPGA 工作台";
+  // 入口所在的槽：list 槽，会话头部常驻（hero 那一行的槽都是 single 且已被占用）。
+  const ENTRY_SLOT = "conversation.session.header.actions";
+
+  document.getElementById("copy").addEventListener("click", () => {
+    const text = document.getElementById("out").textContent ?? "";
+    navigator.clipboard.writeText(text).then(
+      () => { document.getElementById("copy").textContent = "已复制"; },
+      () => { window.getSelection()?.selectAllChildren(document.getElementById("out")); }
+    );
+  });
+
+  // ── 1. 注册与物化 ───────────────────────────────────────────────────────
+  try {
+    check(kernel.registry.size === 1, `bundle 注册了 1 个 factory（实际 ${kernel.registry.size}）`);
+    const [id] = [...kernel.registry.keys()];
+    check(id === MODULE_ID, `bundle 模块 id 等于包名（${id}）`);
+    check(kernel.registry.get(id)?.factory !== undefined, "注册项带 factory");
+  } catch (error) {
+    fatal("第 1 步：注册", error);
+  }
+
+  let plugin = null;
+  try {
+    plugin = kernel.materialize(MODULE_ID);
+    check(true, "物化成功（factory(require) → exports）");
+  } catch (error) {
+    fatal("物化失败 —— 这就是 DSH 报「没有错误信息」的那一步", error);
+  }
+  if (plugin === null) return;
+
+  // ── 2. 导出面（内核据此判定它是不是插件）────────────────────────────────
+  try {
+    check(typeof plugin.apply === "function", "导出 apply（内核据此判定它是不是插件）");
+    check(plugin.inject === undefined || typeof plugin.inject === "object", "inject 形状合法");
+    check(
+      plugin.inject === undefined || plugin.inject.required === undefined || Array.isArray(plugin.inject.required),
+      "inject.required 是数组或缺省"
+    );
+    check(plugin.name === undefined || typeof plugin.name === "string", "name 是字符串或缺省");
+  } catch (error) {
+    fatal("第 2 步：导出面", error);
+  }
+
+  // ── 3. 父槽已声明时 apply 的行为 ────────────────────────────────────────
+  let row = null;
+  let panel = null;
+  try {
+    slots.entries.clear();
+    slots.injectCalls.length = 0;
+    slots.declare(ENTRY_SLOT);
+    slots.declare("main");
+    plugin.apply(ctx);
+
+    row = (slots.entries.get(ENTRY_SLOT) ?? [])[0];
+    panel = (slots.entries.get("main") ?? [])[0];
+
+    check(row !== undefined, `往 ${ENTRY_SLOT} 注册了入口`);
+    check(panel !== undefined, "往 main 注册了面板");
+    if (row !== undefined) {
+      check(row.options.id === PANEL_ID, `入口 id 正确（${row.options.id}）`);
+      check(typeof row.options.order === "number", `入口带 order（${row.options.order}）`);
+      check(row.options.label === LABEL, `入口 label 正确（${row.options.label}）`);
+      check(typeof row.component === "function", "入口带组件");
+    }
+    if (panel !== undefined) {
+      check(panel.options.key === PANEL_ID, `面板 key 正确（${panel.options.key}）`);
+      check(typeof panel.component === "function", "面板带组件");
+    }
+    // 最容易崩的点：两处不一致时点击会抛 not registered
+    check(
+      row !== undefined && panel !== undefined && row.options.id === panel.options.key,
+      "入口 id === 面板 key（不一致时点击会抛 not registered）"
+    );
+  } catch (error) {
+    fatal("第 3 步：apply（父槽已声明）", error);
+  }
+
+  // ── 4. 父槽尚未声明时 apply 必须等待而不是抛错 ──────────────────────────
+  try {
+    slots.entries.clear();
+    slots.declarations.clear();
+    slots.waiting.clear();
+    slots.injectCalls.length = 0;
+
+    plugin.apply(ctx);
+    check(slots.entries.size === 0, "父槽未声明时没有注册任何行（挂起等待）");
+    check(slots.injectCalls.includes(ENTRY_SLOT), `apply 请求了入口槽（${slots.injectCalls.join(", ")}）`);
+
+    slots.declare(ENTRY_SLOT);
+    slots.declare("main");
+    const lateRow = (slots.entries.get(ENTRY_SLOT) ?? [])[0];
+    const latePanel = (slots.entries.get("main") ?? [])[0];
+    check(lateRow !== undefined && latePanel !== undefined, "父槽后来声明时，挂起的注册被执行");
+  } catch (error) {
+    fatal("第 4 步：apply（父槽后声明）—— 这是官方插件依赖的等待语义", error);
+  }
+
+  // ── 5. 点击路径：切进去、切回来 ────────────────────────────────────────
+  try {
+    layout.selectPanel(PANEL_ID);
+    check(layout.activePanelId === PANEL_ID, "selectPanel 能切到本面板");
+    layout.selectPanel(null);
+    check(layout.activePanelId === null, "selectPanel(null) 能切回会话");
+
+    let threw = false;
+    try {
+      layout.selectPanel("definitely-not-registered");
+    } catch {
+      threw = true;
+    }
+    check(threw, "selectPanel 对未注册面板会抛错（说明上面的配对检查有意义）");
+  } catch (error) {
+    fatal("第 5 步：selectPanel", error);
+  }
+
+  // ── 6. 入口按钮：渲染并真的触发 onClick ────────────────────────────────
+  try {
+    if (row === null) throw new Error("第 3 步没有拿到入口行，无法测试点击");
+    const calls = [];
+    let activeFlag = false;
+    const props = {
+      usePanelInfo: (selector) => selector({ activePanelId: activeFlag ? PANEL_ID : null }),
+      selectPanel: (id) => { calls.push(id); layout.selectPanel(id); }
+    };
+    const element = row.component(props);
+    check(element?.__element === true, "入口组件返回元素（不是 undefined）");
+    check(element?.type === "button", "入口渲染为 button");
+    check(element?.props?.title === LABEL, "入口带 title（窄栏下有提示）");
+
+    element.props.onClick();
+    check(calls[0] === PANEL_ID && layout.activePanelId === PANEL_ID, "点击入口会切到工作台面板");
+
+    activeFlag = true;
+    const activeElement = row.component(props);
+    check(activeElement?.props?.["aria-current"] === "page", "面板激活时入口标记 aria-current");
+    activeElement.props.onClick();
+    check(calls[1] === null && layout.activePanelId === null, "再次点击切回会话");
+  } catch (error) {
+    fatal("第 6 步：入口按钮", error);
+  }
+
+  // ── 7. 面板组件能调用（fetch 换成受控应答）─────────────────────────────
+  try {
+    if (panel === null) throw new Error("第 3 步没有拿到面板，无法测试渲染");
+    const originalFetch = window.fetch;
+    window.fetch = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ workspace: "C:\\Work\\demo", projects: [{ name: "m1", path: "C:\\Work\\demo\\m1", stage: "sim" }] })
+      });
+    try {
+      const element = panel.component();
+      check(element?.__element === true, "面板组件返回元素");
+      check(document.querySelector("style[data-fpga-workbench]") !== null, "面板注入了自己的样式节点");
+    } finally {
+      window.fetch = originalFetch;
+    }
+  } catch (error) {
+    fatal("第 7 步：面板组件", error);
+  }
+
+  const failed = window.__harness.failed;
+  console.log(failed === 0 ? "\n===== 全部通过 =====" : `\n===== ${failed} 项失败 =====`);
+})();
+</script>
+</body>
+</html>

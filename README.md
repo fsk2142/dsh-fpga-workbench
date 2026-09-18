@@ -2,7 +2,7 @@
 
 **一个 DSH 的 FPGA 工作模式。**
 
-它只做一件事:往 DSH 的 agent 预设名单里加一个「**FPGA 工作台**」,于是新建会话时能和
+它只做一件事:往 DSH 的 agent 预设名单里加一个「**FPGA 开发模式**」,于是新建会话时能和
 `标准 / 极简 / PTC / 创造` 并列地选它。选中后,这个会话就带着 FPGA 的人设与工具。
 
 **它不注册任何 UI。** 没有侧边栏入口、没有面板、没有替换任何官方组件——你现有的界面
@@ -15,7 +15,7 @@
 dsh plugin --profile desktop add file:C:\Work\dsh-fpga-workbench
 ```
 
-装完**重启 DSH Desktop**,新建会话时预设选择器里就会出现「FPGA 工作台」。
+装完**重启 DSH Desktop**,新建会话时预设选择器里就会出现「FPGA 开发模式」。
 
 > 刷新安装用 `node C:\Work\dsh-fpga-workbench\tools\install.mjs`(先校验、不一致才重装、
 > 并逐字节校验结果)。**必须在你自己的终端里跑** —— 受限沙箱里 pnpm 无法在 profile

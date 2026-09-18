@@ -2,6 +2,9 @@
 #
 # id 来自目录名(fpga-workbench);name 与 description 只影响显示,缺失也不影响挂载。
 # order 决定它在预设列表里的排序位置。
-name: FPGA 工作台
+#
+# name 必须与 lib/client.js 里的 LABEL 一致(同一个产品的名字,设置页也用那个);
+# tools/check-preset-root.mjs 会断言两者相同,防止改名只改了一半。
+name: FPGA 开发模式
 description: FPGA 模块开发会话:需求澄清、RTL 与测试平台、仿真、综合与时序、证据归档。
 order: 50

@@ -23,7 +23,7 @@
 # `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
 #
 # 本文件其余部分是从官方 standard 预设复制来的组装(工具行、子代理、工作流等),
-# 目的只是让 FPGA 工作台会话拿到与常规会话相同的能力底座 —— 预设之间不继承,
+# 目的只是让 FPGA 开发模式会话拿到与常规会话相同的能力底座 —— 预设之间不继承,
 # 不复制就会缺工具。DSH 升级后 standard 若增删行,这里需要同步:
 # tools/check-preset-sync.mjs 会比对两者并报出差异。
 - id: persona
@@ -31,7 +31,7 @@
   config:
     suffix: Your working directory is {{cwd}}.
     prefix: |-
-      你是 **FPGA 工作台**会话里的开发助手,运行在 DeepSeek Harness 上,由 {{model}} 驱动。
+      你是 **FPGA 开发模式**会话里的开发助手,运行在 DeepSeek Harness 上,由 {{model}} 驱动。
 
       这里的默认意图是 FPGA 模块开发:需求澄清 → 写 RTL/测试平台 → 仿真 → 综合与时序 → 证据归档。
       你面对的是一个真实工程环境,不是演示:

@@ -126,6 +126,23 @@ check(/sameTree\(source, destination\)/u.test(codeOnly), "内容一致就跳过(
 // 曾经写过 settings.yaml 的 agent-presets.roots —— 实测那层根本不参与 roots 解析,是无用写入
 check(!/settings\.update\(/u.test(codeOnly), "不再往 settings.yaml 写 roots(那层不参与 roots 解析)");
 
+// 6. 显示名只有一处真相:预设的 name 与设置页的 LABEL 必须相同。
+//    改名只改一半会让用户看到两个名字(预设选择器一个、设置里一个)。
+const presetYml = readFileSync(join(ROOT, "presets", "fpga-workbench", "preset.yml"), "utf8");
+const presetName = /^\s*name:\s*(.+)$/mu.exec(presetYml)?.[1]?.trim();
+const clientLabel = /const LABEL = "([^"]+)"/u.exec(readFileSync(join(ROOT, "lib", "client.js"), "utf8"))?.[1];
+check(presetName !== undefined && presetName !== "", `预设声明了显示名(实际 ${String(presetName)})`);
+check(
+  presetName === clientLabel,
+  `预设显示名与设置页名一致(${String(presetName)} vs ${String(clientLabel)})`
+);
+check(presetName === "FPGA 开发模式", `显示名是「FPGA 开发模式」(实际 ${String(presetName)})`);
+// 人设文案里也要用同一个名字 —— 它会进到会话提示里
+check(
+  readFileSync(join(ROOT, "presets", "fpga-workbench", "agent.cordis.yml"), "utf8").includes("FPGA 开发模式"),
+  "人设文案用的是同一个显示名"
+);
+
 console.log(
   failures.length > 0
     ? `\nFAIL (${failures.length}): ${failures.join(" | ")}`

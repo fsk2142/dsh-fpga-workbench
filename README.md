@@ -1,122 +1,83 @@
 # dsh-fpga-workbench
 
-DSH web GUI 的一个插件:在左侧栏加一行「FPGA 工作台」,点开在主区域显示一个工作台面板。
+**一个 DSH 的 FPGA 工作模式。**
 
-面板当前显示项目注册表里的模块列表(名称 / 路径 / 阶段 / 备注)。这一版是**壳**:先把
-"入口出现在侧边栏、点开有真实数据的面板"这条链路打通,FPGA 流程本身(preset 人设、
-技能、engine 接入)还没接。
+它只做一件事:往 DSH 的 agent 预设名单里加一个「**FPGA 工作台**」,于是新建会话时能和
+`标准 / 极简 / PTC / 创造` 并列地选它。选中后,这个会话就带着 FPGA 的人设与工具。
+
+**它不注册任何 UI。** 没有侧边栏入口、没有面板、没有替换任何官方组件——你现有的界面
+一行都不动。
 
 ## 安装
 
 ```powershell
-# 从 GitHub(推荐;pnpm 会把包物理拷进 profile)
-dsh plugin --profile desktop add github:fsk2142/dsh-fpga-workbench
-
-# 从本地工作区(调试用;file: 会建 symlink)
+# 从工作区(开发时用)
 dsh plugin --profile desktop add file:C:\Work\dsh-fpga-workbench
-
-# 卸载
-dsh plugin --profile desktop remove dsh-fpga-workbench
 ```
 
-装完**重启 DSH Desktop**(bundle 列表在启动时组合),左侧栏应出现「FPGA 工作台」。
+装完**重启 DSH Desktop**,新建会话时预设选择器里就会出现「FPGA 工作台」。
 
-`dsh plugin` 会做三件事:把包装进 profile、把包名追加进 `dsh.profile.bundles`、
-（reconcile 时）把不再声明 `dsh.bundle` 的依赖移出列表。
+> 刷新安装用 `node C:\Work\dsh-fpga-workbench\tools\install.mjs`(先校验、不一致才重装、
+> 并逐字节校验结果)。**必须在你自己的终端里跑** —— 受限沙箱里 pnpm 无法在 profile
+> 目录建临时文件。
 
-## 配置
+## 它由什么组成
 
-面板读的项目注册表路径,由插件行的 `config.registry` 决定。**以 GitHub/npm 安装时
-必须设置它**——因为包被拷进了 profile 的 `node_modules`,默认路径会落在那里,你没有
-理由去编辑那个文件。
-
-在 profile 的 `cordis.patch.yml` 里补一行(或在安装后追加):
-
-```yaml
-- id: fpga-workbench
-  name: 'dsh-fpga-workbench'
-  config:
-    registry: C:\Work\dsh-fpga-workbench\workbench.json
+```
+package.json                只有 dsh.bundle.patch,没有 main / exports / dsh.client
+cordis.patch.yml            唯一一条:覆盖 agent-presets 的 roots
+presets/fpga-workbench/
+    preset.yml              选择器里显示的名字与描述
+    agent.cordis.yml        这个模式的组装:人设 + 工具行
 ```
 
-注册表格式:
+`lib/` 已经被删掉了。这里没有客户端半侧、没有宿主入口 —— 纯模式插件不挂载任何东西。
 
-```json
-{
-  "workspace": "C:\\Work\\dsh-fpga-workbench",
-  "projects": [
-    { "name": "我的模块", "path": "C:\\Work\\xxx", "stage": "sim", "note": "备注" }
-  ]
-}
-```
+## 两条必须知道的约束
 
-文件缺失是正常状态(首次运行),不是故障:面板显示空列表。JSON 损坏时面板显示原因,
-不会静默空白。宿主每次请求都重读,所以改完刷新页面即可。
+**一、`files` 白名单必须包含 `presets`。**
 
-## 这个插件的两条硬约束
+pnpm 安装 `file:` 依赖时按 `files` 打包,白名单外的东西**不会被拷进 profile**。踩过这个坑:
+`presets/` 没写进 `files` → 安装副本缺预设目录 → 补丁里的 roots 指向空目录 →
+**预设列表里永远看不到这个模式,而且没有任何报错**。
+`tools/check-installed.mjs` 会断言这条。
 
-**不要给它加任何 npm 依赖。** ESM 的裸依赖从模块自身位置向上解析,不看宿主锚点。
-所以只要包不是**物理拷进** profile 的 `node_modules`,任何 `dependencies` 都会
-`ERR_MODULE_NOT_FOUND`——而插件加载失败会把整个组合拖崩,代价是用户的桌面端起不来。
-实测过的三种加载方式:
+**二、覆盖 `agent-presets` 必须重述要保留的字段。**
 
-| 加载方式 | 裸依赖 | 结果 |
-|---|---|---|
-| 绝对路径挂载(`name: 'C:\...\lib\index.js'`) | 有 | 解析失败 |
-| `file:` 链接(`dsh plugin add file:...`) | 有 | 解析失败 |
-| `github:` / `npm:`(物理拷进 profile) | 有 | 可解析 |
-
-因此 `lib/index.js` 只 import `node:` 内置模块。`tools/check-load-contract.mjs`
-会强制这条。
-
-**客户端半侧是手写的懒 CJS bundle,没有构建步骤。** `lib/client.js` 是
-`window.__ModuleLoader__.load({ id, factory })` 形式,只 `require("react")`
-(来自内核冻结的基座模块表)。所以仓库里没有 tsdown/tsc,也不需要 `prepare` 脚本
-——这一点是 `dsh plugin add <git 规格>` 能装上的前提,pnpm 会跑 `prepare`。
-
-`lib/` 是**源码**,不是产物。`.gitattributes` 里标了 `linguist-generated=false`,
-免得被当成生成代码折叠掉。
-
-## 侧边栏入口是怎么挂上去的
-
-两条注册必须成对,`id` 必须相同:
-
-```js
-ctx.slots.inject("sidebar.panellist", function* () {
-  yield ctx.slots.register({ name: "sidebar.panellist", id: PANEL_ID, order: 100, label: LABEL }, Glyph);
-});
-ctx.slots.inject("main", function* () {
-  yield ctx.slots.register({ name: "main", key: PANEL_ID }, Panel);
-});
-```
-
-- `sidebar.panellist` 是 list 槽(要求 `id`),侧边栏按 `order` 排序渲染成可点击行。
-- `main` 是 keyed 槽(要求 `key`),`ctx.layout.selectPanel(id)` 按 `key` 匹配面板。
-- 两处不一致时,点击会在控制台抛 `main panel "..." is not registered`。
-- `slots.inject(parent, callback)` 在父槽**尚未声明时会等待**并在声明提交后对账,
-  所以注册顺序无关,不会因为侧边栏还没加载就失败。
+按 id 定位的 patch 不做深度合并,会**替换整份 config**。所以 `default` /
+`includeShippedRoot` / `includeUserRoot` 都必须重述——漏掉 `includeShippedRoot`
+会让 `标准 / 极简 / PTC / 创造` 那些官方预设**整个消失**。
+`tools/check-preset-root.mjs` 用宿主同一个 loader 的求值器把 `!!js` 算出来,断言
+路径真实存在、预设结构合法、字段重述完整。
 
 ## 自检
 
 ```powershell
-node tools/check-compat.mjs          # 插件用到的每个接口在当前 DSH 上确实存在
-node tools/check-load-contract.mjs   # 无裸依赖 / 三种加载方式可 import / 导出面正确
-node tools/check-host-route.mjs      # 路由在数据异常与配置覆盖下都返回可渲染结果
-node tools/check-install-safety.mjs  # 装进来会不会扰动 profile 既有依赖(镜像实测)
-node tools/compare-locks.mjs         # 上一步的两份锁文件差异
+node tools/check-preset-root.mjs   # !!js 路径求值 + 预设结构 + 字段重述
+node tools/check-patch-file.mjs    # 补丁字节是合法 UTF-8,且形状是纯模式插件该有的
+node tools/check-installed.mjs     # 已装副本与源逐字节一致 + files 白名单覆盖预设
 ```
 
-`check-compat.mjs` 与 `check-install-safety.mjs` 里写死了本机路径
-(`C:/Program Files/DSH Desktop`、`~/.dsh/profiles/desktop`),换机器要改;
-两者都支持用 `DSH_PROFILE_MANIFEST` 覆盖 profile 清单位置。
+前两个写死了本机路径(`C:/Program Files/DSH Desktop`、`~/.dsh/profiles/desktop`),
+换机器要改;`check-installed.mjs` 支持 `DSH_PROFILE_DIR` 覆盖。
 
-## 已验证 / 未验证
+## 现状与下一步
 
-**已机器验证**:清单契约;bundle 在内核语义下的物化与导出面;两条槽位注册的形状与
-`id`/`key` 配对;宿主路由在四种数据状态(正常 / 缺失 / JSON 损坏 / 顶层非对象)与
-`config.registry` 覆盖下的行为;版本兼容(插件用到的每个接口都已安装 DSH 上存在);
-安装不扰动既有依赖(镜像实测 177→178 个包,既有锁定版本无一位移)。
+- ✅ 模式本身可用:预设随插件走,选择器里可选
+- ⬜ 预设内容:目前人设是 FPGA 模块开发的口径,**工具集仍是 `standard` 那一套**
+- ⬜ engine 接入:把旧工具包的脚本(`run_auto.py` / `checks.py` / `submit_review.py`)
+  变成这个模式可以调用的能力
+- ⬜ 技能(DSH skill):FPGA 流程、RTL/测试平台规范、评审细则
 
-**未验证**:侧边栏那一行是否真的出现、点击能否切到面板。这需要真实浏览器,而本会话
-的沙箱不允许 Chrome 启动(它要建命名管道与 IPC:`mojo platform_channel` 拒绝访问)。
-这一条只能靠人在 GUI 里确认。
+## 关于界面(已放弃的方案,留作记录)
+
+早期版本尝试过在 UI 上加东西:侧边栏入口行、主区域面板、甚至替换官方会话区。
+结论:
+
+- **入口行 / 面板**能做,但对"FPGA 工作模式"这个目标来说是多余的
+- **替换官方会话区**做过一版,实机效果远不如官方(要追上得复刻它的 CSS 与交互),
+  而且必然改掉官方列表的样子 —— 已回退
+- **替换整个侧边栏**机制上做不到:声明一个已被声明的子槽会直接抛错
+  (`slot "x" is already declared`),那个错发生在插件加载阶段,**会让桌面端起不来**
+
+那些实现都在 git 历史里(`b3781ff` 是替换版,`7560643` 是回退)。

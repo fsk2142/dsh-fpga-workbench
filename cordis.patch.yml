@@ -1,38 +1,20 @@
-# 本插件的 profile 层补丁。
+# 本插件的 profile 层补丁 —— 全部作用就是把 FPGA 模式挂进预设名单。
 #
-# 声明 dsh.bundle.patch 的作用:安装时 pnpm 把包装进 profile 的 node_modules,
-# 启动时 `dsh plugin` 的 reconcile 看到这个声明,就把包名追加进
-# dsh.profile.bundles,于是这个补丁被合并进组合。没有它,包只是个普通依赖:
-# 客户端半侧可能被别的加载器(例如插件市场的 client-only shim)挂进浏览器,
-# 但宿主半侧(lib/index.js 的数据路由)永远不加载 —— 入口看得见、点开却是
-# "无法读取工作台数据"。
+# 这是一个**纯模式插件**:没有客户端半侧、没有宿主插件行、不注册任何槽,
+# 所以这里也没有 insert 条目。唯一要做的,是让 dsh-agent-presets 去扫本包自带的
+# presets/ 目录,于是「FPGA 工作台」出现在新建会话的预设选择器里。
 #
-# ── 一、本插件自己的行 ──────────────────────────────────────────────────────
+# 为什么覆盖能生效:agent-presets 那一行由 @deepseek-ai/dsh-web-app 插入(它排 bundle
+# 列表第 1 位,本插件排在最后),后层覆盖前层。
 #
-# config.registry 必须显式给出。宿主默认读的是**包旁边**的 workbench.json,而
-# profile 安装会把包装进 profile 的 node_modules —— 那份是没人会去编辑的副本。
-# 指向工作区这份,你加的 FPGA 项目才有唯一可信的位置,而且改了立刻生效(宿主每次
-# 请求都重读)。
+# ⚠️ 按 id 定位的 patch 不做深度合并,会替换整份 config —— 所以
+# default / includeShippedRoot / includeUserRoot 这些要保留的字段必须在这里重述。
+# 漏掉 includeShippedRoot 会让 standard/minimal/ptc/cordis 那些官方预设整个消失。
 #
-# 这里是绝对路径:插件本身就是从绝对路径安装的,保持一致。换工作区目录时要同步改
-# (将来做设置分区后改成在界面里填)。
-- insert:
-    - id: fpga-workbench
-      name: 'dsh-fpga-workbench'
-      config:
-        registry: 'C:\Work\dsh-fpga-workbench\workbench.json'
-
-# ── 二、让 FPGA 预设随插件走 ────────────────────────────────────────────────
-#
-# agent-presets 那一行由 @deepseek-ai/dsh-web-app 插入(它排在 bundle 列表第 1 位,
-# 我们在最后),所以这里同 id 再写一次就把它**整个替换**掉 —— 后层覆盖前层。
-#
-# 注意语义:按 id 定位的 patch 不做深度合并,会替换整份 config。所以 includeUserRoot
-# / includeShippedRoot / default 这些要保留的字段必须在这里重述(它们与官方那行一致)。
-#
-# roots 里的 baseUrl 是**本补丁文件所在目录**(即包根),所以 'presets/' 就够了;
-# 路径随插件走,装到哪预设就在哪,不写死机器路径。
-# (官方示例写 `../presets/` 是因为那份文件在 presets/cordis/ 下一层,层次不同。)
+# roots 里的 !!js 用 baseUrl 求值,而 baseUrl 是**本补丁文件所在目录**
+# (dsh-app-boot/lib/index.js:140 把 ctx.baseUrl 设成 patch 文件所在目录)。
+# 本补丁在包根,所以 'presets/' 就够了 —— 路径随插件走,不写死机器路径。
+# (官方示例写 '../presets/' 是因为它那份文件在 presets/cordis/ 下一层,层次不同。)
 - id: agent-presets
   config:
     default: standard
@@ -41,4 +23,3 @@
     roots:
       - path: !!js process.getBuiltinModule('node:url').fileURLToPath(new URL('presets/', baseUrl))
         trust: user
-

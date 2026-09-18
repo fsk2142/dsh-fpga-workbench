@@ -8,10 +8,6 @@ node_modules/
 # pnpm 的 store(镜像实测时可能被建在仓库根)
 .pnpm-store/
 
-# 项目注册表:面板读的本地数据。宿主按包路径解析它,所以工作区里这份就是唯一
-# 有效的一份;不进版本库,免得你加的 FPGA 项目变成仓库改动。
-workbench.json
-
 # DSH 安装到 profile 时由 pnpm 写入的锁文件(不属于插件源码)
 pnpm-lock.yaml
 package-lock.json

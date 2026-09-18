@@ -29,7 +29,10 @@ const { entryListSchema } = require("@deepseek-ai/cordis-plugin-include");
 // 1. 解析补丁
 const patchPath = join(ROOT, "cordis.patch.yml");
 const rows = yaml.load(readFileSync(patchPath, "utf8"), { schema: entryListSchema });
-check(Array.isArray(rows) && rows.length === 2, `补丁有 2 个顶层条目(实际 ${Array.isArray(rows) ? rows.length : "非数组"})`);
+check(
+  Array.isArray(rows) && rows.length === 1,
+  `补丁只有 1 个顶层条目(纯模式插件没有插件行)(实际 ${Array.isArray(rows) ? rows.length : "非数组"})`
+);
 
 // 2. 找到 agent-presets 那条覆盖
 const row = rows.find((r) => r.id === "agent-presets");

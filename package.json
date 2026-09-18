@@ -1,26 +1,16 @@
 {
   "name": "dsh-fpga-workbench",
-  "version": "0.1.0",
-  "description": "FPGA workbench for the DSH web GUI: a permanent entry that opens a workbench surface over the project registry.",
+  "version": "0.2.0",
+  "description": "FPGA 工作模式:一个 DSH agent 预设(人设 + 工具 + 技能),在新建会话的选择器里以「FPGA 工作台」出现。不注册任何 UI。",
   "type": "module",
-  "main": "lib/index.js",
-  "exports": {
-    ".": "./lib/index.js",
-    "./client": "./lib/client.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
-  },
   "files": [
-    "lib",
+    "presets",
     "cordis.patch.yml"
   ],
-  "comment": "零运行时依赖是硬约束,不是巧合:ESM 的裸依赖从本模块位置向上解析,所以只要加载方式不是把包物理拷进 profile 的 node_modules(绝对路径挂载、file: 链接都不行),任何 dependencies 都会解析失败并把整个组合拖崩。tools/check-load-contract.mjs 会强制这条。",
+  "comment": "这是一个**纯模式插件**:只有预设 + 一层 profile 补丁,没有客户端半侧、没有宿主入口、不注册任何槽。它的全部作用是把 presets/ 挂进 dsh-agent-presets 的 roots,让「FPGA 工作台」出现在预设选择器里。files 必须包含 presets —— 少了它,pnpm 打 file: 依赖时不会把预设拷进 profile,而失败方式是静默的(列表里永远看不到这个模式);tools/check-installed.mjs 断言这条。",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web"
     }
   }
 }

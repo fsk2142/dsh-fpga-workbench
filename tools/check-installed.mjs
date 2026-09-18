@@ -17,10 +17,12 @@ const PROFILE = process.env.DSH_PROFILE_DIR
   ?? join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".dsh", "profiles", "desktop");
 const INSTALLED = join(PROFILE, "node_modules", "dsh-fpga-workbench");
 
-/** 这个包该装进去的全部内容(纯模式插件:预设 + 补丁 + 清单)。 */
+/** 这个包该装进去的全部内容:宿主半侧 + 客户端半侧 + 预设 + 补丁 + 清单。 */
 const REQUIRED = [
   "package.json",
   "cordis.patch.yml",
+  "lib/index.js",
+  "lib/client.js",
   "presets/fpga-workbench/preset.yml",
   "presets/fpga-workbench/agent.cordis.yml"
 ];
@@ -70,9 +72,16 @@ if (!existsSync(INSTALLED)) {
   // roots 指向空目录 → 预设列表里永远看不到「FPGA 工作台」,而且没有任何报错。
   const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   check((manifest.files ?? []).includes("presets"), "files 白名单包含 presets(否则预设不会被装进去)");
+  check((manifest.files ?? []).includes("lib"), "files 白名单包含 lib(否则两半代码不会被装进去)");
   check(manifest.dsh?.bundle?.patch !== undefined, "清单声明了 dsh.bundle.patch(否则补丁不会进组合)");
-  // 纯模式插件不该有客户端半侧 —— 有的话说明旧的 UI 代码又回来了
-  check(manifest.dsh?.client === undefined, "清单没有 dsh.client(纯模式插件不注册 UI)");
+  // 设置页在客户端半侧,所以这里必须有 dsh.client
+  check(manifest.dsh?.client?.platform === "web", "清单声明了 dsh.client.platform = web(设置页要靠它)");
+  // schema 用 peer 而不是 dependency:profile 自带这个包,peer 不会触发安装或改锁文件
+  check(
+    manifest.peerDependencies?.["@deepseek-ai/schemastery"] !== undefined,
+    "schemastery 声明为 peerDependency(宿主注册 settings 需要它)"
+  );
+  check(manifest.dependencies === undefined, "没有 dependencies(不动 profile 的依赖树)");
 
   console.log(
     failures.length > 0

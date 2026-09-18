@@ -1,16 +1,30 @@
 {
   "name": "dsh-fpga-workbench",
-  "version": "0.2.0",
-  "description": "FPGA 工作模式:一个 DSH agent 预设(人设 + 工具 + 技能),在新建会话的选择器里以「FPGA 工作台」出现。不注册任何 UI。",
+  "version": "0.3.0",
+  "description": "FPGA 工作模式 + 工具链设置:一个 DSH agent 预设(人设/工具/技能),外加「设置 → FPGA 工作台」里配置 Vivado / ModelSim / Verilator / 库目录。",
   "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
   "files": [
+    "lib",
     "presets",
     "cordis.patch.yml"
   ],
-  "comment": "这是一个**纯模式插件**:只有预设 + 一层 profile 补丁,没有客户端半侧、没有宿主入口、不注册任何槽。它的全部作用是把 presets/ 挂进 dsh-agent-presets 的 roots,让「FPGA 工作台」出现在预设选择器里。files 必须包含 presets —— 少了它,pnpm 打 file: 依赖时不会把预设拷进 profile,而失败方式是静默的(列表里永远看不到这个模式);tools/check-installed.mjs 断言这条。",
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2"
+  },
+  "comment": "schemastery 用 peerDependencies 而不是 dependencies:宿主注册 settings 命名空间需要 schema,而 profile 里本来就有这个包(DSH 自带),peer 声明既表达了要求、又不触发安装或改动锁文件。files 必须包含 presets —— 少了它,pnpm 打 file: 依赖时不会把预设拷进 profile,失败方式是静默的(模式从列表里消失);tools/check-installed.mjs 断言这条。",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   }
 }

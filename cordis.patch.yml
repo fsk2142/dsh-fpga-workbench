@@ -1,20 +1,29 @@
-# 本插件的 profile 层补丁 —— 全部作用就是把 FPGA 模式挂进预设名单。
+# 本插件的 profile 层补丁:两件事 —— 挂载宿主半侧,以及把 FPGA 模式挂进预设名单。
+
+# ── 一、宿主半侧 ────────────────────────────────────────────────────────────
 #
-# 这是一个**纯模式插件**:没有客户端半侧、没有宿主插件行、不注册任何槽,
-# 所以这里也没有 insert 条目。唯一要做的,是让 dsh-agent-presets 去扫本包自带的
-# presets/ 目录,于是「FPGA 工作台」出现在新建会话的预设选择器里。
+# 宿主半侧(lib/index.js)注册工具链设置的命名空间,并把填好的路径注入会话提示。
+# 没有这一行,「设置 → FPGA 工作台」就没有可绑定的命名空间,页面等于不存在。
 #
-# 为什么覆盖能生效:agent-presets 那一行由 @deepseek-ai/dsh-web-app 插入(它排 bundle
-# 列表第 1 位,本插件排在最后),后层覆盖前层。
+# name 用**包名**而不是绝对路径:插件装进 profile 的 node_modules,裸名从那里解析,
+# 它自己的 import(等等)也跟着从 profile 解析。
+- insert:
+    - id: fpga-workbench
+      name: 'dsh-fpga-workbench'
+
+# ── 二、让 FPGA 模式(agent 预设)随插件走 ──────────────────────────────────
+#
+# agent-presets 那一行由 @deepseek-ai/dsh-web-app 插入(它排 bundle 列表第 1 位,
+# 本插件排在最后),后层覆盖前层。
 #
 # ⚠️ 按 id 定位的 patch 不做深度合并,会替换整份 config —— 所以
 # default / includeShippedRoot / includeUserRoot 这些要保留的字段必须在这里重述。
 # 漏掉 includeShippedRoot 会让 standard/minimal/ptc/cordis 那些官方预设整个消失。
 #
 # roots 里的 !!js 用 baseUrl 求值,而 baseUrl 是**本补丁文件所在目录**
-# (dsh-app-boot/lib/index.js:140 把 ctx.baseUrl 设成 patch 文件所在目录)。
-# 本补丁在包根,所以 'presets/' 就够了 —— 路径随插件走,不写死机器路径。
-# (官方示例写 '../presets/' 是因为它那份文件在 presets/cordis/ 下一层,层次不同。)
+# (dsh-app-boot/lib/index.js:140)。本补丁在包根,所以 'presets/' 就够了 ——
+# 路径随插件走,不写死机器路径。(官方示例写 '../presets/' 是因为它那份文件在
+# presets/cordis/ 下一层,层次不同。)
 - id: agent-presets
   config:
     default: standard

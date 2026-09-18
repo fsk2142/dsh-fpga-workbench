@@ -50,15 +50,28 @@ try {
 
 if (rows !== null) {
   check(Array.isArray(rows), "顶层是数组");
-  check(rows.length === 1, `只有 1 个顶层条目(实际 ${rows.length})`);
-  check(rows[0]?.id === "agent-presets", `唯一一条是 agent-presets 覆盖(实际 ${String(rows[0]?.id)})`);
-  // 纯模式插件不该有插件行
-  check(rows.every((row) => row.insert === undefined), "没有 insert 插件行(纯模式插件不挂载任何东西)");
+  check(rows.length === 2, `有 2 个顶层条目(实际 ${rows.length})`);
+
+  // 一:宿主插件行 —— 没有它,「设置 → FPGA 工作台」没有可绑定的命名空间。
+  const inserted = rows.flatMap((row) => row.insert ?? []);
+  check(inserted.length === 1, `有 1 条 insert 插件行(实际 ${inserted.length})`);
+  check(inserted[0]?.id === "fpga-workbench", `insert 行 id 正确(实际 ${String(inserted[0]?.id)})`);
+  // 用包名而不是绝对路径:裸名从 profile 的 node_modules 解析,它的 import 也跟着解析。
+  check(
+    inserted[0]?.name === "dsh-fpga-workbench",
+    `insert 用包名挂载(实际 ${String(inserted[0]?.name)})`
+  );
+
+  // 二:agent-presets 覆盖行
+  const override = rows.find((row) => row.id === "agent-presets");
+  check(override !== undefined, "有 agent-presets 覆盖行");
+  // 覆盖行不该夹带插件行之外的配置项(它是整份替换,不是合并)
+  check(override?.insert === undefined, "agent-presets 覆盖行不是 insert 行");
 }
 
 // 3. 不能是空文件或纯注释(DSH 明确:会让启动失败)
 const meaningful = (text ?? "").split("\n").filter((line) => line.trim() !== "" && !line.trim().startsWith("#"));
 check(meaningful.length > 0, "不是空文件/纯注释文件");
 
-console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 补丁字节与形状都合法(纯模式插件)");
+console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 补丁字节与形状都合法");
 if (failures.length > 0) process.exitCode = 1;

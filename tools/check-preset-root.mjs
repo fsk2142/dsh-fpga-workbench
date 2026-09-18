@@ -30,8 +30,8 @@ const { entryListSchema } = require("@deepseek-ai/cordis-plugin-include");
 const patchPath = join(ROOT, "cordis.patch.yml");
 const rows = yaml.load(readFileSync(patchPath, "utf8"), { schema: entryListSchema });
 check(
-  Array.isArray(rows) && rows.length === 1,
-  `补丁只有 1 个顶层条目(纯模式插件没有插件行)(实际 ${Array.isArray(rows) ? rows.length : "非数组"})`
+  Array.isArray(rows) && rows.some((row) => row.id === "agent-presets"),
+  `顶层是数组且含 agent-presets 覆盖行(实际 ${Array.isArray(rows) ? `${rows.length} 条` : "非数组"})`
 );
 
 // 2. 找到 agent-presets 那条覆盖

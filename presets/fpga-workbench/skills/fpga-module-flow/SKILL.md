@@ -5,6 +5,11 @@ description: Use when developing or checking an FPGA module in this workbench �
 
 # FPGA 模块开发流程
 
+> ⚠️ **本篇是早期的雏形,留着当对照,不要照它建目录。**
+> 它里头的产物路径(`<缓存目录>/<模块名>/lint/`、`/sim/`、`/synth/`)是拍出来的、没跟用户确认过;
+> 现在改用模块根下的阶段文件夹:`spec/ lint/ sim/ comp/ synth/ timing/ review/`(见 `fpga-spec` 的约定文件)。
+> 出口判据那部分会分别搬进各阶段技能,搬完这一篇就可以删。
+
 **工具在哪、怎么调:看会话开头那段「本机 FPGA 工具链」。** 路径由用户在「设置 → FPGA 开发模式」里填、由宿主核对过存在性。不要用 `where`/PATH 另找一份,也不要假设某个工具一定可用 —— 那段文字里标了「未就绪」的环节就跳过,并在结论里点名。
 
 ## 四段,每段都有可判定的出口

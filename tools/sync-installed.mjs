@@ -65,17 +65,18 @@ if (checkOnly) {
   console.log(before.length === 0 ? "\n已一致,无需同步。" : "\n去掉 --check 即执行同步。");
   process.exitCode = before.length === 0 ? 0 : 1;
 } else {
-  let copied = 0;
-  for (const rel of files) {
-    const source = join(ROOT, rel);
-    const target = join(INSTALLED, rel);
-    const changed = !existsSync(target) || hashOf(source) !== hashOf(target);
+  // 只写真正有差异的文件:既少做无用功,也避免去动那些本来就一致的文件
+  // (实测:对"内容已相同"的文件写入会被拦,而真正需要改的那些能写)。
+  const targets = files
+    .map((rel) => ({ rel, source: join(ROOT, rel), target: join(INSTALLED, rel) }))
+    .filter(({ source, target }) => !existsSync(target) || hashOf(source) !== hashOf(target));
+
+  for (const { rel, source, target } of targets) {
     mkdirSync(dirname(target), { recursive: true });
     copyFileSync(source, target);
-    copied += 1;
-    if (changed) console.log(`  写入 ${rel}`);
+    console.log(`  写入 ${rel}`);
   }
-  console.log(`\n已写入 ${copied} 个文件。`);
+  console.log(`\n已写入 ${targets.length} 个文件(共 ${files.length} 个,其余一致、跳过)。`);
 
   // 已装多出来的文件:默认只报不动手(删除要人点头)
   const stale = shippedFiles(INSTALLED).filter((rel) => !files.includes(rel));

@@ -36,19 +36,29 @@ const probeWith = (present) => (path) => present.includes(path);
 const missingKeys = (tools) => tools.filter((tool) => tool.required === true && !tool.present).map((tool) => tool.key);
 
 // ── 字段定义 ────────────────────────────────────────────────────────────────
+//
+// 布局按用户要求:每个工具一组 —— 先"用哪个"(下拉),下面紧跟它的路径,语言挂在对应工具下。
 const KEYS = FIELDS.map((field) => field.key);
+const VISIBLE = FIELDS.filter((field) => field.control !== "hidden");
 const REQUIRED_FIELDS = FIELDS.filter((field) => field.required === true);
-const CHOICE_FIELDS = FIELDS.filter((field) => field.control === "select");
+const CHOICE_FIELDS = VISIBLE.filter((field) => field.control === "select");
 const OPTIONAL_FIELDS = FIELDS.filter((field) => field.required !== true);
-check(KEYS.length === 11, `字段共 11 个:5 个路径 + 3 个语言/仿真器 + 3 个模板(实际 ${KEYS.length})`);
+const HIDDEN_FIELDS = FIELDS.filter((field) => field.control === "hidden");
+check(KEYS.length === 16, `字段共 16 个:13 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
+check(VISIBLE.length === 13, `可见字段 13 个(实际 ${VISIBLE.length})`);
+check(
+  HIDDEN_FIELDS.map((field) => field.key).join(",") === "verilatorPath,modelsimPath,vivadoPath",
+  "三个改名前的旧键作为隐藏字段保留(迁移用)"
+);
 check(KEYS.includes("cachePath"), "含缓存目录字段");
 check(
   REQUIRED_FIELDS.length === 5,
-  `五个路径全部必填(实际 ${REQUIRED_FIELDS.length}/${FIELDS.length})`
+  `五个路径必填:编译器 / 仿真器 / 综合器 / 库 / 缓存(实际 ${REQUIRED_FIELDS.length})`
 );
 check(
-  OPTIONAL_FIELDS.length === 6,
-  `其余六项可选(语言/仿真语言/仿真器 + 三份模板,实际 ${OPTIONAL_FIELDS.length})`
+  REQUIRED_FIELDS.map((field) => field.key).join(",") === "compilerPath,simulatorPath,synthesizerPath,libraryPath,cachePath",
+  "必填的就是那五个路径",
+  REQUIRED_FIELDS.map((field) => field.key).join(",")
 );
 check(
   REQUIRED_FIELDS.every((field) => field.skips.length > 0),
@@ -58,12 +68,18 @@ check(
   OPTIONAL_FIELDS.every((field) => field.skips.length === 0),
   "可选字段不报'会跳过什么'(它缺了并不跳过任何环节)"
 );
-check(FIELDS.every((field) => typeof field.group === "string" && field.group !== ""), "每个字段都有分组(设置页按它分段)");
+const GROUPS = [...new Set(VISIBLE.map((field) => field.group))];
+check(GROUPS.length === 5, `可见的分组恰好五个(实际 ${GROUPS.join("、")})`);
 check(
-  new Set(FIELDS.map((field) => field.group)).size === 3,
-  `分组恰好三个:工具路径 / 语言与仿真器 / 模板(实际 ${[...new Set(FIELDS.map((f) => f.group))].join("、")})`
+  GROUPS.join(",") === "编译器,仿真器,综合器,库与缓存,模板",
+  `分组顺序:编译器 → 仿真器 → 综合器 → 库与缓存 → 模板(实际 ${GROUPS.join(" → ")})`
 );
-check(CHOICE_FIELDS.length === 3, `三个下拉字段(实际 ${CHOICE_FIELDS.length})`);
+// 每个工具组里:先"用哪个",紧跟它的路径 —— 这是用户要的排列
+const ORDER = VISIBLE.map((field) => field.key);
+for (const [choice, path] of [["compiler", "compilerPath"], ["simulator", "simulatorPath"], ["synthesizer", "synthesizerPath"]]) {
+  check(ORDER.indexOf(path) === ORDER.indexOf(choice) + 1, `${choice} 后面紧跟 ${path}`);
+}
+check(CHOICE_FIELDS.length === 5, `五个下拉:三类工具 + RTL 语言 + 仿真语言(实际 ${CHOICE_FIELDS.length})`);
 check(
   CHOICE_FIELDS.every((field) => {
     const options = field.options ?? [];
@@ -76,13 +92,37 @@ check(
   "下拉选项都写了给人看的标签"
 );
 check(
-  (FIELDS.find((field) => field.key === "simulator")?.options ?? []).every((option) => typeof option.needs === "string"),
-  "仿真器每个选项都指明要用哪个工具的路径(XSim 用 Vivado 的 bin)"
+  ["compiler", "simulator", "synthesizer"].every((key) =>
+    (FIELDS.find((field) => field.key === key)?.options ?? []).every(
+      (option) => typeof option.needs === "string" && typeof option.usage === "function"
+    )
+  ),
+  "三类工具的下拉:每个选项都指明用哪个路径字段,并带自己的调用姿势(usage 挂在选项上)"
+);
+check(FIELDS.every((field) => typeof field.group === "string" && field.group !== ""), "每个字段都有分组(设置页按它分段)");
+check(
+  CHOICE_FIELDS.every((field) => {
+    const options = field.options ?? [];
+    return options.length > 1 && options.some((option) => option.value === field.default);
+  }),
+  "每个下拉都有默认值,且默认值本身是合法选项(否则会被判成取值非法)"
+);
+check(
+  CHOICE_FIELDS.every((field) => (field.options ?? []).every((option) => typeof option.label === "string" && option.label !== "")),
+  "下拉选项都写了给人看的标签"
+);
+check(
+  ["compiler", "simulator", "synthesizer"].every((key) =>
+    (FIELDS.find((field) => field.key === key)?.options ?? []).every(
+      (option) => typeof option.needs === "string" && typeof option.usage === "function"
+    )
+  ),
+  "三类工具的下拉:每个选项都指明用哪个路径字段,并带自己的调用姿势(usage 挂在选项上)"
 );
 
 // ── 存在性判定 ──────────────────────────────────────────────────────────────
 const empty = inspectTools({}, probeWith([]));
-check(empty.length === 11, "空设置也返回全部字段");
+check(empty.length === 16, "空设置也返回全部字段");
 check(
   empty.filter((tool) => tool.control !== "select").every((tool) => tool.configured === false && tool.present === false),
   "空设置下所有路径字段都未配置且不可用"
@@ -91,7 +131,20 @@ check(
   empty.filter((tool) => tool.control === "select").every((tool) => tool.present === true && tool.path === tool.default),
   "下拉字段空值也拿得到默认值,且判为合法"
 );
-check(missingKeys(empty).length === 5, "空设置下五项必填都算未就绪(语言/仿真器/模板不算)");
+check(missingKeys(empty).length === 5, "空设置下五项必填都算未就绪");
+
+// 旧键兜底:改名不能让用户已经填好的路径消失
+const migrated = inspectTools(
+  { verilatorPath: "C:\\old\\verilator_bin.exe", modelsimPath: "C:\\old\\vsim.exe", vivadoPath: "C:\\old\\vivado.bat" },
+  probeWith(["C:\\old\\verilator_bin.exe", "C:\\old\\vsim.exe", "C:\\old\\vivado.bat"])
+);
+const migratedByKey = new Map(migrated.map((tool) => [tool.key, tool]));
+check(migratedByKey.get("compilerPath")?.path === "C:\\old\\verilator_bin.exe", "旧 verilatorPath 落到 compilerPath");
+check(migratedByKey.get("simulatorPath")?.path === "C:\\old\\vsim.exe", "旧 modelsimPath 落到 simulatorPath");
+check(migratedByKey.get("synthesizerPath")?.path === "C:\\old\\vivado.bat", "旧 vivadoPath 落到 synthesizerPath");
+check(missingKeys(migrated).join(",") === "libraryPath,cachePath", "迁移后只剩没填过的那两项未就绪");
+const ownWins = inspectTools({ compilerPath: "C:\\new\\v.exe", verilatorPath: "C:\\old\\v.exe" }, probeWith(["C:\\new\\v.exe"]));
+check(ownWins.find((tool) => tool.key === "compilerPath")?.path === "C:\\new\\v.exe", "新键有值时优先用新键(旧键只是兜底)");
 
 const badChoice = inspectTools({ simulator: "not-a-simulator" }, probeWith([]));
 check(
@@ -104,11 +157,14 @@ const partial = inspectTools(
   probeWith(["C:\\vivado.bat"])
 );
 const byKey = new Map(partial.map((tool) => [tool.key, tool]));
-check(byKey.get("vivadoPath")?.present === true, "存在的路径判为可用");
-check(byKey.get("modelsimPath")?.present === false && byKey.get("modelsimPath")?.configured === true, "路径错:已配置但未就绪");
-check(byKey.get("verilatorPath")?.configured === false, "没填的项:未配置");
+check(byKey.get("synthesizerPath")?.present === true, "存在的路径判为可用(旧键迁过来的也算)");
 check(
-  missingKeys(partial).join(",") === "modelsimPath,verilatorPath,libraryPath,cachePath",
+  byKey.get("simulatorPath")?.present === false && byKey.get("simulatorPath")?.configured === true,
+  "路径错:已配置但未就绪"
+);
+check(byKey.get("compilerPath")?.configured === false, "没填的项:未配置");
+check(
+  missingKeys(partial).join(",") === "compilerPath,simulatorPath,libraryPath,cachePath",
   `未就绪清单正确(实际 ${missingKeys(partial).join(",")})`
 );
 check(byKey.get("cachePath")?.present === false, "缓存目录状态如实反映(未创建)");
@@ -139,17 +195,21 @@ check(clientSource.includes(`"${NS}"`), `客户端命名空间与宿主一致(${
 check(clientSource.includes("/plugins/fpga-workbench/toolchain"), "客户端用的状态路由与宿主一致");
 const hardcoded = KEYS.filter((key) => clientSource.includes(`"${key}"`));
 check(hardcoded.length === 0, "客户端没有硬编码任何字段名(定义只存在于宿主)", hardcoded.join(", "));
-const hardcodedHints = FIELDS.filter((field) => clientSource.includes(field.hint.replace(/\\/gu, "\\\\")));
+const hardcodedHints = FIELDS.filter(
+  // 空 hint 不算(隐藏旧键的 hint 是空的,而 includes("") 永远为真)
+  (field) => field.hint !== "" && clientSource.includes(field.hint.replace(/\\/gu, "\\\\"))
+);
 check(hardcodedHints.length === 0, "客户端没有硬编码字段说明", hardcodedHints.map((field) => field.key).join(", "));
 check(/status\?\.tools|status\.tools/u.test(clientSource), "客户端从宿主返回的 status.tools 渲染字段");
 check(clientSource.includes('field.control === "select"'), "客户端会按 control 渲染下拉");
 check(clientSource.includes("field.options"), "下拉选项来自宿主");
 check(clientSource.includes("field.group"), "分组来自宿主");
+check(clientSource.includes('field.control === "hidden"'), "客户端不渲染隐藏字段(改名前的旧键)");
 // 说明里要给确切文件名,不能含糊成"可执行文件" —— 真实教训:只写"可执行文件",
 // 用户就会去找 Windows 上并不存在的 vivado.exe。
-check(FIELDS.find((field) => field.key === "vivadoPath")?.hint.includes("vivado.bat"), "Vivado 说明写了确切文件名 vivado.bat");
-check(FIELDS.find((field) => field.key === "modelsimPath")?.hint.includes("vsim.exe"), "ModelSim 说明写了确切文件名 vsim.exe");
-check(FIELDS.find((field) => field.key === "verilatorPath")?.hint.includes("verilator_bin.exe"), "Verilator 说明写了确切文件名 verilator_bin.exe");
+check(FIELDS.find((field) => field.key === "synthesizerPath")?.hint.includes("vivado.bat"), "综合器说明写了确切文件名 vivado.bat");
+check(FIELDS.find((field) => field.key === "simulatorPath")?.hint.includes("vsim.exe"), "仿真器说明写了确切文件名 vsim.exe");
+check(FIELDS.find((field) => field.key === "compilerPath")?.hint.includes("verilator_bin.exe"), "编译器说明写了确切文件名 verilator_bin.exe");
 // 客户端要按宿主返回的 skips 显示"会跳过什么",不能自己另写一份跳过清单
 // (只检查几个只可能来自宿主的步骤名,别用"综合"这种会撞上提示文案的词)
 check(clientSource.includes("skips"), "客户端用宿主返回的 skips 渲染提示");
@@ -178,7 +238,11 @@ for (const needed of ["key", "label", "hint", "required", "skips", "path", "conf
   check(payloadKeys.includes(needed), `载荷里有 ${needed}(设置页要靠它渲染)`);
 }
 check(!payloadKeys.includes("usage"), "载荷里没有 usage(那是提示段专用,设置页用不上)");
-check(payload.tools.length === FIELDS.length, `载荷发全部字段(实际 ${payload.tools.length})`);
+check(payload.tools.length === VISIBLE.length, `载荷发全部可见字段、不发隐藏旧键(实际 ${payload.tools.length} / 可见 ${VISIBLE.length})`);
+check(
+  payload.tools.every((tool) => tool.control !== "hidden"),
+  "载荷里没有隐藏字段(设置页不需要,渲染出来只会是几个看不懂的空框)"
+);
 check(
   payload.tools.filter((tool) => tool.control === "select").every((tool) => Array.isArray(tool.options) && tool.options.length > 0),
   "下拉字段的选项跟着载荷一起发(客户端不在本地维护选项)"
@@ -203,7 +267,7 @@ check(readyText.includes("where"), "提示里写明权威来源,不让 agent 去
 
 const halfText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith([]));
 check(halfText.includes("路径不存在(C:\\vivado.bat)"), "填了但不存在:说成路径不存在(要去改)");
-check(halfText.includes("Verilator:未配置"), "没填的项:说成未配置(要去填)");
+check(halfText.includes("编译器路径:未配置"), "没填的项:说成未配置(要去填)");
 check(halfText.includes("比特流生成"), "未就绪时带上会跳过哪些步骤");
 
 const noCacheText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith(["C:\\vivado.bat"]));
@@ -268,9 +332,19 @@ check(langText.includes(".sv"), "提示里给出文件扩展名(写代码时要�
 
 const xsimText = describeEnv({ ...prepared, simulator: "xsim" }, () => true);
 check(
-  xsimText.includes("Vivado XSim") && xsimText.includes("同目录"),
-  "选 XSim 时提示里说清 xvlog/xelab/xsim 在 Vivado 的 bin 目录下"
+  // 断言 XSim 自己的三个命令 —— 别用"同目录"这种词:Verilator 那句里也有,会假通过
+  xsimText.includes("xvlog") && xsimText.includes("xelab") && xsimText.includes("-runall"),
+  "选 XSim 时提示里换成 xvlog / xelab / xsim 三步"
 );
+check(
+  !xsimText.includes("vsim.exe") || xsimText.includes("xvlog"),
+  "选了 XSim 就不会再拿 vsim 的命令糊弄"
+);
+// 换工具要跟着换命令:三条 usage 各自绑在选项上
+const quartusText = describeEnv({ ...prepared, synthesizer: "quartus" }, () => true);
+check(quartusText.includes("quartus_sh"), "换综合器后提示里换成对应工具的命令");
+const iverilogText = describeEnv({ ...prepared, compiler: "iverilog" }, () => true);
+check(iverilogText.includes("-g2012"), "换编译器后提示里换成对应工具的命令");
 const vhdlText = describeEnv({ ...prepared, rtlLangStd: "vhdl-2008" }, () => true);
 check(vhdlText.includes("VHDL-2008") && vhdlText.includes(".vhd"), "换语言后扩展名跟着变");
 

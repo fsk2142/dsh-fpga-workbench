@@ -149,19 +149,27 @@ const uiWorkspace = {
   calls: [],
   /** 每次 openSession 的 sessionId。 */
   opened: [],
+  /**
+   * 工作区列表是否已就绪。默认 false —— 模拟插件加载的很早期,那时列表还是空的。
+   * 这个开关是回归测试的关键:实现若只在 apply 时解析一次 id,就会永远拿到 undefined,
+   * 会话于是落到"当前/最近"的分组(用户报的"跑到别的分区"正是这个)。
+   */
+  ready: false,
   workspaces: {
     list: {
       getSnapshot: () => ({
-        phase: "ready",
-        items: [
-          {
-            workspaceId: "ws-fpga",
-            path: "C:\\Work\\dsh-fpga-workbench",
-            title: "FPGA 工作台",
-            sessionIds: ["s-old", "s-new"]
-          },
-          { workspaceId: "ws-other", path: "C:\\Work\\FPGA_Files", title: "FPGA_Files", sessionIds: ["s-other"] }
-        ]
+        phase: uiWorkspace.ready ? "ready" : "loading",
+        items: uiWorkspace.ready
+          ? [
+              {
+                workspaceId: "ws-fpga",
+                path: "C:\\Work\\dsh-fpga-workbench",
+                title: "FPGA 工作台",
+                sessionIds: ["s-old", "s-new"]
+              },
+              { workspaceId: "ws-other", path: "C:\\Work\\FPGA_Files", title: "FPGA_Files", sessionIds: ["s-other"] }
+            ]
+          : []
       })
     }
   },
@@ -269,7 +277,15 @@ if (plugin !== null) {
   // 就说明它又在依赖槽不提供的 props。
   check(glyph?.type !== "button", "入口不是自造按钮(切换由侧边栏行负责)");
 
-  // 面板组件可调用 —— 它同时扮演"会话启动器"
+  // 回归测试:工作区列表在 apply 时还没就绪,到点击时才就绪。
+  //
+  // 这正是线上出过的 bug —— 实现只在 apply 时解析一次 workspaceId,那时列表是空的,
+  // 拿到 undefined 就永远缓存着,于是会话落到"当前/最近"的分组(用户报的"跑到别的分区")。
+  // 所以这里把 ready 留到此刻才打开:只有"点击时实时解析"的实现才能通过。
+  check(uiWorkspace.ready === false, "apply 期间工作区列表尚未就绪(模拟真实时序)");
+  uiWorkspace.ready = true;
+
+  // 面板组件可调用 —— 它同时扮演"会话选择器"
   try {
     const panelElement = panel.component();
     check(panelElement?.__element === true, "面板组件返回元素");

@@ -223,6 +223,12 @@ function loadBundle(src) {
 
       const workspace = window.__harness.uiWorkspace;
 
+      // 回归测试：工作区列表在 apply 时还没就绪，到点击时才就绪。
+      // 线上出过的 bug 就是「只在 apply 时解析一次 workspaceId」—— 那时列表是空的，
+      // 拿到 undefined 就永远缓存着，会话落到「当前/最近」的分组（用户报的正是这个）。
+      check(workspace.ready === false, "apply 期间工作区列表尚未就绪（模拟真实时序）");
+      workspace.ready = true;
+
       // 面板是选择器，不是「挂载即新建」：挂载时不该产生任何会话动作，
       // 否则用户永远看不到这个列表（会被立刻跳走）。
       check(workspace.calls.length === 0, `面板挂载时不自动新建会话（实际 ${workspace.calls.length} 次）`);

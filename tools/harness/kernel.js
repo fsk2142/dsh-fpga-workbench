@@ -190,19 +190,28 @@ const layout = {
 const uiWorkspace = {
   calls: [],
   opened: [],
+  /**
+   * 工作区列表是否已就绪。默认 false —— 模拟插件加载的很早期,那时列表还是空的。
+   * 测试页会在点击之前把它打开,用来验证"点击时实时解析"这条(线上出过的 bug:
+   * 只在 apply 时解析一次,那时列表为空,拿到 undefined 就永远缓存着,
+   * 会话于是落到"当前/最近"的分组)。
+   */
+  ready: false,
   workspaces: {
     list: {
       getSnapshot: () => ({
-        phase: "ready",
-        items: [
-          {
-            workspaceId: "ws-fpga",
-            path: "C:\\Work\\dsh-fpga-workbench",
-            title: "FPGA 工作台",
-            sessionIds: ["s-old", "s-new"]
-          },
-          { workspaceId: "ws-other", path: "C:\\Work\\FPGA_Files", title: "FPGA_Files", sessionIds: ["s-other"] }
-        ]
+        phase: uiWorkspace.ready ? "ready" : "loading",
+        items: uiWorkspace.ready
+          ? [
+              {
+                workspaceId: "ws-fpga",
+                path: "C:\\Work\\dsh-fpga-workbench",
+                title: "FPGA 工作台",
+                sessionIds: ["s-old", "s-new"]
+              },
+              { workspaceId: "ws-other", path: "C:\\Work\\FPGA_Files", title: "FPGA_Files", sessionIds: ["s-other"] }
+            ]
+          : []
       })
     }
   },

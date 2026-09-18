@@ -119,18 +119,36 @@ const FILTER_BOX = (props) => typeof props.placeholder === "string" && props.pla
  * @param options - `{ fetch, react }` 替身。
  * @returns `{ id, factory }` 或 undefined。
  */
-function runBundle(source, options) {
-  let registered;
-  const documentStub = {
+/**
+ * 假的 document:够让客户端注入样式表,并**记下最后建出来的元素** ——
+ * 测试要拿它模拟"浏览器的文件框里选中了文件"。
+ * @returns document 替身。
+ */
+function createFakeDocument() {
+  const stub = {
     querySelector: () => null,
-    createElement: () => ({
-      dataset: {},
-      style: {},
-      textContent: "",
-      setAttribute() {}
-    }),
+    createElement: () => {
+      const element = {
+        dataset: {},
+        style: {},
+        textContent: "",
+        clicked: false,
+        setAttribute() {},
+        click() {
+          element.clicked = true;
+        }
+      };
+      stub.lastCreated = element;
+      return element;
+    },
     head: { append() {} }
   };
+  return stub;
+}
+
+function runBundle(source, options) {
+  let registered;
+  const documentStub = options.document ?? createFakeDocument();
   const windowStub = {
     __ModuleLoader__: {
       load: (spec) => {
@@ -257,7 +275,8 @@ const fetchStub = (url) => {
   }
   return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
 };
-const registered = runBundle(read("lib/client.js"), { fetch: fetchStub, react: fake.react });
+const doc = createFakeDocument();
+const registered = runBundle(read("lib/client.js"), { fetch: fetchStub, react: fake.react, document: doc });
 check(registered?.id === manifest.name, `客户端 bundle 注册的 id = 包名(实际 ${String(registered?.id)})`);
 const clientExports = registered?.factory((id) => (id === "react" ? fake.react : undefined));
 check(typeof clientExports?.apply === "function", "客户端工厂能执行并导出 apply");
@@ -340,6 +359,48 @@ try {
   );
 } catch (error) {
   check(false, "过滤与回车能选中", String(error));
+}
+
+// 加速路:借浏览器文件框选文件。两条结果都要验 —— 拿得到路径就写入,拿不到就如实说明。
+/** 重新打开浏览面板(上一步选中后它自己关了)。 */
+const reopenPanel = async () => {
+  fake.reset();
+  findButton(captured(), "浏览…").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  return captured();
+};
+try {
+  const panel = await reopenPanel();
+  const nativeButton = findButton(panel, "系统窗口选文件");
+  check(nativeButton !== undefined, "文件字段的面板里有「系统窗口选文件」按钮");
+  written.length = 0;
+  nativeButton.props.onClick();
+  const input = doc.lastCreated;
+  check(input?.type === "file" && input.clicked === true, "点它会真的去开浏览器的文件框");
+
+  // 1) Electron 壳:file.path 是完整路径 → 写入
+  input.files = [{ name: "vivado.bat", path: "D:\\Xilinx\\bin\\vivado.bat" }];
+  input.onchange();
+  check(
+    written.some(([key, value]) => key === "compilerPath" && value === "D:\\Xilinx\\bin\\vivado.bat"),
+    "拿得到完整路径时直接写入设置",
+    JSON.stringify(written)
+  );
+
+  // 2) 普通浏览器:只给文件名(fakepath)→ 不写入,并说明原因
+  written.length = 0;
+  const panel2 = await reopenPanel();
+  findButton(panel2, "系统窗口选文件").props.onClick();
+  const input2 = doc.lastCreated;
+  input2.files = [{ name: "vivado.bat", path: "C:\\fakepath\\vivado.bat" }];
+  input2.onchange();
+  check(written.length === 0, "拿不到完整路径时不会写入一个假路径");
+  fake.reset();
+  const withNote = JSON.stringify(captured() ?? {});
+  check(withNote.includes("没给出完整路径"), "拿不到路径时如实说明,并指向列表/粘贴");
+} catch (error) {
+  check(false, "浏览器文件框这条路能走通", String(error));
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

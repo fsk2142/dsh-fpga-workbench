@@ -1,5 +1,7 @@
 # dsh-fpga-workbench
 
+用来在 dsh 中导入一个 FPGA 工作台进行自动化 FPGA 工程开发。
+
 **一个 DSH 的 FPGA 开发模式。**
 
 它做两件事:

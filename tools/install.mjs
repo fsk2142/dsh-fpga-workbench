@@ -12,11 +12,12 @@
 //   2. 不一致才"移除旧副本 + 重装"。
 //   3. 任何一步失败都**明确打印恢复命令**,绝不把"删了但没装回去"当成功 ——
 //      那种状态会让 profile 的 bundles 列着一个不存在的包,DSH 启动会直接失败。
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { compareTree } from "./shipped.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_NAME = "dsh-fpga-workbench";
@@ -25,36 +26,16 @@ const HOME = process.env.USERPROFILE ?? process.env.HOME ?? "";
 const PROFILE_DIR = process.env.DSH_PROFILE_DIR ?? join(HOME, ".dsh", "profiles", PROFILE_NAME);
 const INSTALLED = join(PROFILE_DIR, "node_modules", PACKAGE_NAME);
 
-/** 会被宿主读取的文件 —— 装完必须与源逐字节一致。 */
-const FILES = ["package.json", "cordis.patch.yml", "lib/index.js", "lib/client.js"];
-
 const checkOnly = process.argv.includes("--check");
 
 /** 恢复命令:无论在哪一步失败,用户都可以靠这一条把状态修回来。 */
 const RECOVERY = `dsh plugin --profile ${PROFILE_NAME} add file:${ROOT}`;
 
-function hash(file) {
-  try {
-    return createHash("sha256").update(readFileSync(file)).digest("hex");
-  } catch {
-    return null;
-  }
-}
-
 /** 校验已装副本与源是否一致。@returns 失败项标签数组 */
 function verify() {
-  if (!existsSync(INSTALLED)) return [`未安装到 ${INSTALLED}`];
-  const failures = [];
-  for (const rel of FILES) {
-    const source = join(ROOT, rel);
-    const installed = join(INSTALLED, rel);
-    if (!existsSync(source)) continue;
-    if (!existsSync(installed)) {
-      failures.push(`已装缺 ${rel}`);
-      continue;
-    }
-    if (hash(source) !== hash(installed)) failures.push(`${rel} 与源不一致`);
-  }
+  // 按 package.json 的 files 白名单逐字节比 —— 不写死文件名。
+  // 写死过 4 个文件,于是只改技能/模板时会回答"已一致,无需重装",静默不生效。
+  const failures = compareTree(ROOT, INSTALLED);
   const manifest = join(INSTALLED, "package.json");
   if (existsSync(manifest)) {
     const parsed = JSON.parse(readFileSync(manifest, "utf8"));

@@ -144,7 +144,13 @@ try {
 
 if (plugin !== null) {
   check(typeof plugin.apply === "function", "导出 apply");
-  check(plugin.inject === undefined || typeof plugin.inject === "object", "inject 形状合法");
+  // 客户端插件的服务注入契约是数组,不是对象。形状错了 apply 会拿到没有 slots 的
+  // ctx,第一行就抛 TypeError —— 而宿主只回一句「没有错误信息」。
+  check(Array.isArray(plugin.inject), `inject 是数组(实际 ${JSON.stringify(plugin.inject)})`);
+  check(
+    Array.isArray(plugin.inject) && plugin.inject.every((name) => typeof name === "string"),
+    "inject 每一项都是字符串(服务名)"
+  );
 
   // 父槽已声明
   slots.declare(ENTRY_SLOT);

@@ -104,7 +104,10 @@ if (registration === null) {
     throw new Error(`bundle 请求了基座模块表之外的模块:${specifier}`);
   });
   check(typeof exports.apply === "function", "bundle 导出 apply");
-  check(Array.isArray(exports.inject?.required), "bundle 的 inject.required 是数组");
+  check(
+    Array.isArray(exports.inject) && exports.inject.every((name) => typeof name === "string"),
+    "bundle 的 inject 是服务名数组(客户端契约:不是对象)"
+  );
 }
 
 console.log(

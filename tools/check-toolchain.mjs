@@ -29,25 +29,19 @@ const KEYS = FIELDS.map((field) => field.key);
 check(KEYS.length === 5, `字段共 5 个(实际 ${KEYS.length})`);
 check(KEYS.includes("cachePath"), "含缓存目录字段");
 check(
-  FIELDS.find((field) => field.key === "cachePath")?.required === false,
-  "缓存目录标记为非必需(不存在不算缺失)"
-);
-check(FIELDS.filter((field) => field.required === true).length === 4, "四个工具字段标记为必需");
-check(
-  FIELDS.filter((field) => field.required === true).every((field) => field.skips.length > 0),
-  "每个必需项都写清了缺失会跳过哪些步骤(否则提示里会出现空的跳过清单)"
+  FIELDS.filter((field) => field.required === true).length === FIELDS.length,
+  `五个路径全部必填(实际 ${FIELDS.filter((field) => field.required === true).length}/${FIELDS.length})`
 );
 check(
-  FIELDS.find((field) => field.key === "cachePath")?.skips.length === 0,
-  "缓存目录没有跳过清单(它不是工具)"
+  FIELDS.every((field) => field.skips.length > 0),
+  "每一项都写清了没就绪会跳过哪些步骤(否则界面上会出现空的跳过清单)"
 );
 
 // ── 存在性判定 ──────────────────────────────────────────────────────────────
 const empty = inspectTools({}, probeWith([]));
 check(empty.length === 5, "空设置也返回全部字段");
 check(empty.every((tool) => tool.configured === false && tool.present === false), "空设置下全部未配置且不可用");
-check(missingKeys(empty).length === 4, "空设置下 4 个必需项都算缺失");
-check(!missingKeys(empty).includes("cachePath"), "缓存目录不算缺失");
+check(missingKeys(empty).length === 5, "空设置下五项都算未就绪");
 
 const partial = inspectTools(
   { vivadoPath: "C:\\vivado.bat", modelsimPath: "C:\\missing\\vsim.exe", cachePath: "C:\\cache" },
@@ -55,14 +49,13 @@ const partial = inspectTools(
 );
 const byKey = new Map(partial.map((tool) => [tool.key, tool]));
 check(byKey.get("vivadoPath")?.present === true, "存在的路径判为可用");
-check(byKey.get("modelsimPath")?.present === false && byKey.get("modelsimPath")?.configured === true, "路径错:已配置但不可用");
+check(byKey.get("modelsimPath")?.present === false && byKey.get("modelsimPath")?.configured === true, "路径错:已配置但未就绪");
 check(byKey.get("verilatorPath")?.configured === false, "没填的项:未配置");
 check(
-  missingKeys(partial).join(",") === "modelsimPath,verilatorPath,libraryPath",
-  `缺失清单正确(实际 ${missingKeys(partial).join(",")})`
+  missingKeys(partial).join(",") === "modelsimPath,verilatorPath,libraryPath,cachePath",
+  `未就绪清单正确(实际 ${missingKeys(partial).join(",")})`
 );
 check(byKey.get("cachePath")?.present === false, "缓存目录状态如实反映(未创建)");
-check(!missingKeys(partial).includes("cachePath"), "缓存目录仍未创建也不算缺失");
 
 // 值两端空白要当成没填(否则 "  " 会被当成一条路径)
 const blank = inspectTools({ vivadoPath: "   " }, probeWith([]));

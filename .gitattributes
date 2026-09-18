@@ -1,0 +1,7 @@
+# lib/ 是源码而不是构建产物:客户端 bundle 是手写的懒 CJS,
+# 这个仓库没有构建步骤,所以不能让任何 diff/语言统计规则把它藏起来。
+lib/** linguist-generated=false
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.md text eol=lf

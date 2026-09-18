@@ -1,0 +1,21 @@
+{
+  "name": "dsh-fpga-workbench",
+  "version": "0.1.0",
+  "description": "FPGA workbench panel for the DSH web GUI: a sidebar entry that opens a workbench surface over the project registry in this directory.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "workbench.json"
+  ],
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  }
+}

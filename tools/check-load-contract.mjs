@@ -29,6 +29,101 @@ const check = (ok, label, detail) => {
 const read = (rel) => readFileSync(join(ROOT, rel), "utf8");
 const manifest = JSON.parse(read("package.json"));
 
+/**
+ * 一套极小的 React 替身:够把客户端组件真的跑起来。
+ *
+ * 只实现设置页用到的那几个 hook:useState 存值(所以第二遍渲染能看到第一遍设的状态)、
+ * useEffect 收集起来由调用方决定何时执行、createElement 返回可遍历的普通对象
+ * (于是能在渲染树里找到某个按钮并"点"它)。
+ * @returns `{ react, reset, runEffects, tree }`。
+ */
+function createFakeReact() {
+  const states = [];
+  const effects = [];
+  let cursor = 0;
+  return {
+    react: {
+      createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
+      useState: (initial) => {
+        const index = cursor;
+        cursor += 1;
+        if (!(index in states)) states[index] = initial;
+        return [
+          states[index],
+          (next) => {
+            states[index] = typeof next === "function" ? next(states[index]) : next;
+          }
+        ];
+      },
+      useEffect: (fn) => {
+        effects.push(fn);
+      },
+      useMemo: (fn) => fn(),
+      useCallback: (fn) => fn,
+      useRef: (initial) => ({ current: initial })
+    },
+    /** 每次渲染前重置 hook 游标(状态本身保留)。 */
+    reset: () => {
+      cursor = 0;
+    },
+    /** 执行这一轮收集到的 effect。 */
+    runEffects: () => {
+      for (const fn of effects.splice(0)) fn();
+    }
+  };
+}
+
+/**
+ * 在渲染树里找按钮。
+ * @param node - createElement 的产物。
+ * @param text - 按钮文字里包含的片段。
+ * @returns 找到的节点,或 undefined。
+ */
+function findButton(node, text) {
+  if (node === null || typeof node !== "object") return undefined;
+  if (node.type === "button" && (node.children ?? []).some((child) => typeof child === "string" && child.includes(text))) {
+    return node;
+  }
+  for (const child of node.children ?? []) {
+    const found = findButton(child, text);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
+ * 跑一遍客户端 bundle:喂假的 window / document / fetch / react,返回它注册的那份 spec。
+ *
+ * 组件里会碰 document(注入样式表)与 fetch(两条路由),Node 里都没有,所以按参数注入,
+ * 而不是去改全局。
+ * @param source - bundle 源码。
+ * @param options - `{ fetch, react }` 替身。
+ * @returns `{ id, factory }` 或 undefined。
+ */
+function runBundle(source, options) {
+  let registered;
+  const documentStub = {
+    querySelector: () => null,
+    createElement: () => ({
+      dataset: {},
+      style: {},
+      textContent: "",
+      setAttribute() {}
+    }),
+    head: { append() {} }
+  };
+  const windowStub = {
+    __ModuleLoader__: {
+      load: (spec) => {
+        registered = spec;
+      }
+    }
+  };
+  const run = new Function("window", "require", "document", "fetch", `${source}\nreturn window.__ModuleLoader__;`);
+  run(windowStub, (id) => (id === "react" ? options.react : undefined), documentStub, options.fetch);
+  return registered;
+}
+
 // ── 1. 语法 ─────────────────────────────────────────────────────────────────
 const loadable = [
   ...readdirSync(LIB).filter((name) => name.endsWith(".js")).map((name) => join("lib", name)),
@@ -94,5 +189,107 @@ const mode = read("lib/mode.js");
 check(/export const inject = \["systemPrompt"\]/u.test(mode), `模式半侧 inject 是 ["systemPrompt"]`);
 check(/export function apply/u.test(mode), "模式半侧导出 apply");
 
-console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约全部成立(重启前可以放心)");
+// ── 5. 客户端渲染冒烟 ───────────────────────────────────────────────────────
+//
+// 光"bundle 能加载"不够:设置页真正跑的是那个 React 组件的**渲染体**。这里用一套极小的
+// React 替身把组件真的调用两遍(第一遍拿字段、第二遍渲染字段行与浏览面板),于是
+// "渲染路径里引用了不存在的函数 / 结构写错"这类白屏问题能在重启前抓到 ——
+// 没有浏览器,这是唯一能自动验到那一层的手段。
+const fake = createFakeReact();
+const scope = {
+  store: {
+    getSnapshot: () => ({
+      status: "ready",
+      value: { compilerPath: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", simulator: "modelsim" }
+    })
+  },
+  set: () => Promise.resolve()
+};
+let captured;
+let browserRequested = 0;
+const payload = {
+  tools: [
+    { key: "compiler", label: "用哪个编译器", hint: "选一个", required: false, skips: [], path: "verilator", configured: true, present: true, group: "编译器", control: "select", options: [{ value: "verilator", label: "Verilator" }, { value: "other", label: "其他" }], default: "verilator" },
+    { key: "compilerPath", label: "编译器路径", hint: "填 exe", required: true, skips: ["快速 lint"], path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", configured: true, present: true, group: "编译器", control: "text", kind: "file" },
+    { key: "libraryPath", label: "库目录", hint: "填目录", required: true, skips: [], path: "", configured: false, present: false, group: "库与缓存", control: "text", kind: "directory" },
+    { key: "verilatorPath", label: "旧键里的路径", hint: "", required: false, skips: [], path: "", configured: false, present: false, group: "旧键", control: "hidden" }
+  ],
+  missing: ["libraryPath"],
+  ok: false
+};
+const browsePayload = {
+  path: "C:\\msys64\\mingw64\\bin",
+  parent: "C:\\msys64\\mingw64",
+  entries: [
+    { name: "verilator_bin.exe", path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", kind: "file" },
+    { name: "mingw64", path: "C:\\msys64\\mingw64", kind: "directory" }
+  ],
+  truncated: false
+};
+const fetchStub = (url) => {
+  const browse = String(url).includes("/browse");
+  if (browse) browserRequested += 1;
+  return Promise.resolve({ ok: true, json: () => Promise.resolve(browse ? browsePayload : payload) });
+};
+const registered = runBundle(read("lib/client.js"), { fetch: fetchStub, react: fake.react });
+check(registered?.id === manifest.name, `客户端 bundle 注册的 id = 包名(实际 ${String(registered?.id)})`);
+const clientExports = registered?.factory((id) => (id === "react" ? fake.react : undefined));
+check(typeof clientExports?.apply === "function", "客户端工厂能执行并导出 apply");
+
+let firstTree;
+let secondTree;
+try {
+  clientExports.apply({
+    inject: (deps, callback) => callback({
+      settingsScope: { bind: () => scope },
+      effect: (fn) => fn(),
+      slots: {
+        inject: (name, generator) => {
+          generator().next();
+        },
+        register: (spec, component) => {
+          captured = component;
+          return { dispose() {} };
+        }
+      }
+    })
+  });
+  check(typeof captured === "function", "设置页把组件注册到了 settings.section 槽");
+  fake.reset();
+  firstTree = captured();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.runEffects();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  secondTree = captured();
+} catch (error) {
+  check(false, "设置页组件能渲染", String(error));
+}
+
+check(firstTree !== undefined && secondTree !== undefined, "设置页两次渲染都没抛异常(第二遍带字段)");
+const rendered = JSON.stringify(secondTree ?? {});
+for (const expected of ["用哪个编译器", "编译器路径", "库目录", "浏览…", "已就绪", "未就绪"]) {
+  check(rendered.includes(expected), `渲染结果里出现「${expected}」`);
+}
+check(!rendered.includes("旧键里的路径"), "隐藏字段没有被渲染出来");
+check(browserRequested === 0, "没点「浏览…」时不会去请求列目录(不白跑接口)");
+
+// 点一次「浏览…」:应该去请求列目录,并把返回的条目渲染出来
+try {
+  const button = findButton(secondTree, "浏览…");
+  check(button !== undefined, "渲染树里找得到「浏览…」按钮");
+  button.props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  const withBrowse = captured();
+  const browseRendered = JSON.stringify(withBrowse ?? {});
+  check(browserRequested === 1, `点按钮后确实去列了目录(实际请求 ${browserRequested} 次)`);
+  check(browseRendered.includes("verilator_bin.exe"), "浏览面板列出目录里的文件");
+  check(browseRendered.includes("用这个目录"), "浏览面板提供「用这个目录」(XSim 那种要目录的路径)");
+  check(browseRendered.includes("↑ 上级"), "浏览面板能回上级目录");
+} catch (error) {
+  check(false, "浏览面板能渲染", String(error));
+}
+
+console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");
 if (failures.length > 0) process.exitCode = 1;

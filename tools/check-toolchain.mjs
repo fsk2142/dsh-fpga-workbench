@@ -11,18 +11,22 @@
 //
 // 只 import lib/toolchain.js:它只用 node 内置模块,而 lib/index.js 要 schemastery,
 // 后者只在 profile 的 node_modules 里,从仓库 import 会解析失败。
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   FIELDS,
   NS,
   describeEnv,
   inspectTools,
   legacyMigrationPatch,
+  listDirectory,
   probeFilesystem,
   resolveTemplates,
   statusOf
 } from "../lib/toolchain.js";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -299,6 +303,30 @@ check(!noCacheText.includes("不要污染 RTL 源码目录"), "缓存目录没�
 
 const unreadable = describeEnv(undefined, probeWith([]));
 check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设置时如实说读不到,而不是当成没配");
+
+// ── 浏览:列目录(设置页「浏览…」靠它) ──────────────────────────────────────
+const browseRoot = join(ROOT, ".tmp", "browse-fixture");
+mkdirSync(join(browseRoot, "subdir"), { recursive: true });
+writeFileSync(join(browseRoot, "tool.exe"), "");
+writeFileSync(join(browseRoot, "readme.txt"), "");
+
+const listing = listDirectory(browseRoot);
+check(listing.entries.length >= 3, `列出目录内容(实际 ${listing.entries.length} 项)`);
+check(listing.entries[0].kind === "directory", "目录排在文件前面(先看到目录,好往下钻)");
+check(
+  listing.entries.some((entry) => entry.name === "tool.exe" && entry.kind === "file"),
+  "文件也列出来(要选的就是 .exe / .bat)"
+);
+check(
+  listing.entries.some((entry) => entry.name === "subdir" && entry.path === join(browseRoot, "subdir")),
+  "条目带完整路径(点了直接能填)"
+);
+check(listing.parent === join(ROOT, ".tmp"), `给出上级目录(实际 ${String(listing.parent)})`);
+
+const absent = listDirectory(join(browseRoot, "nope"));
+check(absent.entries.length === 0 && typeof absent.error === "string", "目录不存在时如实报 error,而不是抛异常");
+const drives = listDirectory("");
+check(drives.entries.length > 0 && drives.entries.every((entry) => entry.kind === "directory"), "空路径列盘符(从根开始挑)");
 
 // ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
 //

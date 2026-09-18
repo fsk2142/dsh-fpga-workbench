@@ -72,6 +72,20 @@ if (host !== undefined) {
     check(payload.tools.filter((tool) => tool.control === "select").every((tool) => tool.options.length > 1), "下拉字段带选项");
     check(!("usage" in payload.tools[0]), "载荷里没有 usage");
     console.log(`      就绪 ${payload.tools.filter((t) => t.present).length}/${payload.tools.length},缺失 ${payload.missing.join(", ") || "无"}`);
+
+    // 迁移:设置里若还留着改名前的旧键,启动时会被搬进新键。
+    // 只兜底不搬的话,设置页的框会是空的、状态却"已就绪"(用户实际抓到的 bug)。
+    const patch = host.legacyMigrationPatch(values);
+    const moving = Object.entries(patch).filter(([, value]) => value !== "");
+    console.log(
+      moving.length === 0
+        ? "      待迁移的旧键:无(已迁移过,或本来就没填)"
+        : `      待迁移的旧键:${moving.map(([key, value]) => `${key}=${value}`).join(", ")}`
+    );
+    check(
+      moving.every(([key]) => ["compilerPath", "simulatorPath", "synthesizerPath"].includes(key)),
+      "迁移补丁只写这三个新键"
+    );
   } catch (error) {
     check(false, "statusOf 能跑通", String(error));
   }

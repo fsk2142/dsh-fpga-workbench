@@ -18,6 +18,7 @@ import {
   NS,
   describeEnv,
   inspectTools,
+  legacyMigrationPatch,
   probeFilesystem,
   resolveTemplates,
   statusOf
@@ -143,6 +144,29 @@ check(migratedByKey.get("compilerPath")?.path === "C:\\old\\verilator_bin.exe", 
 check(migratedByKey.get("simulatorPath")?.path === "C:\\old\\vsim.exe", "旧 modelsimPath 落到 simulatorPath");
 check(migratedByKey.get("synthesizerPath")?.path === "C:\\old\\vivado.bat", "旧 vivadoPath 落到 synthesizerPath");
 check(missingKeys(migrated).join(",") === "libraryPath,cachePath", "迁移后只剩没填过的那两项未就绪");
+
+// 光在 valueOf 里兜底是不够的:设置页的输入框读的是**新键的原始值**,只兜底就会
+// "框是空的、状态却是绿的"(用户实际抓到的 bug)。所以要把值真的搬过去。
+const migration = legacyMigrationPatch({
+  verilatorPath: "C:\\old\\verilator_bin.exe",
+  modelsimPath: "C:\\old\\vsim.exe",
+  vivadoPath: "C:\\old\\vivado.bat"
+});
+check(
+  migration.compilerPath === "C:\\old\\verilator_bin.exe"
+    && migration.simulatorPath === "C:\\old\\vsim.exe"
+    && migration.synthesizerPath === "C:\\old\\vivado.bat",
+  "迁移补丁:旧值写进新键"
+);
+check(
+  migration.verilatorPath === "" && migration.modelsimPath === "" && migration.vivadoPath === "",
+  "迁移补丁:同时清空旧键(否则以后清空新字段时旧值会复活)"
+);
+check(
+  Object.keys(legacyMigrationPatch({ compilerPath: "C:\\new\\v.exe", verilatorPath: "C:\\old" })).length === 0,
+  "新键已有值时不再迁移(幂等)"
+);
+check(Object.keys(legacyMigrationPatch({})).length === 0, "没有旧值时不写任何东西(不无谓改用户配置)");
 const ownWins = inspectTools({ compilerPath: "C:\\new\\v.exe", verilatorPath: "C:\\old\\v.exe" }, probeWith(["C:\\new\\v.exe"]));
 check(ownWins.find((tool) => tool.key === "compilerPath")?.path === "C:\\new\\v.exe", "新键有值时优先用新键(旧键只是兜底)");
 

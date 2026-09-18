@@ -21,6 +21,8 @@ import {
   inspectTools,
   legacyMigrationPatch,
   listDirectory,
+  pickerCommand,
+  pickerSpec,
   probeFilesystem,
   resolveTemplates,
   statusOf
@@ -327,6 +329,27 @@ const absent = listDirectory(join(browseRoot, "nope"));
 check(absent.entries.length === 0 && typeof absent.error === "string", "目录不存在时如实报 error,而不是抛异常");
 const drives = listDirectory("");
 check(drives.entries.length > 0 && drives.entries.every((entry) => entry.kind === "directory"), "空路径列盘符(从根开始挑)");
+
+// ── 浏览:系统对话框(首选那条路) ────────────────────────────────────────────
+check(pickerSpec("compilerPath")?.kind === "file", "工具路径弹「选文件」的对话框");
+check(pickerSpec("libraryPath")?.kind === "directory", "库目录弹「选目录」的对话框");
+check(pickerSpec("rtlTemplatePath")?.filter.includes("*.sv"), "RTL 模板的过滤器指向 sv");
+check(pickerSpec("xdcTemplatePath")?.filter.includes("*.xdc"), "约束模板的过滤器指向 xdc");
+check(pickerSpec("compiler") === undefined && pickerSpec("nope") === undefined, "下拉与未知字段没有对话框(不该被调用)");
+
+const filePick = pickerCommand(pickerSpec("compilerPath"), { title: "选择编译器路径", start: "C:\\a b\\bin" });
+check(/powershell\.exe$/u.test(filePick.file), "用系统自带的 Windows PowerShell(不依赖宿主 PATH)");
+check(filePick.args.includes("-STA"), "加 -STA(系统对话框需要单线程单元)");
+check(filePick.args.includes("-EncodedCommand"), "脚本以 -EncodedCommand 传(中文与引号不会被命令行解析吃掉)");
+const decodedFile = Buffer.from(filePick.args[filePick.args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
+check(decodedFile.includes("OpenFileDialog"), "解回来的脚本确实是「选文件」那个");
+check(decodedFile.includes("$env:DSH_FPGA_PICK_START"), "脚本从环境变量取起始目录");
+check(filePick.env.DSH_FPGA_PICK_START === "C:\\a b\\bin", "起始目录走环境变量传");
+check(!filePick.args.join(" ").includes("a b"), "起始目录没有出现在命令行里(不拼字符串 = 没有注入面)");
+
+const dirPick = pickerCommand(pickerSpec("libraryPath"), { title: "选目录", start: "" });
+const decodedDir = Buffer.from(dirPick.args[dirPick.args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
+check(decodedDir.includes("BrowseForFolder"), "选目录用 shell 自己的浏览对话框");
 
 // ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
 //

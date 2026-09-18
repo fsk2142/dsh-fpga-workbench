@@ -196,6 +196,7 @@ check(/export function apply/u.test(mode), "模式半侧导出 apply");
 // "渲染路径里引用了不存在的函数 / 结构写错"这类白屏问题能在重启前抓到 ——
 // 没有浏览器,这是唯一能自动验到那一层的手段。
 const fake = createFakeReact();
+const written = [];
 const scope = {
   store: {
     getSnapshot: () => ({
@@ -203,10 +204,16 @@ const scope = {
       value: { compilerPath: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", simulator: "modelsim" }
     })
   },
-  set: () => Promise.resolve()
+  set: (key, value) => {
+    written.push([key, value]);
+    return Promise.resolve();
+  }
 };
 let captured;
 let browserRequested = 0;
+let pickRequested = 0;
+/** 由测试按需改写:系统对话框这一路返回什么。 */
+let pickResponse = { cancelled: true };
 const payload = {
   tools: [
     { key: "compiler", label: "用哪个编译器", hint: "选一个", required: false, skips: [], path: "verilator", configured: true, present: true, group: "编译器", control: "select", options: [{ value: "verilator", label: "Verilator" }, { value: "other", label: "其他" }], default: "verilator" },
@@ -227,9 +234,16 @@ const browsePayload = {
   truncated: false
 };
 const fetchStub = (url) => {
-  const browse = String(url).includes("/browse");
-  if (browse) browserRequested += 1;
-  return Promise.resolve({ ok: true, json: () => Promise.resolve(browse ? browsePayload : payload) });
+  const target = String(url);
+  if (target.includes("/pick")) {
+    pickRequested += 1;
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(pickResponse) });
+  }
+  if (target.includes("/browse")) {
+    browserRequested += 1;
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(browsePayload) });
+  }
+  return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
 };
 const registered = runBundle(read("lib/client.js"), { fetch: fetchStub, react: fake.react });
 check(registered?.id === manifest.name, `客户端 bundle 注册的 id = 包名(实际 ${String(registered?.id)})`);
@@ -272,18 +286,41 @@ for (const expected of ["用哪个编译器", "编译器路径", "库目录", "�
   check(rendered.includes(expected), `渲染结果里出现「${expected}」`);
 }
 check(!rendered.includes("旧键里的路径"), "隐藏字段没有被渲染出来");
-check(browserRequested === 0, "没点「浏览…」时不会去请求列目录(不白跑接口)");
+check(browserRequested === 0 && pickRequested === 0, "没点「浏览…」时不会去请求接口(不白跑)");
 
-// 点一次「浏览…」:应该去请求列目录,并把返回的条目渲染出来
+// 点「浏览…」的第一条路:系统对话框选中了 → 必须把结果写进设置,不该再开页面内浏览
 try {
+  pickResponse = { path: "D:\\Tools\\vivado.bat" };
   const button = findButton(secondTree, "浏览…");
   check(button !== undefined, "渲染树里找得到「浏览…」按钮");
   button.props.onClick();
   await new Promise((resolve) => setImmediate(resolve));
+  check(pickRequested === 1, `点按钮先请宿主弹系统对话框(实际请求 ${pickRequested} 次)`);
+  check(browserRequested === 0, "系统对话框这条路不额外去列目录");
+  check(
+    written.some(([key, value]) => key === "compilerPath" && value === "D:\\Tools\\vivado.bat"),
+    "选中的路径被写进了设置",
+    JSON.stringify(written)
+  );
+  fake.reset();
+  captured();
+} catch (error) {
+  check(false, "系统对话框这条路能走通", String(error));
+}
+
+// 第二条路:系统对话框弹不出来 → 退回页面内浏览,并说明原因
+try {
+  pickResponse = { error: "powershell spawn ENOENT" };
+  written.length = 0;
+  fake.reset();
+  const before = captured();
+  findButton(before, "浏览…").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
   fake.reset();
   const withBrowse = captured();
   const browseRendered = JSON.stringify(withBrowse ?? {});
-  check(browserRequested === 1, `点按钮后确实去列了目录(实际请求 ${browserRequested} 次)`);
+  check(browserRequested === 1, `弹不出来时退回列目录(实际请求 ${browserRequested} 次)`);
+  check(browseRendered.includes("系统窗口弹不出来"), "界面说明为什么退回页面内选择");
   check(browseRendered.includes("verilator_bin.exe"), "浏览面板列出目录里的文件");
   check(browseRendered.includes("用这个目录"), "浏览面板提供「用这个目录」(XSim 那种要目录的路径)");
   check(browseRendered.includes("↑ 上级"), "浏览面板能回上级目录");

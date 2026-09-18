@@ -137,8 +137,14 @@ node tools/check-preset-root.mjs    # 预设路径求值 + 组装结构 + 模式
 node tools/check-preset-sync.mjs   # 预设底座与官方 standard 的漂移(行 id / 包名)
 node tools/check-patch-file.mjs    # 补丁字节合法 + 形状
 node tools/check-installed.mjs     # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)
+node tools/smoke-installed.mjs     # 已装副本在真实解析环境里能否加载(装完/重启前跑)
 node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件安全(较慢)
 ```
+
+`smoke-installed` 与 `check-installed` 的关系:后者比字节,前者**真的加载一遍** ——
+在 profile 的解析环境里 import 宿主半侧、执行客户端 bundle 的工厂函数、用真实设置跑一遍
+状态载荷与会话提示段。"文件都对但一加载就炸"只有它能抓住,而那种情况重启后就是黑屏。
+`tools/install.mjs` 装完会自动跑它。
 
 前三个写死了本机路径(`C:/Program Files/DSH Desktop`、`~/.dsh/profiles/desktop`),
 换机器要改。

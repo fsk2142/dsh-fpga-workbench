@@ -148,7 +148,17 @@ if (checkOnly) {
   console.log("");
   const after = verify();
   if (after.length === 0) {
-    console.log("PASS: 已装副本与源逐字节一致。重启 DSH Desktop 生效。");
+    console.log("PASS: 已装副本与源逐字节一致。");
+    // 光"字节一致"还不够 —— 再在真实解析环境里加载一遍(宿主半侧 import + 客户端 bundle
+    // 的工厂函数执行)。这一步能抓住"文件都对、但一加载就炸"的情况,而那种情况重启后就是黑屏。
+    console.log("\n冒烟测试:在 profile 的解析环境里加载一遍…\n");
+    const smoke = spawnSync(process.execPath, [join(ROOT, "tools", "smoke-installed.mjs")], { stdio: "inherit" });
+    if ((smoke.status ?? 1) === 0) {
+      console.log("\n重启 DSH Desktop 生效。");
+    } else {
+      console.log("\n冒烟测试没过 —— 先别重启,把上面的 FAIL 发出来。");
+      process.exitCode = 1;
+    }
   } else {
     console.log(`FAIL: ${after.join(" | ")}`);
     console.log(`pnpm 又跳过了拷贝 —— 再跑一次本脚本,或手动:${RECOVERY}`);

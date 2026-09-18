@@ -156,8 +156,21 @@ function runBundle(source, options) {
       }
     }
   };
-  const run = new Function("window", "require", "document", "fetch", `${source}\nreturn window.__ModuleLoader__;`);
-  run(windowStub, (id) => (id === "react" ? options.react : undefined), documentStub, options.fetch);
+  const run = new Function(
+    "window",
+    "require",
+    "document",
+    "fetch",
+    "navigator",
+    `${source}\nreturn window.__ModuleLoader__;`
+  );
+  run(
+    windowStub,
+    (id) => (id === "react" ? options.react : undefined),
+    documentStub,
+    options.fetch,
+    options.navigator ?? { userAgent: "" }
+  );
   return registered;
 }
 
@@ -276,7 +289,9 @@ const fetchStub = (url) => {
   return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
 };
 const doc = createFakeDocument();
-const registered = runBundle(read("lib/client.js"), { fetch: fetchStub, react: fake.react, document: doc });
+/** 可切换的外壳:空 UA = 普通浏览器;带 Electron = 桌面壳。客户端在点击时读它。 */
+const nav = { userAgent: "" };
+const registered = runBundle(read("lib/client.js"), { fetch: fetchStub, react: fake.react, document: doc, navigator: nav });
 check(registered?.id === manifest.name, `客户端 bundle 注册的 id = 包名(实际 ${String(registered?.id)})`);
 const clientExports = registered?.factory((id) => (id === "react" ? fake.react : undefined));
 check(typeof clientExports?.apply === "function", "客户端工厂能执行并导出 apply");
@@ -361,46 +376,63 @@ try {
   check(false, "过滤与回车能选中", String(error));
 }
 
-// 加速路:借浏览器文件框选文件。两条结果都要验 —— 拿得到路径就写入,拿不到就如实说明。
-/** 重新打开浏览面板(上一步选中后它自己关了)。 */
-const reopenPanel = async () => {
+// 「浏览…」按外壳分流:桌面壳直接弹系统窗口(一步到位),普通浏览器直接给列表(不弹没用的窗口)。
+// 上面那几步是在普通浏览器(UA 空)下走的 —— 正好覆盖了后一半。
+try {
+  check(browserRequested > 0, "普通浏览器:点「浏览…」直接给页面内列表");
+  check(doc.lastCreated?.type !== "file", "普通浏览器:不去开注定拿不到路径的系统窗口");
+
+  // 切到桌面壳
+  nav.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DSH/1.0 Electron/28.0.0 Chrome/120.0 Safari/537.36";
+  const requestsBefore = browserRequested;
   fake.reset();
   findButton(captured(), "浏览…").props.onClick();
-  await new Promise((resolve) => setImmediate(resolve));
-  fake.reset();
-  return captured();
-};
-try {
-  const panel = await reopenPanel();
-  const nativeButton = findButton(panel, "系统窗口选文件");
-  check(nativeButton !== undefined, "文件字段的面板里有「系统窗口选文件」按钮");
-  written.length = 0;
-  nativeButton.props.onClick();
   const input = doc.lastCreated;
-  check(input?.type === "file" && input.clicked === true, "点它会真的去开浏览器的文件框");
+  check(input?.type === "file" && input.clicked === true, "桌面壳:点「浏览…」直接弹系统文件框(一步到位)");
+  check(browserRequested === requestsBefore, "桌面壳:不再先给列表");
 
-  // 1) Electron 壳:file.path 是完整路径 → 写入
+  // 1) 桌面壳 + 真路径 → 写入设置
+  written.length = 0;
   input.files = [{ name: "vivado.bat", path: "D:\\Xilinx\\bin\\vivado.bat" }];
   input.onchange();
   check(
     written.some(([key, value]) => key === "compilerPath" && value === "D:\\Xilinx\\bin\\vivado.bat"),
-    "拿得到完整路径时直接写入设置",
+    "桌面壳:拿到完整路径就直接写入设置",
     JSON.stringify(written)
   );
 
-  // 2) 普通浏览器:只给文件名(fakepath)→ 不写入,并说明原因
+  // 2) 目录字段 → 借文件夹选择框,取的是**所在目录**
   written.length = 0;
-  const panel2 = await reopenPanel();
-  findButton(panel2, "系统窗口选文件").props.onClick();
-  const input2 = doc.lastCreated;
-  input2.files = [{ name: "vivado.bat", path: "C:\\fakepath\\vivado.bat" }];
-  input2.onchange();
-  check(written.length === 0, "拿不到完整路径时不会写入一个假路径");
   fake.reset();
-  const withNote = JSON.stringify(captured() ?? {});
-  check(withNote.includes("没给出完整路径"), "拿不到路径时如实说明,并指向列表/粘贴");
+  const libraryRow = findByProp(captured(), (props) => props.key === "libraryPath");
+  check(libraryRow !== undefined, "找得到「库目录」那一行");
+  findButton(libraryRow, "浏览…").props.onClick();
+  const dirInput = doc.lastCreated;
+  check(dirInput?.webkitdirectory === true, "目录字段借的是文件夹选择框");
+  dirInput.files = [{ name: "a.v", path: "C:\\Work\\ModelsimLibrary\\work_lib\\a.v" }];
+  dirInput.onchange();
+  check(
+    written.some(([key, value]) => key === "libraryPath" && value === "C:\\Work\\ModelsimLibrary\\work_lib"),
+    "目录字段取的是所在目录",
+    JSON.stringify(written)
+  );
+
+  // 3) 拿不到完整路径(假路径)→ 一个字节都不写,自动退回列表并说明
+  written.length = 0;
+  fake.reset();
+  const compilerRow = findByProp(captured(), (props) => props.key === "compilerPath");
+  findButton(compilerRow, "浏览…").props.onClick();
+  const fakeInput = doc.lastCreated;
+  fakeInput.files = [{ name: "vivado.bat", path: "C:\\fakepath\\vivado.bat" }];
+  const requestsBeforeFallback = browserRequested;
+  fakeInput.onchange();
+  await new Promise((resolve) => setImmediate(resolve));
+  check(written.length === 0, "拿不到完整路径时绝不写入假路径");
+  check(browserRequested === requestsBeforeFallback + 1, "拿不到路径时自动退回页面内列表");
+  fake.reset();
+  check(JSON.stringify(captured() ?? {}).includes("没给出完整路径"), "退回时如实说明原因");
 } catch (error) {
-  check(false, "浏览器文件框这条路能走通", String(error));
+  check(false, "「浏览…」按外壳分流能走通", String(error));
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

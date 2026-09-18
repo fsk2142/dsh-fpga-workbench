@@ -99,11 +99,13 @@ for (const kept of ["default", "includeShippedRoot", "includeUserRoot"]) {
 }
 check(resolved.includeShippedRoot === true, "保留内置预设根(否则 standard 等官方预设会消失)");
 
-// 5. 运行时登记:补丁里那行 roots 实测**没生效**(名单里看不到本预设,且无任何报错 ——
-//    不存在的根会被静默跳过)。所以真正让预设出现的是 lib/index.js 里的 ensurePresetRoot,
-//    它把自己登记进最权威的用户层。这里守住它的两条性质:
-//      - 路径来自 import.meta.url,不依赖"!!js 求值时的 baseUrl 是补丁所在目录"这个假设
-//      - 追加而不覆盖:用户自己配的预设根不能被我们清掉
+// 5. 真正让预设出现的是 lib/index.js 里的 ensureUserPreset —— 它把预设同步进**用户预设
+//    目录** `$DSH_HOME/.agent-presets/`。
+//
+//    为什么不是"给预设名单加一个 roots":dsh-agent-presets 的构造函数里
+//    `resolvedRoots = [内置根] + config.roots + [用户根]`,也就是 roots **只从行 config 取,
+//    不读设置值**;而给行 config 加根的补丁覆盖实测没生效(名单里看不到本预设,且不存在的
+//    根会被 scanRoot 静默跳过 —— 完全没有报错)。用户根则无条件扫描,放进去就行。
 const hostSource = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
 const codeOnly = hostSource
   .replace(/\/\*[\s\S]*?\*\//gu, " ")
@@ -112,16 +114,21 @@ const codeOnly = hostSource
   .join("\n");
 check(
   /new URL\("\.\.\/presets\/", import\.meta\.url\)/u.test(codeOnly),
-  "预设根由 import.meta.url 求值(不依赖 baseUrl 语义)"
+  "预设根由 import.meta.url 求值(不依赖补丁 !!js 的 baseUrl 语义)"
 );
-check(/settings\.update\(ROSTER_NS/u.test(codeOnly), "运行时把自己登记进预设名单");
-check(/\[\.\.\.roots, \{ path: PRESET_ROOT/u.test(codeOnly), "追加到已有 roots 之后,不覆盖用户自己配的根");
-check(/roots\.some\(\(entry\) => samePath/u.test(codeOnly), "已登记过就跳过(幂等)");
-check(!/roots: \[\{ path: PRESET_ROOT/u.test(codeOnly), "没有出现直接覆盖 roots 的写法");
+check(/function ensureUserPreset/u.test(codeOnly), "有用例把预设同步进用户预设目录");
+check(/USER_PRESET_DIR/u.test(codeOnly) && codeOnly.includes('".agent-presets"'),
+  "用的是 dsh-agent-presets 约定的用户预设目录名");
+check(/process\.env\.DSH_HOME \?\? join\(homedir\(\), "\.dsh"\)/u.test(codeOnly),
+  "harness home 取 DSH_HOME,退回 ~/.dsh");
+check(/cpSync\(source, destination/u.test(codeOnly), "复制预设(而不是只登记路径)");
+check(/sameTree\(source, destination\)/u.test(codeOnly), "内容一致就跳过(幂等,不每次重写)");
+// 曾经写过 settings.yaml 的 agent-presets.roots —— 实测那层根本不参与 roots 解析,是无用写入
+check(!/settings\.update\(/u.test(codeOnly), "不再往 settings.yaml 写 roots(那层不参与 roots 解析)");
 
 console.log(
   failures.length > 0
     ? `\nFAIL (${failures.length}): ${failures.join(" | ")}`
-    : "\nPASS: !!js 预设路径求值正确,指向真实且结构合法的预设目录"
+    : "\nPASS: 预设路径与同步机制都正确"
 );
 if (failures.length > 0) process.exitCode = 1;

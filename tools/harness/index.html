@@ -59,8 +59,9 @@ function loadBundle(src) {
   const MODULE_ID = "dsh-fpga-workbench";
   const PANEL_ID = "fpga-workbench";
   const LABEL = "FPGA 工作台";
-  // 入口所在的槽：list 槽，会话头部常驻（hero 那一行的槽都是 single 且已被占用）。
-  const ENTRY_SLOT = "conversation.session.header.actions";
+  // 入口所在的槽：list 槽，侧边栏为第三方预留。
+  // 侧边栏把每一行渲染成一个 glyph 行，行自身负责调用 layout.selectPanel(id)。
+  const ENTRY_SLOT = "sidebar.panellist";
 
   document.getElementById("copy").addEventListener("click", () => {
     const text = document.getElementById("out").textContent ?? "";
@@ -181,29 +182,20 @@ function loadBundle(src) {
     fatal("第 5 步：selectPanel", error);
   }
 
-  // ── 6. 入口按钮：槽不传 props，点击必须走注入的服务 ─────────────────────
+  // ── 6. 入口字形：侧边栏把行渲染成 glyph，切换由侧边栏自己负责 ────────────
   try {
-    if (row === null) throw new Error("第 3 步没有拿到入口行，无法测试点击");
-    const element = row.component({});
-    check(element?.__element === true, "入口组件返回元素（不是 undefined）");
-    check(element?.type === "button", "入口渲染为 button");
-    check(element?.props?.title === LABEL, "入口带 title");
+    if (row === null) throw new Error("第 3 步没有拿到入口行，无法测试字形");
+    const glyph = row.component({ size: 18, active: false });
+    check(glyph?.__element === true, "入口字形返回元素（不是 undefined）");
+    check(glyph?.type === "svg", `入口字形是 svg（实际 ${String(glyph?.type)}）`);
+    check(glyph?.props?.width === 18, `入口字形采用传入的 size（${String(glyph?.props?.width)}）`);
+    check(row.component({})?.props?.width === 18, "不传 size 时有合理默认值");
 
-    layout.activePanelId = null;
-    element.props.onClick();
-    check(layout.activePanelId === PANEL_ID, "点击入口（空 props）会切到工作台面板");
-    element.props.onClick();
-    check(layout.activePanelId === null, "再次点击切回会话");
-
-    // 反向防呆：如果实现退回依赖 props.selectPanel，这条会失败。
-    let propsCalls = 0;
-    const decoy = row.component({ selectPanel: () => { propsCalls += 1; } });
-    layout.activePanelId = null;
-    decoy.props.onClick();
-    check(propsCalls === 0, "点击不依赖 props.selectPanel（会话头部槽传的是空 props）");
-    check(layout.activePanelId === PANEL_ID, "点击仍然生效（走 ctx.layout）");
+    // 反向防呆：侧边栏行不是按钮。若实现退回"自己造 button + 自己切换"，
+    // 就说明它又在依赖槽不提供的 props。
+    check(glyph?.type !== "button", "入口不是自造按钮（切换由侧边栏行负责）");
   } catch (error) {
-    fatal("第 6 步：入口按钮", error);
+    fatal("第 6 步：入口字形", error);
   }
 
   // ── 7. 面板组件能调用（fetch 换成受控应答）─────────────────────────────

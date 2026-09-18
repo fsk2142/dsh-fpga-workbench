@@ -19,8 +19,13 @@ const ROOT = join(HERE, "..");
 const MODULE_ID = "dsh-fpga-workbench";
 const PANEL_ID = "fpga-workbench";
 const LABEL = "FPGA 工作台";
-/** 入口所在的槽:list 槽,会话头部常驻。 */
-const ENTRY_SLOT = "conversation.session.header.actions";
+/**
+ * 入口所在的槽:list 槽,侧边栏为第三方预留。
+ *
+ * 侧边栏渲染这一槽的每一行为一个 glyph 行,`order` 决定它排在官方保留行之后的哪个
+ * 位置,行自身负责调用 `layout.selectPanel(id)` —— 所以插件只需要交出 id/label/字形。
+ */
+const ENTRY_SLOT = "sidebar.panellist";
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -177,33 +182,23 @@ if (plugin !== null) {
   slots.declare("main");
   check((slots.entries.get(ENTRY_SLOT) ?? []).length === 1, "父槽后声明时挂起的注册被执行");
 
-  // selectPanel 与「点进去 / 点回来」的行为
+  // selectPanel 与「切进去 / 切回来」:侧边栏的行会自己调这个方法
   layout.selectPanel(PANEL_ID);
-  check(layout.activePanelId === PANEL_ID, "selectPanel 能切到本面板");
+  check(layout.activePanelId === PANEL_ID, "selectPanel 能切到本面板(侧边栏行点击走这条路)");
   layout.selectPanel(null);
   check(layout.activePanelId === null, "selectPanel(null) 能切回会话");
 
-  // 入口按钮:槽不传任何 props(会话头部就是 renderSlot(name, {})),
-  // 所以点击必须走注入的服务 ctx.layout,不能依赖 props。
-  const element = row.component({});
-  check(element?.__element === true, "入口组件返回元素(不是 undefined)");
-  check(element?.type === "button", "入口渲染为 button");
-  check(element?.props?.title === LABEL, "入口带 title");
+  // 入口字形:侧边栏把行渲染成 { size, active },组件只该返回一个 mark,不该是按钮
+  const glyph = row.component({ size: 18, active: false });
+  check(glyph?.__element === true, "入口字形返回元素(不是 undefined)");
+  check(glyph?.type === "svg", `入口字形是 svg(实际 ${String(glyph?.type)})`);
+  check(glyph?.props?.width === 18, `入口字形采用传入的 size(${String(glyph?.props?.width)})`);
+  const defaultSize = row.component({});
+  check(defaultSize?.props?.width === 18, "不传 size 时有合理默认值");
 
-  layout.activePanelId = null;
-  element.props.onClick();
-  check(layout.activePanelId === PANEL_ID, "点击入口(空 props)会切到工作台面板");
-  element.props.onClick();
-  check(layout.activePanelId === null, "再次点击切回会话");
-
-  // 反向防呆:如果实现退回依赖 props.selectPanel,这条会失败。
-  // 传入一个假的 selectPanel,断言它不被使用。
-  let propsCalls = 0;
-  const decoy = row.component({ selectPanel: () => { propsCalls += 1; } });
-  layout.activePanelId = null;
-  decoy.props.onClick();
-  check(propsCalls === 0, "点击不依赖 props.selectPanel(头部槽不传 props)");
-  check(layout.activePanelId === PANEL_ID, "点击仍然生效(走 ctx.layout)");
+  // 反向防呆:侧边栏行不是按钮 —— 若实现退回"自己造一个 button + 自己切换",
+  // 就说明它又在依赖槽不提供的 props。
+  check(glyph?.type !== "button", "入口不是自造按钮(切换由侧边栏行负责)");
 
   // 面板组件可调用
   const originalFetch = globalThis.fetch;

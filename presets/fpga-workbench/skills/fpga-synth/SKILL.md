@@ -55,12 +55,12 @@ default → AreaOptimized_high → AlternateRoutability → PerformanceOptimized
 
 ## 判据
 
-- **PASS**:综合无 error,资源占用与时钟都报得出来
-- **FAIL**:综合报 error(先看前 5 条,后面多半是级联出来的)
+- **PASS**:综合报错为零,资源占用与时钟都报得出来
+- **FAIL**:综合报错(先看前 5 条,后面多半是级联出来的)
 - **BLOCKED**:Vivado 没就绪(设置里标了「未就绪」)/ 器件型号没填 / 没有可综合的源码
 - **NOT_APPLICABLE**:这个模块不做综合
 
-**频率不是这一关的门禁。** 综合阶段只**记录实测结果**(策略名就叫 OBSERVE_ONLY):
+**频率不是这一关的门禁。** 综合环节只**记录实测结果**(策略名就叫「只观察」):
 没有"必须跑到 250MHz"这种统一阈值,也没有 200/300MHz 分档。频率是**观察值**,不是通过条件。
 
 ## 产物
@@ -71,4 +71,4 @@ default → AreaOptimized_high → AlternateRoutability → PerformanceOptimized
 - 器件型号、用的策略与轮数
 - 资源占用(LUT / FF / BRAM / DSP)
 - 综合后估计的 Fmax 与报出来的时钟
-- error / warning 的处理;报告文件名写清(结论要能指回去)
+- 报错与告警各自的处理;报告文件名写清(结论要能指回去)

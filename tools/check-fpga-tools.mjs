@@ -113,19 +113,32 @@ for (const expected of ["文件头", "编译隔离", "端口类型", "always_ff"
 const tabIssue = badIssues.find((issue) => issue.rule === "Tab 字符");
 check(tabIssue?.line === 12, `Tab 那条报了准确行号(实际 ${String(tabIssue?.line)})`);
 
-// ── 警告不能阻塞门禁 ────────────────────────────────────────────────────────
+// ── 警告要报出来,但不阻塞门禁 ──────────────────────────────────────────────
+//
+// 原来这里写的是 `.every((issue) => issue.rule.startsWith("Tab") || true)` —— 末尾那个
+// `|| true` 让断言恒真,等于没验(是外部 review 指出来的)。现在改成两条真能失败的断言:
+// 三条警告规则都被**报出来**(不漏报),以及"只有警告时 CLI 不拦门禁"(退出码 0,下面 CLI 那组验)。
 const warnOnly = ["Tab 字符", "代码行非英文", "行尾混用"];
-check(
-  badIssues.filter((issue) => warnOnly.includes(issue.rule)).every((issue) => issue.rule.startsWith("Tab") || true),
-  "三条警告规则存在但独立于阻塞项"
-);
 const crlfFile = join(SANDBOX, "mixed-mod", "rtl", "mixed.sv");
 mkdirSync(dirname(crlfFile), { recursive: true });
-writeFileSync(crlfFile, goodRtl.replace("module good (", "module mixed (").replace(/\n/gu, "\r\n").replace("`resetall\r\n", "`resetall\n"));
-const mixedIssues = blocking(crlfFile, false);
+writeFileSync(join(SANDBOX, "mixed-mod", "rtl", "mixed.sv"), goodRtl.replace("module good (", "module mixed (").replace(/\n/gu, "\r\n").replace("`resetall\r\n", "`resetall\n"));
+const mixedIssues = blocking(join(SANDBOX, "mixed-mod", "rtl", "mixed.sv"), false);
 check(
   mixedIssues.some((issue) => issue.rule === "行尾混用") && !mixedIssues.some((issue) => issue.rule === "九个小节块"),
   "行尾混用会被抓出来(其它规则仍通过)"
+);
+const reportedWarnRules = new Set([...rules, ...mixedIssues.map((issue) => issue.rule)]);
+for (const rule of warnOnly) {
+  check(reportedWarnRules.has(rule), `警告规则「${rule}」会被报出来(不是静默丢掉)`);
+}
+
+// 只有警告的模块:门口不该拦(否则真正的坏代码与"顺手清一下"的警告混为一谈)
+mkdirSync(join(SANDBOX, "warn-mod", "rtl"), { recursive: true });
+writeFileSync(join(SANDBOX, "warn-mod", "rtl", "warn.sv"), goodRtl.replace("    logic [7:0] dout_q;", "    logic [7:0] dout_q;\t// Tab"));
+const warnOnlyIssues = blocking(join(SANDBOX, "warn-mod", "rtl", "warn.sv"), false);
+check(
+  warnOnlyIssues.length > 0 && warnOnlyIssues.every((issue) => warnOnly.includes(issue.rule)),
+  `警告样本只报警告(实际 ${warnOnlyIssues.map((issue) => issue.rule).join("、") || "什么都没报"})`
 );
 
 // ── 自带模板必须过自己的检查器 ──────────────────────────────────────────────
@@ -188,6 +201,7 @@ check(readVerdict(reviewFile, "review")?.verdict === "CHANGES", "写成两词也
 const run = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: "ignore" }).status;
 check(run("check-rtl.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");
 check(run("check-rtl.mjs", [join(SANDBOX, "bad-mod")]) === 1, "check-rtl 违规 → 退出码 1");
+check(run("check-rtl.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有警告 → 退出码 0(警告不拦门禁)");
 check(run("check-rtl.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
 check(run("stage-status.mjs", [join(SANDBOX, "status-demo")]) === 0, "stage-status 有约定文件 → 0");
 check(run("stage-status.mjs", [join(ROOT, "tools")]) === 2, "stage-status 没约定文件 → 2");

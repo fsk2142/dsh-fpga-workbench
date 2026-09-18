@@ -216,7 +216,29 @@ for (const skill of skillNames) {
   check(meta?.name === skill, `${skill} 的 frontmatter name 与目录名一致(实际 ${JSON.stringify(meta?.name)})`);
   check(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(String(meta?.name)), `${skill} 的名字是 kebab-case(技能名的合法字符集)`);
   check(typeof meta?.description === "string" && meta.description.length > 0, `${skill} 写了 description(否则加载器直接忽略)`);
+  // 触发场景要写在 description 里(那张能力地图靠它选技能),不能只写"某阶段之后使用"
+  check(
+    /时用|时候用/u.test(String(meta?.description)),
+    `${skill} 的 description 说清了"什么时候用"(不是只写阶段顺序)`
+  );
+  check(
+    !/第一阶段|下一阶段|一口气写完|这一关过了才进|流程必须跑完并通过确认|OBSERVE_ONLY/u.test(readFileSync(file, "utf8")),
+    `${skill} 里没有残留的"阶段链/硬门禁"口气`
+  );
 }
+
+// ── 任务驱动(不是阶段流水线)────────────────────────────────────────────────
+//
+// 这一条是那份《轻量化优化建议》的核心诉求:技能是按需取用的能力地图,不是必经流水线。
+// 口气很容易在以后改文案时长回来,所以钉两条:
+// - 提示词里不许出现阶段箭头链(曾经是 `fpga-spec → fpga-lint → …`)
+// - 提示词必须写明"能力地图 / 不是必经流水线"
+const persona = /prefix: \|-([\s\S]*?)\n\n- id: /u.exec(readFileSync(join(presetDir, "agent.cordis.yml"), "utf8"))?.[1] ?? "";
+check(persona !== "", "读得到 persona 的 prefix");
+check(!/fpga-[a-z-]+ → fpga-[a-z-]+/u.test(persona), "提示词里没有阶段箭头链(技能是能力地图,不是流水线)");
+check(/能力地图/u.test(persona), "提示词点明技能是'能力地图'");
+check(/不是必经的阶段流水线|不是必经流水线/u.test(persona), "提示词点明不是必经的阶段流水线");
+check(/用户当前的问题|用户当前任务/u.test(persona), "提示词把'用户当前的问题'定为本次任务");
 
 console.log(
   failures.length > 0

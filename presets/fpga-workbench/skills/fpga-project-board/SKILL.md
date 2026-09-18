@@ -1,6 +1,6 @@
 ---
 name: fpga-project-board
-description: 把 bitstream 下载到板子上做实测验证时用:下载与回读(connect_hw_server / open_hw_target / program_hw_devices)、用 ILA/VIO 抓内部信号、回读数据跟 golden 比对、写 cfgmem 固化到 Flash。下载与固化都要先确认器件、文件与授权。
+description: 把 bitstream 下载到板子上做实测验证时用:下载与回读(connect_hw_server / open_hw_target / program_hw_devices)、用 ILA/VIO 抓内部信号、回读数据跟基准(golden)比对、写 cfgmem 固化到 Flash。下载与固化都要先确认器件、文件与授权。
 ---
 
 # project-board:上板验证

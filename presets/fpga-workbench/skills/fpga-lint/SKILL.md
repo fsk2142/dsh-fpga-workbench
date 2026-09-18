@@ -1,6 +1,6 @@
 ---
 name: fpga-lint
-description: 写或改 RTL、查编码规范、定位 lint 或编译报错时用:对这个 FPGA 模块跑编译器检查、逐条核对规范(文件头、九个小节块、端口类型与对齐、Tab、行尾、设计断言、测试平台自检)。也可以随时只查一个文件、只看某条 warning。
+description: 写或改 RTL、查编码规范、定位 lint 或编译报错时用:对这个 FPGA 模块跑编译器检查、逐条核对规范(文件头、九个小节块、端口类型与对齐、制表符、行尾、设计断言、测试平台自检)。也可以随时只查一个文件、只看某一条告警。
 ---
 
 # lint:编译检查与规范核对
@@ -31,7 +31,7 @@ description: 写或改 RTL、查编码规范、定位 lint 或编译报错时用
 - 报 `module not found`、而那个模块定义在 `ip/` 下 —— 这是正常的,它的定义不在 rtl/ 里。
   做法:把 IP 的端口 wrapper 一起传进去,或临时生成一个只有端口的黑盒 stub 加进命令行。
   **不要为了让 lint 过就改端口**
-- warning 必须清零。确实要压的,在源码里**就地豁免**(`/* verilator lint_off XXX */` …
+- 告警必须清零。确实要压的,在源码里**就地豁免**(`/* verilator lint_off XXX */` …
   `/* verilator lint_on XXX */`)并在旁边写明为什么;**禁止用 `-Wno-XXX` 全局屏蔽**
 
 ## 第二步:逐条对规范
@@ -81,7 +81,7 @@ node "<自带命令目录>\check-rtl.mjs" <模块目录>
 
 - **结论**:`PASS` / `FAIL` / `BLOCKED` / `NOT_APPLICABLE`
 - 跑过的**命令原文**(能直接复制复现)
-- Verilator 的 error / warning 逐条处理:改了哪里,或者就地豁免的理由
+- 编译器报的 error / warning 逐条处理:改了哪里,或者就地豁免的理由
 - 逐条规范的核对结果;没过的写清 `文件:行`
 - `BLOCKED` 的情形:verilator 没就绪(设置里标了「未就绪」)→ 如实说明并停下,**不要假装跑过**
 - `NOT_APPLICABLE`:`rtl/` 下还没有源码

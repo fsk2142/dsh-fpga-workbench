@@ -99,6 +99,26 @@ for (const kept of ["default", "includeShippedRoot", "includeUserRoot"]) {
 }
 check(resolved.includeShippedRoot === true, "保留内置预设根(否则 standard 等官方预设会消失)");
 
+// 5. 运行时登记:补丁里那行 roots 实测**没生效**(名单里看不到本预设,且无任何报错 ——
+//    不存在的根会被静默跳过)。所以真正让预设出现的是 lib/index.js 里的 ensurePresetRoot,
+//    它把自己登记进最权威的用户层。这里守住它的两条性质:
+//      - 路径来自 import.meta.url,不依赖"!!js 求值时的 baseUrl 是补丁所在目录"这个假设
+//      - 追加而不覆盖:用户自己配的预设根不能被我们清掉
+const hostSource = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+const codeOnly = hostSource
+  .replace(/\/\*[\s\S]*?\*\//gu, " ")
+  .split("\n")
+  .filter((line) => !line.trim().startsWith("//"))
+  .join("\n");
+check(
+  /new URL\("\.\.\/presets\/", import\.meta\.url\)/u.test(codeOnly),
+  "预设根由 import.meta.url 求值(不依赖 baseUrl 语义)"
+);
+check(/settings\.update\(ROSTER_NS/u.test(codeOnly), "运行时把自己登记进预设名单");
+check(/\[\.\.\.roots, \{ path: PRESET_ROOT/u.test(codeOnly), "追加到已有 roots 之后,不覆盖用户自己配的根");
+check(/roots\.some\(\(entry\) => samePath/u.test(codeOnly), "已登记过就跳过(幂等)");
+check(!/roots: \[\{ path: PRESET_ROOT/u.test(codeOnly), "没有出现直接覆盖 roots 的写法");
+
 console.log(
   failures.length > 0
     ? `\nFAIL (${failures.length}): ${failures.join(" | ")}`

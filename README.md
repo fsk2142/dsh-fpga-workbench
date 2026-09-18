@@ -131,12 +131,25 @@ node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件�
   | `fpga-review` | 审查:AC 覆盖、结构、跨域、握手、独立性 | `review/review.md` |
 
   另有一个 `fpga-module-flow` 是早期雏形,开头已标弃用,留着当对照,待清理。
+- ✅ **工程级流程**(9 个技能,`fpga-project-*`),门槛是**模块级跑完并通过确认**:
+
+  | 技能 | 干什么 | 结果落在哪 |
+  |---|---|---|
+  | `fpga-project-spec` | 工程需求 + 架构 + 模块清单表 + 器件工程选择 + IP 策略 | `project/spec/spec.md` |
+  | `fpga-project-integrate` | 顶层集成:时钟复位分配、接口对接、加进工程 | `project/integrate/` |
+  | `fpga-project-constraints` | 约束与管脚:对原理图逐条核、IO 电平、时序例外写理由 | `project/constraints/` |
+  | `fpga-project-syssim` | 系统级仿真(可选,不适用就记 NOT_APPLICABLE) | `project/syssim/` |
+  | `fpga-project-impl` | 布局布线 + DRC + bitstream | `project/impl/` |
+  | `fpga-project-timing` | **post-route** 时序(与模块级 post-synth 不同) | `project/timing/` |
+  | `fpga-project-board` | 上板:下载(-verify)、ILA/VIO、回读数据比对、固化 Flash | `project/board/` |
+  | `fpga-project-release` | 发布归档:判据是"照着归档能重建同样的 bit" | `project/release/` |
+  | `fpga-project-audit` | 工程体检(横切):断链、过时、孤儿文件、跑不起来的脚本 | `project/audit/` |
+
+  工程级阶段文件夹统一在 `project/` 下——模块级与工程级都有 `spec`/`timing`,平铺会撞名。
 - ✅ 模板:自带 `rtl.sv` / `tb.sv` / `constraints.xdc`,设置里可换成自己的
 - ⬜ 更强的能力接入:把某些阶段做成**这个模式能直接调用的工具**(由插件起进程)。
   现在命令仍由 agent 用 shell 工具跑 —— 走沙箱、可见、可中断;真做成工具就得接 subprocess
   服务并自己处理超时与日志
-- ⬜ 工程级流程(顶层集成 / 约束与管脚 / 系统仿真 / bitstream / 上板)只留了容器约定
-  (`.fpga-workbench.json` 的 `kind: project` + 模块清单表),阶段还没做
 - ⬜ 待清理:旧雏形技能、以及旧工具包里已经带进来的东西的收尾
 
 ## 关于界面(已放弃的方案,留作记录)

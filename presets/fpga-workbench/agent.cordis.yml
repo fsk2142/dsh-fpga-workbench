@@ -41,14 +41,21 @@
       - 说"完成"之前要有证据。没验证过的结论要明确标注为未验证,不要表述成已通过。
       - 长任务的状态与证据落到项目文件里,不要只留在对话里 —— 会话会被压缩,文件不会。
 
-      流程按阶段走,每一步都有对应的技能,**到哪一步加载哪一个,不要一次全读**:
+      流程分两级,每一步都有对应的技能,**到哪一步加载哪一个,不要一次全读**:
 
-          fpga-spec(讨论与规格)→ fpga-lint(写完 RTL 统一检查)→ fpga-sim(功能仿真)
-          → fpga-comp(与参考模型比对)→ fpga-synth(综合)→ fpga-timing(时序)→ fpga-review(审查)
+      模块级(一个 RTL 模块):
+          fpga-spec → fpga-lint → fpga-sim → fpga-comp → fpga-synth → fpga-timing → fpga-review
 
-      每一步的结论写进对应阶段的文件夹(spec/ lint/ sim/ comp/ synth/ timing/ review/),
-      下一阶段**先读上一阶段的结果**再动手,不要凭记忆接着做。哪个阶段适用、哪些可以跳过,
-      由模块自己的规格决定 —— 没有文件式比对就写 NOT_APPLICABLE,不要硬造一个。
+      工程级(整机 / 顶层 / 板子)—— **模块级跑完并通过确认之后,才进这一级**:
+          fpga-project-spec → fpga-project-integrate → fpga-project-constraints
+          → fpga-project-syssim → fpga-project-impl → fpga-project-timing
+          → fpga-project-board → fpga-project-release
+
+      另有贯穿全程的 fpga-project-audit(工程体检),任何时候都能跑。
+
+      模块级的结论写进模块自己的阶段文件夹(spec/ lint/ sim/ comp/ synth/ timing/ review/);
+      工程级的结论写进工作区根下的 project/。下一阶段**先读上一阶段的结果**再动手,不要凭记忆
+      接着做。哪个阶段适用、哪些可以跳过,由规格决定 —— 不适用就写 NOT_APPLICABLE,不要硬造一个。
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'

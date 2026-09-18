@@ -18,13 +18,17 @@ const check = (ok, label, detail) => {
   if (!ok) failures.push(label);
 };
 
-// js-yaml 从已安装的 DSH 里借 —— 它正是宿主解析补丁时用的同一个库。
+// js-yaml 与 entryListSchema 都从已安装的 DSH 里借 —— 那正是宿主解析补丁时用的
+// 同一套。必须用 entryListSchema 而不是默认 schema:补丁里含 `!!js` 标签,
+// 默认 schema 会以"unknown tag"直接拒绝。
 const require = createRequire("file:///C:/Program Files/DSH Desktop/resources/app/package.json");
 let yaml;
+let entryListSchema;
 try {
   yaml = require("js-yaml");
+  ({ entryListSchema } = require("@deepseek-ai/cordis-plugin-include"));
 } catch (error) {
-  console.log(`js-yaml 不可用(${error.code}),跳过`);
+  console.log(`解析依赖不可用(${error.code}),跳过`);
   process.exit(0);
 }
 
@@ -32,16 +36,21 @@ try {
 const patchText = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8");
 let rows;
 try {
-  rows = yaml.load(patchText);
-  check(true, "补丁能被 YAML 解析");
+  rows = yaml.load(patchText, { schema: entryListSchema });
+  check(true, "补丁能被 loader 的 schema 解析(含 !!js)");
 } catch (error) {
   check(false, "补丁 YAML 解析失败 —— 启动时会崩", error.message);
   process.exit(1);
 }
 
 check(Array.isArray(rows), "顶层是数组");
-const entry = Array.isArray(rows) ? rows[0]?.insert?.[0] : undefined;
-check(entry !== undefined, "第一行是 insert,且含一条插件行");
+
+// 按 id 定位本插件那一行,而不是假设它在第一个 —— 补丁里还有别的条目
+// (agent-presets 覆盖行),顺序会随需要变化。
+const entry = Array.isArray(rows)
+  ? rows.flatMap((row) => row.insert ?? []).find((item) => item.id === "fpga-workbench")
+  : undefined;
+check(entry !== undefined, "补丁里有本插件的 insert 行");
 if (entry === undefined) {
   console.log(failures.length > 0 ? `\nFAIL (${failures.length})` : "");
   process.exitCode = 1;

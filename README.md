@@ -130,9 +130,10 @@ pnpm 安装 `file:` 依赖时按 `files` 打包,白名单外的东西**不会被
 ## 自检
 
 ```powershell
-node tools/check-toolchain.mjs     # 字段/存在性/警告措辞/两侧契约/提示文案三种状态
-node tools/check-fpga-tools.mjs    # 自带命令的判定正确性 + 自带模板自洽 + CLI 退出码
-node tools/check-preset-root.mjs   # 预设路径求值 + 组装结构 + 模式行 + 自带技能
+node tools/check-toolchain.mjs      # 字段/存在性/警告措辞/两侧契约/提示文案三种状态
+node tools/check-load-contract.mjs  # 加载契约:语法/lib 内部 import/bundle 契约/半侧分工(重启前必跑)
+node tools/check-fpga-tools.mjs     # 自带命令的判定正确性 + 自带模板自洽 + CLI 退出码
+node tools/check-preset-root.mjs    # 预设路径求值 + 组装结构 + 模式行 + 自带技能
 node tools/check-preset-sync.mjs   # 预设底座与官方 standard 的漂移(行 id / 包名)
 node tools/check-patch-file.mjs    # 补丁字节合法 + 形状
 node tools/check-installed.mjs     # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)

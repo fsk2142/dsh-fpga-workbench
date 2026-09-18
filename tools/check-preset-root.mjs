@@ -239,6 +239,17 @@ check(!/fpga-[a-z-]+ → fpga-[a-z-]+/u.test(persona), "提示词里没有阶段
 check(/能力地图/u.test(persona), "提示词点明技能是'能力地图'");
 check(/不是必经的阶段流水线|不是必经流水线/u.test(persona), "提示词点明不是必经的阶段流水线");
 check(/用户当前的问题|用户当前任务/u.test(persona), "提示词把'用户当前的问题'定为本次任务");
+// 方案要先画出来确认:这是用户明确要求提高 spec 分量的落点
+check(/流程图/u.test(persona) && /确认/u.test(persona), "提示词要求'把实现思路画成图给他确认'");
+
+// 两个 spec 技能都要真的要求画图(不是只在提示词里提一句)
+for (const skill of ["fpga-spec", "fpga-project-spec"]) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  check(/^```mermaid$/mu.test(text), `${skill} 里有**独立的** Mermaid 围栏块(不是只在句子里提了句 mermaid)`);
+  check(/流程图|框图/u.test(text), `${skill} 要求把实现思路画出来`);
+  check(/确认/u.test(text) && /(他没|他点头|他确认|图没确认)/u.test(text), `${skill} 要求画完让用户确认`);
+  check(/5~15|5-15|5～15/u.test(text), `${skill} 给了规模上限(图太大反而看不清)`);
+}
 
 console.log(
   failures.length > 0

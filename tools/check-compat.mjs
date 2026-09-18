@@ -124,6 +124,29 @@ note(
 note(typeof mine.exports?.["./client"] === "string", "导出 ./client bundle");
 note(mine.private !== true, "没有 private:true(pnpm 才会把它当依赖安装)");
 
+// 宿主半侧要真的加载,必须有 dsh.bundle.patch:没有它,包只是一个普通依赖,
+// 客户端半侧可能被别的加载器挂进浏览器,而 lib/index.js(数据路由)永远不加载。
+const patchRel = mine.dsh?.bundle?.patch;
+if (patchRel === undefined) {
+  note(false, "声明 dsh.bundle.patch —— 否则宿主半侧不会加载,数据路由不存在");
+} else {
+  note(typeof patchRel === "string", `dsh.bundle.patch 是字符串(${patchRel})`);
+  let patchText = null;
+  try {
+    patchText = readFileSync(patchRel, "utf8");
+  } catch {
+    /* 下面的断言统一报错 */
+  }
+  note(patchText !== null, `dsh.bundle.patch 指向的文件存在(${patchRel})`);
+  if (patchText !== null) {
+    note(
+      patchText.includes(mine.name),
+      `补丁里插入了本包名(${mine.name})`
+    );
+    note(patchText.trim().length > 0, "补丁文件非空(空文件会让启动失败)");
+  }
+}
+
 console.log(
   failures.length > 0
     ? `FAIL (${failures.length}):\n - ${failures.join("\n - ")}`

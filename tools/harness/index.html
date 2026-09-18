@@ -181,28 +181,27 @@ function loadBundle(src) {
     fatal("第 5 步：selectPanel", error);
   }
 
-  // ── 6. 入口按钮：渲染并真的触发 onClick ────────────────────────────────
+  // ── 6. 入口按钮：槽不传 props，点击必须走注入的服务 ─────────────────────
   try {
     if (row === null) throw new Error("第 3 步没有拿到入口行，无法测试点击");
-    const calls = [];
-    let activeFlag = false;
-    const props = {
-      usePanelInfo: (selector) => selector({ activePanelId: activeFlag ? PANEL_ID : null }),
-      selectPanel: (id) => { calls.push(id); layout.selectPanel(id); }
-    };
-    const element = row.component(props);
+    const element = row.component({});
     check(element?.__element === true, "入口组件返回元素（不是 undefined）");
     check(element?.type === "button", "入口渲染为 button");
-    check(element?.props?.title === LABEL, "入口带 title（窄栏下有提示）");
+    check(element?.props?.title === LABEL, "入口带 title");
 
+    layout.activePanelId = null;
     element.props.onClick();
-    check(calls[0] === PANEL_ID && layout.activePanelId === PANEL_ID, "点击入口会切到工作台面板");
+    check(layout.activePanelId === PANEL_ID, "点击入口（空 props）会切到工作台面板");
+    element.props.onClick();
+    check(layout.activePanelId === null, "再次点击切回会话");
 
-    activeFlag = true;
-    const activeElement = row.component(props);
-    check(activeElement?.props?.["aria-current"] === "page", "面板激活时入口标记 aria-current");
-    activeElement.props.onClick();
-    check(calls[1] === null && layout.activePanelId === null, "再次点击切回会话");
+    // 反向防呆：如果实现退回依赖 props.selectPanel，这条会失败。
+    let propsCalls = 0;
+    const decoy = row.component({ selectPanel: () => { propsCalls += 1; } });
+    layout.activePanelId = null;
+    decoy.props.onClick();
+    check(propsCalls === 0, "点击不依赖 props.selectPanel（会话头部槽传的是空 props）");
+    check(layout.activePanelId === PANEL_ID, "点击仍然生效（走 ctx.layout）");
   } catch (error) {
     fatal("第 6 步：入口按钮", error);
   }

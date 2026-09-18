@@ -1,0 +1,13 @@
+# 本插件的 profile 层补丁。
+#
+# 声明 dsh.bundle.patch 的作用:安装时 pnpm 把包装进 profile 的 node_modules,
+# 启动时 `dsh plugin` 的 reconcile 看到这个声明,就把包名追加进
+# dsh.profile.bundles,于是这个补丁被合并进组合 —— 宿主半侧(lib/index.js,
+# 提供 /plugins/fpga-workbench/data 路由)才会真的加载。
+#
+# 没有这个声明会怎样:包只是被装成一个普通依赖,客户端半侧可能被别的加载器
+# (例如插件市场的 client-only shim)挂进浏览器,但宿主半侧永远不加载 ——
+# 于是入口看得见、点开却是"无法读取工作台数据"。
+- insert:
+    - id: fpga-workbench
+      name: 'dsh-fpga-workbench'

@@ -206,7 +206,7 @@ function loadBundle(src) {
     fatal("第 6 步：入口字形", error);
   }
 
-  // ── 7. 面板：既是数据面板，也是会话启动器 ────────────────────────────────
+  // ── 7. 面板：会话选择器（列出本工作台的会话，点一个就进去）─────────────────
   try {
     if (panel === null) throw new Error("第 3 步没有拿到面板，无法测试渲染");
     const originalFetch = window.fetch;
@@ -214,30 +214,49 @@ function loadBundle(src) {
       Promise.resolve({
         ok: true,
         status: 200,
-        json: () => Promise.resolve({ workspace: "C:\\Work\\demo", projects: [{ name: "m1", path: "C:\\Work\\demo\\m1", stage: "sim" }] })
+        json: () => Promise.resolve({ workspace: "C:\\Work\\dsh-fpga-workbench", projects: [{ name: "m1", path: "C:\\Work\\demo\\m1", stage: "sim" }] })
       });
     try {
       const element = panel.component();
       check(element?.__element === true, "面板组件返回元素");
       check(document.querySelector("style[data-fpga-workbench]") !== null, "面板注入了自己的样式节点");
 
-      // 挂载即新建一次会话（用户选的形态：入口 → 普通新会话）
       const workspace = window.__harness.uiWorkspace;
-      check(workspace.calls.length === 1, `面板挂载时新建了一次会话（实际 ${workspace.calls.length} 次）`);
 
-      // 关键：会话必须落在注册表 workspace 路径对应的那个工作区里。
-      // 不指定 id 时服务会挑「当前 → 最近用过的」，会话就落到别的分组 —— 用户报的正是这个。
+      // 面板是选择器，不是「挂载即新建」：挂载时不该产生任何会话动作，
+      // 否则用户永远看不到这个列表（会被立刻跳走）。
+      check(workspace.calls.length === 0, `面板挂载时不自动新建会话（实际 ${workspace.calls.length} 次）`);
+      check(workspace.opened.length === 0, "面板挂载时不自动打开会话");
+
+      // 递归收集按钮
+      const buttons = [];
+      (function walk(node) {
+        if (node === null || typeof node !== "object") return;
+        if (node.__element === true && node.type === "button") buttons.push(node);
+        for (const child of node.children ?? []) walk(child);
+      })(element);
+
+      // 会话列表：只列本工作台的会话，最近的在前
+      const sessionButtons = buttons.filter((b) => b.props?.className === "fpga-wb-session");
+      check(sessionButtons.length === 2, `列出本工作台的 2 个会话（实际 ${sessionButtons.length}）`);
+      check(
+        !sessionButtons.map((b) => JSON.stringify(b.children)).join(" ").includes("别人的会话"),
+        "没有混进别的工作区的会话"
+      );
+
+      sessionButtons[0].props.onClick();
+      check(workspace.opened.length === 1, `点会话会打开它（实际 ${workspace.opened.length} 次）`);
+      check(workspace.opened[0] === "s-new", `打开的是被点的那一个（实际 ${String(workspace.opened[0])}）`);
+
+      // 「新建 FPGA 会话」按钮：建在注册表 workspace 路径对应的那个工作区里
+      const createButton = buttons.find((b) => b.props?.className === "fpga-wb-action");
+      check(createButton !== undefined, "面板里有「新建 FPGA 会话」按钮");
+      createButton.props.onClick();
+      check(workspace.calls.length === 1, `点按钮新建一次会话（实际 ${workspace.calls.length} 次）`);
       check(
         workspace.calls[0] === "ws-fpga",
         `会话落在 FPGA 工作台对应的工作区（实际 ${String(workspace.calls[0])}）`
       );
-
-      // 显式按钮兜底：自动那一步若没生效，仍有一条明确的路
-      const button = (element?.children ?? []).find((child) => child?.type === "button");
-      check(button !== undefined, "面板里有「新建 FPGA 会话」按钮");
-      button?.props?.onClick?.();
-      check(workspace.calls.length === 2, `点按钮能再新建一次会话（实际 ${workspace.calls.length} 次）`);
-      check(workspace.calls[1] === "ws-fpga", "按钮建的会话也在同一个工作区");
     } finally {
       window.fetch = originalFetch;
     }

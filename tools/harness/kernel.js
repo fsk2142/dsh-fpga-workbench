@@ -189,19 +189,41 @@ const layout = {
 
 const uiWorkspace = {
   calls: [],
+  opened: [],
   workspaces: {
     list: {
       getSnapshot: () => ({
         phase: "ready",
         items: [
-          { workspaceId: "ws-fpga", path: "C:\\Work\\dsh-fpga-workbench", title: "FPGA 工作台" },
-          { workspaceId: "ws-other", path: "C:\\Work\\FPGA_Files", title: "FPGA_Files" }
+          {
+            workspaceId: "ws-fpga",
+            path: "C:\\Work\\dsh-fpga-workbench",
+            title: "FPGA 工作台",
+            sessionIds: ["s-old", "s-new"]
+          },
+          { workspaceId: "ws-other", path: "C:\\Work\\FPGA_Files", title: "FPGA_Files", sessionIds: ["s-other"] }
         ]
+      })
+    }
+  },
+  sessions: {
+    list: {
+      getSnapshot: () => ({
+        phase: "ready",
+        current: "s-new",
+        byId: {
+          "s-old": { id: "s-old", title: "旧会话", updatedAt: "2026-09-18T03:00:00.000Z" },
+          "s-new": { id: "s-new", title: "测试", updatedAt: "2026-09-18T06:27:00.000Z" },
+          "s-other": { id: "s-other", title: "别人的会话", updatedAt: "2026-09-18T05:00:00.000Z" }
+        }
       })
     }
   },
   startSession(workspaceId) {
     this.calls.push(workspaceId);
+  },
+  openSession(sessionId) {
+    this.opened.push(sessionId);
   }
 };
 

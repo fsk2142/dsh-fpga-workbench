@@ -182,10 +182,24 @@ const layout = {
   }
 };
 
-// ── 假 uiWorkspace 服务:记录新建会话的调用 ─────────────────────────────────
+// ── 假 uiWorkspace 服务:记录新建会话的调用,并提供工作区列表 ───────────────
+//
+// 列表形状照宿主(dsh-workspace 的记录是 { path, title, workspaceId })—— 实现要按
+// workbench.json 的 workspace 路径匹配出 workspaceId,这是"会话落在正确分组下"的关键。
 
 const uiWorkspace = {
   calls: [],
+  workspaces: {
+    list: {
+      getSnapshot: () => ({
+        phase: "ready",
+        items: [
+          { workspaceId: "ws-fpga", path: "C:\\Work\\dsh-fpga-workbench", title: "FPGA 工作台" },
+          { workspaceId: "ws-other", path: "C:\\Work\\FPGA_Files", title: "FPGA_Files" }
+        ]
+      })
+    }
+  },
   startSession(workspaceId) {
     this.calls.push(workspaceId);
   }

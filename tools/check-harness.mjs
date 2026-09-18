@@ -136,9 +136,25 @@ const layout = {
   }
 };
 
-/** uiWorkspace 的替身:记录每次 startSession 调用。 */
+/**
+ * uiWorkspace 的替身:记录每次 startSession 调用,并提供工作区列表。
+ *
+ * 列表形状照宿主(dsh-workspace:209-222 的记录是 { path, title, workspaceId }),
+ * 因为实现要按路径匹配出 workspaceId —— 这是"会话落在正确的分组下"的关键。
+ */
 const uiWorkspace = {
   calls: [],
+  workspaces: {
+    list: {
+      getSnapshot: () => ({
+        phase: "ready",
+        items: [
+          { workspaceId: "ws-fpga", path: "C:\\Work\\dsh-fpga-workbench", title: "FPGA 工作台" },
+          { workspaceId: "ws-other", path: "C:\\Work\\FPGA_Files", title: "FPGA_Files" }
+        ]
+      })
+    }
+  },
   startSession(workspaceId) {
     this.calls.push(workspaceId);
   }
@@ -170,6 +186,12 @@ if (plugin !== null) {
     "inject 每一项都是字符串(服务名)"
   );
 
+  // apply 会拉一次注册表来解析目标工作区,所以必须在它之前把 fetch 替换掉。
+  const FETCHED = { workspace: "C:\\Work\\dsh-fpga-workbench", projects: [] };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(FETCHED) });
+
   // 父槽已声明
   slots.declare(ENTRY_SLOT);
   slots.declare("main");
@@ -183,6 +205,9 @@ if (plugin !== null) {
   check(panel?.options.key === PANEL_ID, `面板 key 正确(${panel?.options.key})`);
   check(row?.options.id === panel?.options.key, "入口行 id === 面板 key");
 
+  // 等注册表那次 fetch 落地,才能断言解析出的工作区
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
   // 父槽后声明(内核的等待语义)
   slots.entries.clear();
   slots.declarations.clear();
@@ -194,6 +219,11 @@ if (plugin !== null) {
   slots.declare(ENTRY_SLOT);
   slots.declare("main");
   check((slots.entries.get(ENTRY_SLOT) ?? []).length === 1, "父槽后声明时挂起的注册被执行");
+
+  // 等最后一次 apply 的注册表 fetch 落地。
+  // 注意:每次 apply 都会重新解析并重新绑定 startSession,所以必须等**最后一次** ——
+  // 只等第一次会让面板用上尚未解析完成的那个绑定,测试就会误报 undefined。
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   // selectPanel 与「切进去 / 切回来」:侧边栏的行会自己调这个方法
   layout.selectPanel(PANEL_ID);
@@ -213,16 +243,20 @@ if (plugin !== null) {
   // 就说明它又在依赖槽不提供的 props。
   check(glyph?.type !== "button", "入口不是自造按钮(切换由侧边栏行负责)");
 
-  // 面板组件可调用 —— 它现在同时扮演"会话启动器"
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ projects: [] }) });
+  // 面板组件可调用 —— 它同时扮演"会话启动器"
   try {
     const panelElement = panel.component();
     check(panelElement?.__element === true, "面板组件返回元素");
 
     // 挂载即新建一次会话(用户选的形态:入口 → 普通新会话)
     check(uiWorkspace.calls.length === 1, `面板挂载时新建了一次会话(实际 ${uiWorkspace.calls.length} 次)`);
-    check(uiWorkspace.calls[0] === undefined, "不指定 workspaceId,交给服务自己挑(与官方「新会话」一致)");
+
+    // 关键:会话必须落在注册表 workspace 路径对应的那个工作区里。
+    // 不指定 id 时服务会挑"当前 → 最近用过的",会话就落到别的分组 —— 用户报的正是这个。
+    check(
+      uiWorkspace.calls[0] === "ws-fpga",
+      `会话落在 FPGA 工作台对应的工作区(实际 ${String(uiWorkspace.calls[0])})`
+    );
 
     // 显式按钮兜底:即使自动那一步没生效,也要有一条明确的路
     const button = (panelElement?.children ?? []).find((child) => child?.type === "button");
@@ -230,9 +264,20 @@ if (plugin !== null) {
     check(button?.props?.onClick !== undefined, "按钮带 onClick");
     button.props.onClick();
     check(uiWorkspace.calls.length === 2, `点按钮能再新建一次会话(实际 ${uiWorkspace.calls.length} 次)`);
-  } finally {
-    globalThis.fetch = originalFetch;
+    check(uiWorkspace.calls[1] === "ws-fpga", "按钮建的会话也在同一个工作区");
+  } catch (error) {
+    check(false, "面板组件", error.stack);
   }
+
+  // 路径匹配的健壮性:大小写与结尾分隔符不该影响结果
+  try {
+    const { registryPathFrom } = await import(new URL("../lib/index.js", import.meta.url));
+    check(typeof registryPathFrom === "function", "宿主侧仍导出 registryPathFrom");
+  } catch (error) {
+    check(false, "加载宿主模块", error.stack);
+  }
+
+  globalThis.fetch = originalFetch;
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 测试页所用的加载语义与断言全部通过");

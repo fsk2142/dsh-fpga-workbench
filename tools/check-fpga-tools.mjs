@@ -166,6 +166,24 @@ check(byStage.get("sim") === "有产物但没写结论", `没写结论的文件�
 check(byStage.get("comp") === "未开始", `没有目录的阶段是"未开始"(实际 ${String(byStage.get("comp"))})`);
 check(byStage.get("spec") === "未开始", "spec 目录不存在时是未开始(不误报)");
 
+// 审查的结论是 approved / changes requested / blocked —— 读不出来就等于审查白做
+// (认不出来只影响显示:这个脚本是汇总,不是门禁)
+const reviewDir = join(SANDBOX, "status-demo", "review");
+mkdirSync(reviewDir, { recursive: true });
+const reviewFile = join(reviewDir, "review.md");
+writeFileSync(reviewFile, "# review\n\n结论:APPROVED\n");
+check(readVerdict(reviewFile, "review")?.verdict === "APPROVED", "读得出 `结论:APPROVED`");
+const reviewRow = collect(join(SANDBOX, "status-demo"), ["review"]).at(0);
+check(reviewRow.state === "APPROVED" && reviewRow.valid === true, "审查结论被当成合法取值(实际 " + String(reviewRow.state) + "/" + String(reviewRow.valid) + ")");
+writeFileSync(reviewFile, "# review\n\n结论:CHANGES_REQUESTED\n");
+check(
+  readVerdict(reviewFile, "review")?.verdict === "CHANGES_REQUESTED"
+    && collect(join(SANDBOX, "status-demo"), ["review"]).at(0).valid === true,
+  "读得出 `结论:CHANGES_REQUESTED`"
+);
+writeFileSync(reviewFile, "# review\n\n结论:changes requested\n");
+check(readVerdict(reviewFile, "review")?.verdict === "CHANGES", "写成两词也至少读得出前半(不 gag)");
+
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
 const run = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: "ignore" }).status;
 check(run("check-rtl.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");

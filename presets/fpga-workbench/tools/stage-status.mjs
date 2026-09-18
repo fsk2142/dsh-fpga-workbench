@@ -87,9 +87,19 @@ export function readVerdict(file, stage) {
   return undefined;
 }
 
-/** 该阶段允许的结论取值。 */
+/**
+ * 该阶段允许的结论取值。
+ *
+ * review 多两个:审查的结论本来就是 `approved` / `changes requested` / `blocked`
+ * (技能里写着),写成别的措辞它就读不到 —— 但**认不出来只影响显示,不拦任何事**:
+ * 这个脚本是信息汇总,不是门禁。
+ * @param stage - 阶段名。
+ * @returns 允许的取值数组。
+ */
 function allowedVerdicts(stage) {
-  return stage === "spec" ? [...VERDICTS, "DRAFT", "CONFIRMED"] : VERDICTS;
+  if (stage === "spec") return [...VERDICTS, "DRAFT", "CONFIRMED"];
+  if (stage === "review") return [...VERDICTS, "APPROVED", "CHANGES_REQUESTED", "CHANGES"];
+  return VERDICTS;
 }
 
 /**

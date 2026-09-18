@@ -1,16 +1,20 @@
 ---
 name: fpga-review
-description: 在验收一个做完的 FPGA 模块时用:审查 RTL 结构与命名、时钟复位与跨时钟域处理、接口握手、设计断言、验收判据覆盖、参考模型独立性、时序约束,然后给出 approved / changes requested / blocked;也用于复查之前审过的模块,或用户说"审一下/复查这个模块"的时候。
+description: 审 FPGA 代码、方案或验收结论时用:审查 RTL 结构与命名、时钟复位与跨时钟域处理、接口握手、设计断言、验收判据覆盖、参考模型独立性、时序约束。支持局部审查与早期风险审查;正式结论给 approved / changes requested / blocked。
 ---
 
 # review:代码审查
 
-## 什么时候审
+## 三种审法(按用户要什么选)
 
-只审**做完了**的模块:`lint`、`sim`、(有比对的)`comp`、(要综合的)`synth` 都已经出了结论。
+- **局部审查**:只看一个文件、一个 always 块、一处 CDC —— 改到哪审到哪,随时可做。
+- **早期风险审查**:模块还没做完也能审。看不出结论的地方就写"未完成 / 未验证",并指出
+  最可能出问题的地方 —— 这时候的价值是尽早发现方向问题。
+- **验收审查**(`approved` / `changes requested` / `blocked`):**这一种**才要求证据齐 ——
+  `lint`、`sim`、(有比对的)`comp`、(要综合的)`synth` 都得有结论。
 
-有阶段还挂着 `BLOCKED`,或者干脆没有结论 → **先别审**。那不是审查能解决的问题,
-是前置没满足 —— 如实说明并停下。
+前两种不要求前置齐;缺的环节如实标出来即可。第三种里如果有环节挂着 `BLOCKED` 或干脆没有结论,
+**不要给 `approved`** —— 如实说明缺什么,把结论定成 `changes requested` 或 `blocked`。
 
 ## 审什么(按顺序,别跳)
 
@@ -38,7 +42,9 @@ description: 在验收一个做完的 FPGA 模块时用:审查 RTL 结构与命�
 
 写 `<阶段根>/review/review.md`:
 
-- 结论(`approved` / `changes requested` / `blocked`)
+- **结论行**(汇总命令靠它读进度,写成一个词):
+  `结论:APPROVED` / `结论:CHANGES_REQUESTED` / `结论:BLOCKED`
+- 正文里可以用人话写同一件事(approved / changes requested / blocked),两种都要有
 - 逐条核对结果(上面八条,一条一行)
 - 发现清单,每条:`id`、位置(`文件:行`)、问题、建议怎么改
 - 未验证项及原因

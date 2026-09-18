@@ -1,11 +1,14 @@
 ---
 name: fpga-project-impl
-description: 在跑 FPGA 工程的实现与出 bitstream 时用:布局布线(implementation)、跑 DRC、看资源占用与实现后的时序摘要、生成 bit/bin。也用于解释实现失败、布线拥塞、DRC 报错。工程级时序的判定、上板、发布各有自己的技能 —— 这一关只负责"把实现跑出来"。
+description: 跑 FPGA 工程的实现与出 bitstream 时用:布局布线(implementation)、跑 DRC、看资源占用与实现后的时序摘要、生成 bit/bin;也用于解释实现失败、布线拥塞、DRC 报错。
 ---
 
 # project-impl:实现与 bitstream
 
-## 前置
+**实现报错可以就地去查**:直接看日志定位、改约束或改代码再跑一次 —— 这中间不必回头把每个模块
+环节重跑一遍。只有**正式出 bitstream 验收**时,才要求前置那些东西确实成立。
+
+## 前置(正式出 bitstream 时)
 
 - 集成完成(`project/integrate/`),约束已经核过(`project/constraints/`)
 - 模块级的 `lint` / `sim` 都过了 —— 实现一次要几十分钟,别拿它当验证手段

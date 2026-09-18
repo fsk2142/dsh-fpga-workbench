@@ -1,18 +1,23 @@
 ---
 name: fpga-project-board
-description: 在把 bitstream 下载到板子上做实测验证时用:下载与回读(connect_hw_server / open_hw_target / program_hw_devices)、用 ILA/VIO 抓内部信号、回读数据跟 golden 比对、写 cfgmem 固化到 Flash。管脚没核过不许上板。实现、时序、发布各有自己的技能。
+description: 把 bitstream 下载到板子上做实测验证时用:下载与回读(connect_hw_server / open_hw_target / program_hw_devices)、用 ILA/VIO 抓内部信号、回读数据跟 golden 比对、写 cfgmem 固化到 Flash。下载与固化都要先确认器件、文件与授权。
 ---
 
 # project-board:上板验证
 
-**工程级的常规收尾就是上板。** 不是"有空再上"——做工程的目的就是让板子按预期工作,
-所以除非这个工程根本不部署到硬件,这一关都要走。
+做工程一般都要走到上板(除非这个工程根本不部署到硬件)。但**上板是动手碰硬件的动作**:
+
+- **不自行启动**:用户没说要上板,就不要因为"工程级该收尾了"就去连板子。
+- **动手前把这几样核实并让用户确认**:目标器件/编程器对不对、bit 文件是不是当前这版代码出来的、
+  管脚与电平核过没有。固化(写 Flash/配置存储器)是**不可逆的高风险操作** —— 参数(器件型号、
+  配置模式、时钟)必须用户确认,不要自行推断。
+- 板子不在手边时,继续做别的开发任务即可;**不要声称上板验证通过**。
 
 ## 前置(不满足就别上板)
 
 1. `project/constraints/constraints.md` 里**管脚逐条核过** —— 管脚或电平错了会伤板子
 2. `project/timing/timing.md` 是 PASS —— 时序没过就上板,看到的现象不可信
-3. 有 bit 文件(`project/impl/impl.md` 里有路径)
+3. 有 bit 文件(`project/impl/impl.md` 里有路径),且**与当前代码对应**(不是旧版本的残留)
 
 ## 下载
 

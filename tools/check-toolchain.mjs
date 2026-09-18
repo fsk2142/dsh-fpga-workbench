@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import {
   FIELDS,
   NS,
+  backupChangedFiles,
   describeEnv,
   inspectTools,
   legacyMigrationPatch,
@@ -327,6 +328,36 @@ const absent = listDirectory(join(browseRoot, "nope"));
 check(absent.entries.length === 0 && typeof absent.error === "string", "目录不存在时如实报 error,而不是抛异常");
 const drives = listDirectory("");
 check(drives.entries.length > 0 && drives.entries.every((entry) => entry.kind === "directory"), "空路径列盘符(从根开始挑)");
+
+// ── 覆盖用户预设前的备份(用户的地盘不能无条件盖掉) ──────────────────────────
+const backupRoot = join(ROOT, ".tmp", `backup-check-${String(Date.now())}`);
+const backupSource = join(backupRoot, "source");
+const backupTarget = join(backupRoot, "user");
+mkdirSync(join(backupSource, "skills"), { recursive: true });
+mkdirSync(join(backupTarget, "skills"), { recursive: true });
+writeFileSync(join(backupSource, "skills", "SKILL.md"), "包内新版\n");
+writeFileSync(join(backupSource, "preset.yml"), "一样的内容\n");
+writeFileSync(join(backupTarget, "skills", "SKILL.md"), "用户自己改的\n");
+writeFileSync(join(backupTarget, "preset.yml"), "一样的内容\n");
+writeFileSync(join(backupTarget, "我加的笔记.md"), "用户新增\n");
+
+const backedUp = backupChangedFiles(backupSource, backupTarget, join(backupRoot, "out"));
+check(backedUp?.count === 2, `用户改过的与新增的会被备份(实际 ${String(backedUp?.count)} 个)`);
+check(
+  backedUp.files.some((file) => file.endsWith(join("skills", "SKILL.md")))
+    && readFileSync(backedUp.files.find((file) => file.endsWith(join("skills", "SKILL.md"))), "utf8").includes("用户自己改的"),
+  "备份下来的是用户那份的内容"
+);
+check(backedUp.files.some((file) => file.endsWith("我加的笔记.md")), "用户新增的文件也保住(不会被同步弄丢)");
+check(!backedUp.files.some((file) => file.endsWith("preset.yml")), "没改动的文件不备份(不制造无用备份)");
+check(
+  backupChangedFiles(backupSource, backupSource, join(backupRoot, "never")) === undefined,
+  "两边一致时不做任何备份"
+);
+check(
+  backupChangedFiles(backupSource, join(backupRoot, "不存在"), join(backupRoot, "never")) === undefined,
+  "目标不存在时不做备份"
+);
 
 // ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
 //

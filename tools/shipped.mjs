@@ -11,14 +11,24 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 /**
+ * npm/pnpm 打包时**总会**带上、不必写进 `files` 的根文件。
+ *
+ * 不能漏掉 package.json:它不在 files 白名单里却会被装进去,而 `exports['./mode']`
+ * 这种关键字段就在里面 —— 漏比对等于白比对(预设行正是靠它解析的)。
+ */
+const ALWAYS_PACKED = /^(package\.json|readme(\..*)?|licen[cs]e(\..*)?|changelog(\..*)?|notice(\..*)?)$/iu;
+
+/**
  * 列出一个包按 `files` 白名单会装进去的全部文件。
  * @param root - 包根目录。
  * @returns 相对路径数组(用 `/` 分隔,已排序);读不到清单时为空数组。
  */
 export function shippedFiles(root) {
   let manifest;
+  let rootEntries = [];
   try {
     manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    rootEntries = readdirSync(root, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -42,7 +52,10 @@ export function shippedFiles(root) {
     if (statSync(full).isDirectory()) walk(full, root);
     else out.push(entry.split(sep).join("/"));
   }
-  return out.sort();
+  for (const entry of rootEntries) {
+    if (entry.isFile() && ALWAYS_PACKED.test(entry.name)) out.push(entry.name);
+  }
+  return [...new Set(out)].sort();
 }
 
 /**

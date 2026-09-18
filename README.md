@@ -24,6 +24,13 @@ dsh plugin --profile desktop add file:C:\Work\dsh-fpga-workbench
 > 刷新安装用 `node C:\Work\dsh-fpga-workbench\tools\install.mjs`(先校验、不一致才重装、
 > 并逐字节校验结果)。**必须在你自己的终端里跑** —— 受限沙箱里 pnpm 无法在 profile
 > 目录建临时文件。
+>
+> **如果 `dsh plugin add` 被供应链策略挡住**(`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`):
+> 那个门禁查的是**整个 profile 的锁文件**,里面任何一个包"太新"就会整体拒绝,与我们这个
+> 包无关。这时用 `node tools\sync-installed.mjs`:它不经过 pnpm,只把包内容写进已装的
+> `node_modules/<包名>`(依赖声明与锁文件里本来就有这个包,且记录的是**路径**,所以内容
+> 更新不会让它们失效)。它不碰 profile 的 `package.json` / 锁文件 / `settings.yaml`,
+> 不联网、不装新依赖。等那几条锁文件记录过了最小发布年龄,再跑 `install.mjs` 即可。
 
 ## 它由什么组成
 

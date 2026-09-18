@@ -125,13 +125,13 @@ check(/cpSync\(source, destination/u.test(codeOnly), "复制预设(而不是只�
 check(/sameTree\(source, destination\)/u.test(codeOnly), "内容一致就跳过(幂等,不每次重写)");
 // 曾经写过 settings.yaml 的 agent-presets.roots —— 实测那层根本不参与 roots 解析,是无用写入,
 // 还污染了用户配置。断言的是**别去写别人的设置**,而不是禁用 settings.update:
-// 本插件自己的字段迁移(改名的旧键 → 新键)正需要它,所以放开到"只许写本命名空间"。
-const updateTargets = [...codeOnly.matchAll(/settings\.update\(\s*([A-Za-z_$][\w$]*|["'][^"']+["'])/gu)].map((match) => match[1]);
+// 本插件自己的字段迁移(改名的旧键 → 新键)要用它,而且 `register()` 返回的句柄已经绑定了
+// 命名空间(update(patch) 只接补丁)。所以真正要守的是这两条:
+check(/ctx\.settings\.register\(NS,/u.test(codeOnly), "设置句柄只从本插件的命名空间(NS)注册");
 check(
-  updateTargets.every((target) => target === "NS"),
-  `settings.update 只写本插件自己的命名空间(实际 ${updateTargets.join(", ") || "没有调用"})`
+  !/settings\.(update|replace|mutate)\(\s*["']/u.test(codeOnly),
+  "没有按名字去写别的设置命名空间(句柄已绑定,不该再传 ns)"
 );
-check(!/agent-presets["']\s*,/u.test(codeOnly), "没有去写 agent-presets 的名字空间(那层不参与 roots 解析)");
 
 // 6. 显示名只有一处真相:预设的 name 与设置页的 LABEL 必须相同。
 //    改名只改一半会让用户看到两个名字(预设选择器一个、设置里一个)。

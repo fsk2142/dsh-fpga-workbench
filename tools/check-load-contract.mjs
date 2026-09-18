@@ -76,6 +76,20 @@ check(/export function apply/u.test(host), "宿主导出 apply");
 check(/export const inject = \["settings"\]/u.test(host), `宿主 inject 恰好是 ["settings"]`);
 check(!/systemPrompt/u.test(host), "index.js 里不出现 systemPrompt(提示只能由模式半侧注册)");
 check(/export const name = /u.test(host), "宿主导出 name");
+
+// settings 句柄的调用签名:`register()` 返回的是**已绑定命名空间**的句柄 ——
+// get() 不带参、update(patch) 只接补丁。多传一个 ns 会被当成补丁本身,运行时才报
+// "must be a plain object"(方法存在、参数类型错,静态完全看不出来 —— 踩过一次)。
+const handleCalls = [...host.matchAll(/settings\.(get|update|replace|watch)\(([^)]*)\)/gu)].map(
+  (match) => `settings.${match[1]}(${match[2]})`
+);
+check(handleCalls.length > 0, "宿主在用 settings 句柄");
+check(
+  handleCalls.every((call) => !/^settings\.(update|replace|watch)\(\s*(NS|["'])/u.test(call)),
+  "settings 句柄的写方法只传数据、不传命名空间(句柄已绑定)",
+  handleCalls.join("  ")
+);
+
 const mode = read("lib/mode.js");
 check(/export const inject = \["systemPrompt"\]/u.test(mode), `模式半侧 inject 是 ["systemPrompt"]`);
 check(/export function apply/u.test(mode), "模式半侧导出 apply");

@@ -1,7 +1,7 @@
 {
   "name": "dsh-fpga-workbench",
   "version": "0.1.0",
-  "description": "FPGA workbench panel for the DSH web GUI: a sidebar entry that opens a workbench surface over the project registry in this directory.",
+  "description": "FPGA workbench panel for the DSH web GUI: a sidebar entry that opens a workbench surface over the project registry.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -12,6 +12,7 @@
   "files": [
     "lib"
   ],
+  "comment": "零运行时依赖是硬约束,不是巧合:ESM 的裸依赖从本模块位置向上解析,所以只要加载方式不是把包物理拷进 profile 的 node_modules(绝对路径挂载、file: 链接都不行),任何 dependencies 都会解析失败并把整个组合拖崩。tools/check-load-contract.mjs 会强制这条。",
   "dsh": {
     "client": {
       "platform": "web"

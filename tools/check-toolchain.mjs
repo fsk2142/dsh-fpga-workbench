@@ -1,16 +1,18 @@
-// 工具链存在性判定的行为检查 —— 这是本插件里唯一非平凡的纯逻辑。
+// 工具链逻辑的行为检查 —— 这是本插件里唯一非平凡的纯逻辑。
 //
-// 断言的是三条会真出错的性质:
+// 断言的是四类会真出错的性质:
 //   1. 只有必需项未就绪才算"缺失" —— 缓存目录是写入目标,不存在是正常的;报成缺失会让
 //      每台新机器一打开设置就是一片红,提示也就没人看了
 //   2. 探测抛错不能让整页崩 —— 沙箱/权限问题会让 stat 抛异常
 //   3. 两侧契约一致 —— 客户端 bundle 不能 import 宿主代码,字段与路由只能各写一份,
 //      写歪了界面就会显示错的东西(不报错)
+//   4. 会话提示分得清三种状态(就绪 / 没填 / 填错)—— 都写成"未配置",agent 就分不清
+//      该去填还是该去改;并且它只能由模式半侧注册,不能进插件行
 //
-// 只 import 零依赖的 lib/toolchain.js:lib/index.js 要 schemastery,而它只在 profile
-// 的 node_modules 里,从仓库 import 会解析失败。
+// 只 import lib/toolchain.js:它只用 node 内置模块,而 lib/index.js 要 schemastery,
+// 后者只在 profile 的 node_modules 里,从仓库 import 会解析失败。
 import { readFileSync } from "node:fs";
-import { FIELDS, NS, inspectTools } from "../lib/toolchain.js";
+import { FIELDS, NS, describeEnv, inspectTools } from "../lib/toolchain.js";
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -107,5 +109,37 @@ check(/writeField\([\s\S]{0,120}?\.then\(/u.test(clientSource), "刷新状态写
 // 不再往会话提示里注入任何东西 —— 这是刻意的设计决定
 check(!readFileSync(new URL("../lib/index.js", import.meta.url), "utf8").includes("systemPrompt"), "宿主不注册 systemPrompt 段");
 
-console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链存在性判定与两侧契约全部正确");
+// ── 会话提示(只有本模式看得到) ──────────────────────────────────────────────
+//
+// 这一段是"五个路径真的被用起来"的落点:已就绪的路径与调用姿势原样交给 agent,
+// 未就绪的说清是没填还是填错、会跳过什么。断言的是三种状态的**措辞必须不同** ——
+// 把它们写成同一句"未配置",agent 就分不清该去填还是该去改。
+const readyText = describeEnv(prepared, probeWith(Object.values(prepared)));
+check(readyText.includes(prepared.vivadoPath), "提示里给出 Vivado 的真实路径");
+check(readyText.includes("-mode batch"), "提示里给出 Vivado 的非交互调用方式");
+check(readyText.includes(prepared.modelsimPath) && readyText.includes("-c -do"), "提示里给出 ModelSim 的命令行调用方式");
+check(readyText.includes("--lint-only"), "提示里给出 Verilator 的 lint 调用方式");
+check(!readyText.includes("未就绪"), "全部就绪时不出现未就绪清单");
+check(readyText.includes(prepared.cachePath) && readyText.includes("不要污染 RTL 源码目录"), "产物只写缓存目录这条约定在提示里");
+check(readyText.includes("where"), "提示里写明权威来源,不让 agent 去 PATH 猜");
+
+const halfText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith([]));
+check(halfText.includes("路径不存在(C:\\vivado.bat)"), "填了但不存在:说成路径不存在(要去改)");
+check(halfText.includes("Verilator:未配置"), "没填的项:说成未配置(要去填)");
+check(halfText.includes("比特流生成"), "未就绪时带上会跳过哪些步骤");
+
+const noCacheText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith(["C:\\vivado.bat"]));
+check(!noCacheText.includes("不要污染 RTL 源码目录"), "缓存目录没就绪时,不提产物落盘约定(它落不下去)");
+
+const unreadable = describeEnv(undefined, probeWith([]));
+check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设置时如实说读不到,而不是当成没配");
+
+// 注册在**模式半侧**:插件行是全局作用域,普通会话也会看到 FPGA 工具链信息
+const modeSource = readFileSync(new URL("../lib/mode.js", import.meta.url), "utf8");
+check(modeSource.includes("systemPrompt.section("), "模式半侧注册提示段");
+check(modeSource.includes('inject = ["systemPrompt"]'), "模式半侧的 inject 是服务名数组(写成对象会让这一行整个不激活)");
+check(modeSource.includes("describeEnv(") && modeSource.includes("probeFilesystem"), "模式半侧复用 lib/toolchain.js 的定义,不另写一份文案");
+check(!modeSource.includes("child_process") && !modeSource.includes("spawn("), "模式半侧不起进程(命令交给 shell 工具跑)");
+
+console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");
 if (failures.length > 0) process.exitCode = 1;

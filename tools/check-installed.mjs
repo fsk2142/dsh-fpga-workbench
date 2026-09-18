@@ -8,8 +8,8 @@
 //   node tools/check-installed.mjs
 // 退出码 0 = 已装与源一致;非 0 = 需要重装(先 remove 再 add)。
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -17,14 +17,13 @@ const PROFILE = process.env.DSH_PROFILE_DIR
   ?? join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".dsh", "profiles", "desktop");
 const INSTALLED = join(PROFILE, "node_modules", "dsh-fpga-workbench");
 
-/** 这个包该装进去的全部内容:宿主半侧 + 客户端半侧 + 预设 + 补丁 + 清单。 */
+/** 这个包该装进去的全部内容:清单 + 补丁 + 宿主半侧 + 模式半侧 + 客户端半侧。 */
 const REQUIRED = [
   "package.json",
   "cordis.patch.yml",
   "lib/index.js",
-  "lib/client.js",
-  "presets/fpga-workbench/preset.yml",
-  "presets/fpga-workbench/agent.cordis.yml"
+  "lib/mode.js",
+  "lib/client.js"
 ];
 
 const failures = [];
@@ -40,6 +39,21 @@ function hash(file) {
   } catch {
     return null;
   }
+}
+
+/** 一棵目录下的全部文件(相对路径,用 / 分隔),目录不存在时为空。 */
+function walk(dir, base = dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return walk(full, base);
+    return entry.isFile() ? [relative(base, full).split("\\").join("/")] : [];
+  });
 }
 
 if (!existsSync(INSTALLED)) {
@@ -65,6 +79,23 @@ if (!existsSync(INSTALLED)) {
     check(hash(source) === hash(installed), `${rel} 与源一致`);
   }
 
+  // 1b. 整个 presets/ 树逐文件比 —— 预设里现在还有 skills/(模式专属技能),以后还会加东西。
+  //
+  // 不写死文件名:写死的清单会在"加了文件但忘了加清单"时静默漏检,而漏掉的恰好是新
+  // 模式要用的东西。反过来,已装副本里多出来的文件是上次安装的残留,同样要报。
+  const presetFiles = walk(join(ROOT, "presets"));
+  check(presetFiles.length > 0, "源里有预设文件");
+  for (const rel of presetFiles) {
+    const installed = join(INSTALLED, "presets", rel);
+    check(
+      existsSync(installed) && hash(join(ROOT, "presets", rel)) === hash(installed),
+      `presets/${rel} 与源一致`
+    );
+  }
+  for (const rel of walk(join(INSTALLED, "presets"))) {
+    check(presetFiles.includes(rel), `已装副本里没有源里不存在的 presets/${rel}(旧副本残留,重装)`);
+  }
+
   // 2. `files` 白名单必须覆盖预设目录。
   //
   // pnpm 装 file: 依赖时按 files 打包,白名单外的东西**不会被拷进 profile**。
@@ -76,6 +107,11 @@ if (!existsSync(INSTALLED)) {
   check(manifest.dsh?.bundle?.patch !== undefined, "清单声明了 dsh.bundle.patch(否则补丁不会进组合)");
   // 设置页在客户端半侧,所以这里必须有 dsh.client
   check(manifest.dsh?.client?.platform === "web", "清单声明了 dsh.client.platform = web(设置页要靠它)");
+  // 预设里那一行按 "包名 + 子路径" 挂模式半侧;exports 少了它,预设会被判成 broken
+  check(
+    manifest.exports?.["./mode"] === "./lib/mode.js",
+    "exports 声明了 ./mode(预设行 dsh-fpga-workbench/mode 靠它解析)"
+  );
   // schema 用 peer 而不是 dependency:profile 自带这个包,peer 不会触发安装或改锁文件
   check(
     manifest.peerDependencies?.["@deepseek-ai/schemastery"] !== undefined,

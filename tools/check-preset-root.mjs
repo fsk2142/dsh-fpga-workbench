@@ -128,7 +128,8 @@ check(!/settings\.update\(/u.test(codeOnly), "不再往 settings.yaml 写 roots(
 
 // 6. 显示名只有一处真相:预设的 name 与设置页的 LABEL 必须相同。
 //    改名只改一半会让用户看到两个名字(预设选择器一个、设置里一个)。
-const presetYml = readFileSync(join(ROOT, "presets", "fpga-workbench", "preset.yml"), "utf8");
+const presetDir = join(ROOT, "presets", "fpga-workbench");
+const presetYml = readFileSync(join(presetDir, "preset.yml"), "utf8");
 const presetName = /^\s*name:\s*(.+)$/mu.exec(presetYml)?.[1]?.trim();
 const clientLabel = /const LABEL = "([^"]+)"/u.exec(readFileSync(join(ROOT, "lib", "client.js"), "utf8"))?.[1];
 check(presetName !== undefined && presetName !== "", `预设声明了显示名(实际 ${String(presetName)})`);
@@ -139,13 +140,80 @@ check(
 check(presetName === "FPGA 开发模式", `显示名是「FPGA 开发模式」(实际 ${String(presetName)})`);
 // 人设文案里也要用同一个名字 —— 它会进到会话提示里
 check(
-  readFileSync(join(ROOT, "presets", "fpga-workbench", "agent.cordis.yml"), "utf8").includes("FPGA 开发模式"),
+  readFileSync(join(presetDir, "agent.cordis.yml"), "utf8").includes("FPGA 开发模式"),
   "人设文案用的是同一个显示名"
 );
+
+// 7. 预设自己的组装:模式半侧那一行,以及自带的技能目录。
+//
+//    「选中这个模式才有的东西」全靠这里:预设行只在命名了本预设的会话里挂载。
+//    名字写错不会报错 —— discovery 会把整个预设判成 broken、从选择器里消失,
+//    所以这一行的解析必须机器验。
+const compositionPath = join(presetDir, "agent.cordis.yml");
+let compositionRows = [];
+try {
+  compositionRows = yaml.load(readFileSync(compositionPath, "utf8"), { schema: entryListSchema });
+} catch (error) {
+  check(false, "预设组装可解析", error.message);
+}
+const rowById = new Map((Array.isArray(compositionRows) ? compositionRows : []).map((row) => [row.id, row]));
+
+const modeRow = rowById.get("fpga-workbench-mode");
+check(modeRow !== undefined, "预设里有 fpga-workbench-mode 行(模式半侧只从这里挂载)");
+check(
+  modeRow?.name === "dsh-fpga-workbench/mode",
+  `模式行按「包名 + 子路径」挂载(实际 ${JSON.stringify(modeRow?.name)})`
+);
+check(modeRow?.disabled !== true, "模式行没有被 disabled");
+const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+check(manifest.exports?.["./mode"] === "./lib/mode.js", "package.json 声明了 exports['./mode']");
+check((manifest.files ?? []).includes("lib"), "files 白名单含 lib(mode 半侧才装得进去)");
+
+// 自带技能目录用 customSkillDirs 声明;!!js 的 baseUrl 是**预设目录**(与官方 cordis 预设
+// 同一写法),所以预设被复制到用户预设目录之后,路径依然指得对。
+const presetCtx = { baseUrl: pathToFileURL(`${presetDir}/`).href, loader: {} };
+const declared = rowById.get("skill-filesystem")?.config?.customSkillDirs;
+check(Array.isArray(declared) && declared.length === 1, `skill-filesystem 声明了自带技能目录(实际 ${Array.isArray(declared) ? declared.length : "无"} 项)`);
+const skillDir = (declared ?? []).map((value) => (isJsExpr(value) ? evaluate(presetCtx, value.__jsExpr) : value))[0];
+check(typeof skillDir === "string" && existsSync(skillDir), `技能目录由 !!js 求值且存在(${String(skillDir)})`);
+// fileURLToPath 对目录 URL 会保留结尾分隔符,比之前去掉再比
+check(
+  String(skillDir).replace(/[\\/]+$/u, "") === join(presetDir, "skills"),
+  `技能目录就是预设自己的 skills/(实际 ${String(skillDir)})`
+);
+
+// 每个技能必须能被 dsh-skill-filesystem 认出来:目录名 = frontmatter 的 name,且是
+// kebab-case;name/description 缺任何一个,技能会被**静默忽略**(只留一条 warn)。
+const skillNames = existsSync(skillDir)
+  ? readdirSync(skillDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+  : [];
+check(skillNames.length > 0, `预设带了至少一个技能(实际 ${skillNames.length} 个)`);
+for (const skill of skillNames) {
+  const file = join(skillDir, skill, "SKILL.md");
+  if (!existsSync(file)) {
+    check(false, `${skill} 缺 SKILL.md`);
+    continue;
+  }
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(readFileSync(file, "utf8"))?.[1];
+  if (block === undefined) {
+    check(false, `${skill} 缺 YAML frontmatter(会被静默忽略)`);
+    continue;
+  }
+  let meta;
+  try {
+    meta = yaml.load(block);
+  } catch (error) {
+    check(false, `${skill} 的 frontmatter 不是合法 YAML`, error.message);
+    continue;
+  }
+  check(meta?.name === skill, `${skill} 的 frontmatter name 与目录名一致(实际 ${JSON.stringify(meta?.name)})`);
+  check(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(String(meta?.name)), `${skill} 的名字是 kebab-case(技能名的合法字符集)`);
+  check(typeof meta?.description === "string" && meta.description.length > 0, `${skill} 写了 description(否则加载器直接忽略)`);
+}
 
 console.log(
   failures.length > 0
     ? `\nFAIL (${failures.length}): ${failures.join(" | ")}`
-    : "\nPASS: 预设路径与同步机制都正确"
+    : "\nPASS: 预设路径、模式行与自带技能都正确"
 );
 if (failures.length > 0) process.exitCode = 1;

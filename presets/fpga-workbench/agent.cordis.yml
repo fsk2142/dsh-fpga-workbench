@@ -46,6 +46,23 @@
   config:
     maxBytes: 65536
 
+# ── 本机工具链(仅本模式) ───────────────────────────────────────────────────
+
+# 「用户填的那五个路径真的被用起来」的落点:注册一段**会话作用域**的提示,把设置页里
+# 已核对过存在性的工具路径与调用姿势交给本模式的 agent,它就不必去 where/PATH 猜。
+#
+# 为什么挂在这里而不是插件行(profile 层):那层作用域是全局,普通会话也会看到 FPGA
+# 工具链信息 —— 与"不影响正常会话"冲突。预设行只在命名了本预设的会话里挂载。
+#
+# name 是"包名 + 子路径":预设行里的裸名从 profile 解析(dsh-agent-presets 的
+# PresetTree.import 用 harnessBase 覆盖预设目录作为解析基准),本包就装在 profile 的
+# node_modules 下,子路径 ./mode 在 package.json 的 exports 里声明。
+#
+# ⚠️ 名字写错不会报错,只会让 discovery 把本预设判成 broken、在选择器里整个消失 ——
+# tools/check-preset-root.mjs 断言这一行能被解析到。
+- id: fpga-workbench-mode
+  name: 'dsh-fpga-workbench/mode'
+
 # ── shell ───────────────────────────────────────────────────────────────────
 
 # `shell-env` stays in the HOST composition: `apps/cli/src/web.ts` injects it to
@@ -94,8 +111,17 @@
 # `skill-filesystem` contributes local-root discovery for agents on this preset, and
 # `tool-skill` gives them the catalog and loader; the merged catalog also
 # carries whatever the deployment registered globally (repository plugins).
+#
+# 本预设自己还带一份技能目录(presets/fpga-workbench/skills/):它只在本模式可见,
+# 因为下面那行把**预设目录下**的 skills/ 追加进 customSkillDirs。!!js 里的 baseUrl
+# 是组装文件自己的目录,所以预设被 ensureUserPreset 复制到用户预设目录之后依然指得对
+# —— 这是官方 cordis 预设的写法,照抄。(includeDefaultRoots 保持默认的 true:
+# 你的工作区技能与用户技能在本模式下照常可见,这里是"追加"而不是"替换"。)
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
 
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'

@@ -198,7 +198,7 @@ function loadBundle(src) {
     fatal("第 6 步：入口字形", error);
   }
 
-  // ── 7. 面板组件能调用（fetch 换成受控应答）─────────────────────────────
+  // ── 7. 面板：既是数据面板，也是会话启动器 ────────────────────────────────
   try {
     if (panel === null) throw new Error("第 3 步没有拿到面板，无法测试渲染");
     const originalFetch = window.fetch;
@@ -212,6 +212,17 @@ function loadBundle(src) {
       const element = panel.component();
       check(element?.__element === true, "面板组件返回元素");
       check(document.querySelector("style[data-fpga-workbench]") !== null, "面板注入了自己的样式节点");
+
+      // 挂载即新建一次会话（用户选的形态：入口 → 普通新会话）
+      const workspace = window.__harness.uiWorkspace;
+      check(workspace.calls.length === 1, `面板挂载时新建了一次会话（实际 ${workspace.calls.length} 次）`);
+      check(workspace.calls[0] === undefined, "不指定 workspaceId，交给服务自己挑（与官方「新会话」一致）");
+
+      // 显式按钮兜底：自动那一步若没生效，仍有一条明确的路
+      const button = (element?.children ?? []).find((child) => child?.type === "button");
+      check(button !== undefined, "面板里有「新建 FPGA 会话」按钮");
+      button?.props?.onClick?.();
+      check(workspace.calls.length === 2, `点按钮能再新建一次会话（实际 ${workspace.calls.length} 次）`);
     } finally {
       window.fetch = originalFetch;
     }

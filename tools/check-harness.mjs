@@ -45,13 +45,18 @@ globalThis.document = {
 };
 
 // ── 最小 React:只提供 bundle 用到的入口 ─────────────────────────────────────
+//
+// useRef 必须真的保存值:`WorkbenchPanel` 靠它保证自动新建会话只发生一次。
+// 如果这里返回一个每次都是新对象的假 ref,那个"只开一次"的守卫就失效,
+// 而这个测试本该抓住那种回归。
 const React = {
   createElement: (type, props, ...children) => ({ __element: true, type, props: props ?? {}, children }),
   useState: (initial) => [typeof initial === "function" ? initial() : initial, () => {}],
   useEffect: (effect) => {
     const cleanup = effect();
     return typeof cleanup === "function" ? cleanup : undefined;
-  }
+  },
+  useRef: (initial) => ({ current: initial })
 };
 
 // ── 内核语义 ────────────────────────────────────────────────────────────────
@@ -131,7 +136,15 @@ const layout = {
   }
 };
 
-const ctx = { slots, layout, effect: (fn) => fn() };
+/** uiWorkspace 的替身:记录每次 startSession 调用。 */
+const uiWorkspace = {
+  calls: [],
+  startSession(workspaceId) {
+    this.calls.push(workspaceId);
+  }
+};
+
+const ctx = { slots, layout, uiWorkspace, effect: (fn) => fn() };
 
 // ── 与测试页相同的断言序列 ──────────────────────────────────────────────────
 
@@ -200,12 +213,23 @@ if (plugin !== null) {
   // 就说明它又在依赖槽不提供的 props。
   check(glyph?.type !== "button", "入口不是自造按钮(切换由侧边栏行负责)");
 
-  // 面板组件可调用
+  // 面板组件可调用 —— 它现在同时扮演"会话启动器"
   const originalFetch = globalThis.fetch;
   globalThis.fetch = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ projects: [] }) });
   try {
     const panelElement = panel.component();
     check(panelElement?.__element === true, "面板组件返回元素");
+
+    // 挂载即新建一次会话(用户选的形态:入口 → 普通新会话)
+    check(uiWorkspace.calls.length === 1, `面板挂载时新建了一次会话(实际 ${uiWorkspace.calls.length} 次)`);
+    check(uiWorkspace.calls[0] === undefined, "不指定 workspaceId,交给服务自己挑(与官方「新会话」一致)");
+
+    // 显式按钮兜底:即使自动那一步没生效,也要有一条明确的路
+    const button = (panelElement?.children ?? []).find((child) => child?.type === "button");
+    check(button !== undefined, "面板里有「新建 FPGA 会话」按钮");
+    check(button?.props?.onClick !== undefined, "按钮带 onClick");
+    button.props.onClick();
+    check(uiWorkspace.calls.length === 2, `点按钮能再新建一次会话(实际 ${uiWorkspace.calls.length} 次)`);
   } finally {
     globalThis.fetch = originalFetch;
   }

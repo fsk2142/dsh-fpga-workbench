@@ -40,7 +40,7 @@ window.addEventListener("unhandledrejection", (event) => fatal("unhandledrejecti
 
 // ── 基座模块表:内核的冻结表里只有 React 这类共享库 ───────────────────────────
 
-/** 极简 React:只提供这个 bundle 用到的三个入口,返回可检查的普通对象。 */
+/** 极简 React:只提供这个 bundle 用到的入口,返回可检查的普通对象。 */
 const React = {
   createElement(type, props, ...children) {
     return { __element: true, type, props: props ?? {}, children };
@@ -52,6 +52,13 @@ const React = {
     // 同步执行一次,让 effect 里的错误在这里暴露而不是被吞掉
     const cleanup = effect();
     return typeof cleanup === "function" ? cleanup : undefined;
+  },
+  /**
+   * useRef 必须真的保存值:面板靠它保证「挂载即新建会话」只发生一次。
+   * 返回一个每次都是新对象的假 ref,会让那个守卫失效,而测试本该抓住那种回归。
+   */
+  useRef(initial) {
+    return { current: initial };
   }
 };
 
@@ -175,6 +182,15 @@ const layout = {
   }
 };
 
-const ctx = { slots, layout, effect: (fn) => fn() };
+// ── 假 uiWorkspace 服务:记录新建会话的调用 ─────────────────────────────────
 
-window.__harness = { kernel, slots, layout, ctx, check, fatal, React, results, get failed() { return failed; } };
+const uiWorkspace = {
+  calls: [],
+  startSession(workspaceId) {
+    this.calls.push(workspaceId);
+  }
+};
+
+const ctx = { slots, layout, uiWorkspace, effect: (fn) => fn() };
+
+window.__harness = { kernel, slots, layout, uiWorkspace, ctx, check, fatal, React, results, get failed() { return failed; } };

@@ -14,6 +14,11 @@ description: 在用 ModelSim 跑或排查 FPGA 模块的功能仿真时用:写�
 
 ## 跑一次仿真(全程命令行,不弹图形界面)
 
+**先用设置里选的那个仿真器** —— 看会话开头那段「本机 FPGA 工具链」的**语言与工具**一节,
+它写着仿真器是 ModelSim / Vivado XSim / Verilator,以及对应的路径。**不要自己另挑一个。**
+
+**ModelSim / Questa(默认)**
+
 ```
 cd <阶段根>/verif/sim
 vdel -lib work -all          # 有旧 work 库就先删掉,别在残留库里编译
@@ -25,10 +30,27 @@ run -all
 quit -f
 ```
 
-- **`-c` 必须加** —— 不加会弹出图形界面等人操作,无人值守就跑不下去
-- **编译顺序:被例化的在前**。文件多了按层级从底往上排;顺序错了 `vlog` 会报未解析的模块
-- `+acc=rn` 保留信号可见性,出错时还能看波形;去掉它优化后很多信号会消失
-- 要重复跑就把它写成一个 `run.do`,以后 `vsim -c -do run.do` —— 命令原文也能跟着进结果文件
+**Vivado XSim**(选了它就用 Vivado bin 目录下的这三个命令)
+
+```
+cd <阶段根>/verif/sim
+xvlog -sv <源码...> <tb_*.sv>
+xelab -debug typical tb_<模块名> -s tb_sim
+xsim tb_sim -runall
+```
+
+**Verilator**(只适合 lint 与快速回归:**没有时序**,不能拿来代替功能仿真)
+
+```
+"<verilatorPath>" --binary --timing -Wall --top-module tb_<模块名> <源码...> <tb_*.sv>
+./obj_dir/Vtb_<模块名>
+```
+
+通用的几条:
+
+- **`-c` / `-runall` 这类批处理开关必须加** —— 不加会弹出图形界面等人操作,无人值守就跑不下去
+- **编译顺序:被例化的在前**。文件多了按层级从底往上排;顺序错了编译会报未解析的模块
+- 要重复跑就写成一个脚本(`run.do` / `run.tcl`),命令原文跟着进结果文件
 - 多个测试平台按 `tb_sub_*` → `tb_*` → `tb_top_*` 的顺序各跑一个进程(每个 `$finish` 结束一个进程)
 
 ## 测试平台必须有的三样(缺一样,这次仿真就不算数)

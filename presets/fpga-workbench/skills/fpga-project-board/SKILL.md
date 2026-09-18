@@ -5,6 +5,9 @@ description: 在把 bitstream 下载到板子上做实测验证时用:下载与�
 
 # project-board:上板验证
 
+**工程级的常规收尾就是上板。** 不是"有空再上"——做工程的目的就是让板子按预期工作,
+所以除非这个工程根本不部署到硬件,这一关都要走。
+
 ## 前置(不满足就别上板)
 
 1. `project/constraints/constraints.md` 里**管脚逐条核过** —— 管脚或电平错了会伤板子
@@ -50,7 +53,8 @@ write_cfgmem -force -format MCS -size <容量MB> -interface <SPIx4|BPIx16> \
 - **PASS**:两层都过(波形符合 + 回读数据一致)
 - **FAIL**:数据不一致 / 握手卡死 / 输出不对
 - **BLOCKED**:板子连不上、驱动或 cable 有问题、bit 与板子器件不匹配 → 如实说,别猜
-- **NOT_APPLICABLE**:这个工程不上板
+- **NOT_APPLICABLE**:**只有**这个工程根本不部署到硬件时才算(纯 IP 交付之类)。
+  工程级的常规收尾就是上板 —— 别拿"没有板子"当 NOT_APPLICABLE,那要记 BLOCKED 并说明
 
 ## 产物
 

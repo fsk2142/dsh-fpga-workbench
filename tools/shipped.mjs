@@ -11,12 +11,15 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 /**
- * npm/pnpm 打包时**总会**带上、不必写进 `files` 的根文件。
+ * npm/pnpm 打包时**总会**带上、不必写进 `files` 的根文件里,真正影响加载的那一个。
  *
- * 不能漏掉 package.json:它不在 files 白名单里却会被装进去,而 `exports['./mode']`
- * 这种关键字段就在里面 —— 漏比对等于白比对(预设行正是靠它解析的)。
+ * 只收 package.json:它不在 files 白名单里却会被装进去,而 `exports['./mode']` 这种关键
+ * 字段就在里面 —— 漏比对等于白比对(预设行正是靠它解析)。
+ *
+ * README / LICENSE / CHANGELOG **故意不比**:宿主一个都不读。把它们算进来,改一次文档就会让
+ * "已装副本与源一致"变红 —— 那种红没有行动价值,看多了只会对这条检查麻木。
  */
-const ALWAYS_PACKED = /^(package\.json|readme(\..*)?|licen[cs]e(\..*)?|changelog(\..*)?|notice(\..*)?)$/iu;
+const ALWAYS_PACKED = /^package\.json$/iu;
 
 /**
  * 列出一个包按 `files` 白名单会装进去的全部文件。

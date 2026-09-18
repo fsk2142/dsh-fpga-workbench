@@ -40,7 +40,7 @@ presets/fpga-workbench/
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
     templates/                自带模板:rtl.sv / tb.sv / constraints.xdc(写法规范的载体)
-tools/                        8 个自检 + install.mjs + 依赖安全/锁文件比对
+tools/                        7 个自检 + install.mjs + 依赖安全/锁文件比对
 ```
 
 ## 写法规范放在模板里,不放在技能正文里
@@ -118,11 +118,26 @@ node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件�
 
 - ✅ 模式本身可用:预设随插件走,选择器里可选
 - ✅ 五个路径可用:设置页配置 → 宿主核对存在性 → **本模式的会话提示**拿到路径与调用姿势
-- ✅ 模式专属技能:`presets/fpga-workbench/skills/`(目前一个 `fpga-module-flow`)
-- ⬜ 更强的能力接入:把 lint / 仿真 / 综合 / 时序做成**这个模式能直接调用的工具**
-  (由插件起进程、产物落缓存目录)。现在命令仍由 agent 用 shell 工具跑 —— 走沙箱、
-  可见、可中断;真做成工具就得接 subprocess 服务并自己处理超时与日志
-- ⬜ 技能内容按实际使用反馈扩充
+- ✅ **模块开发的七个阶段技能**(`presets/fpga-workbench/skills/`),按阶段加载,一个阶段一个:
+
+  | 技能 | 干什么 | 结果落在哪 |
+  |---|---|---|
+  | `fpga-spec` | 讨论与规格:谈功能 → 建参考(翻资料 / Python 原型)→ 落规格 | `spec/spec.md` |
+  | `fpga-lint` | 写完 RTL 统一检查:Verilator + 规范逐条对 | `lint/lint.md` |
+  | `fpga-sim` | 功能仿真:命令行 vsim,测试平台自检 + 看门狗 | `sim/sim.md` |
+  | `fpga-comp` | 与参考模型 / golden 比对,差异归属 | `comp/comp.md` |
+  | `fpga-synth` | Vivado 批处理综合(频率是观察值,不是门禁) | `synth/synth.md` |
+  | `fpga-timing` | 读综合后时序报告:约束是否干净 + CDC | `timing/timing.md` |
+  | `fpga-review` | 审查:AC 覆盖、结构、跨域、握手、独立性 | `review/review.md` |
+
+  另有一个 `fpga-module-flow` 是早期雏形,开头已标弃用,留着当对照,待清理。
+- ✅ 模板:自带 `rtl.sv` / `tb.sv` / `constraints.xdc`,设置里可换成自己的
+- ⬜ 更强的能力接入:把某些阶段做成**这个模式能直接调用的工具**(由插件起进程)。
+  现在命令仍由 agent 用 shell 工具跑 —— 走沙箱、可见、可中断;真做成工具就得接 subprocess
+  服务并自己处理超时与日志
+- ⬜ 工程级流程(顶层集成 / 约束与管脚 / 系统仿真 / bitstream / 上板)只留了容器约定
+  (`.fpga-workbench.json` 的 `kind: project` + 模块清单表),阶段还没做
+- ⬜ 待清理:旧雏形技能、以及旧工具包里已经带进来的东西的收尾
 
 ## 关于界面(已放弃的方案,留作记录)
 

@@ -100,7 +100,7 @@ node "<自带命令目录>\rtl-new.mjs" <模块根> <模块名> --template "<RTL
 ## 第三步:逐条核对规范
 
 **格式以模板为准**:RTL / 测试平台 / 约束各有模板(见会话开头「本机 FPGA 工具链」的模板一节;
-未提供即插件自带那份),核对前先读模板。
+未提供即插件自带那份),核对前先读模板 —— 哪些属于模板已定好的,见下面的「结构类」。
 
 **机械部分先跑自带命令**(路径见会话开头「本模式自带的命令」):
 
@@ -129,15 +129,17 @@ node "<自带命令目录>\rtl-check.mjs" <模块目录>
 
 **结构类(须读代码判定)**
 
-- **文件头 11 行**字段齐全:File Name / Module Name / Created Date / Updated Date / Version /
-  Author / Copyright / Open Source(专有声明),其后 2–5 行模块功能说明(数据流、输出格式)
-- 开头 `` `resetall `` + `` `timescale `` + `` `default_nettype none ``,结尾收回 nettype
-- 端口类型仅限 `input wire` / `output logic` / `inout tri`;端口名与类型**对齐至第 69 列**
-- `end else begin` 同行书写
+**模板已经定好的(别另立一套)**:文件头字段、开头/结尾那些指令、端口声明与对齐、
+`end else begin` 同行 —— 起文件时就是复制模板,这些照模板即可。上面第三步的机械检查会查它们
+(所以不是"不用管",而是"不用在这里再抄一遍");换了模板以模板为准。
+
+**写代码时自己把住**
+
+- 复位高有效 —— 模板里 `if (rst)` 是对的,别写成 `rst_n`、`!rst` 或 `negedge rst`
 - `always_ff` 仅用 `posedge`
-- 复位高有效
-- **九个小节块齐全且顺序不变**:Local Parameters / Types / Registers / Combinational Logic /
-  Sequential Logic / Functions Module / Task Module / Module Instantiation / Assertions
+- 九个小节块齐全且顺序不变(**顺序是本节的规则,检查器只认 banner 在不在**,所以只能靠写的时候
+  按模板的排法来):Local Parameters / Types / Registers / Combinational Logic / Sequential Logic /
+  Functions Module / Task Module / Module Instantiation / Assertions
 - 每个 RTL 须有设计断言,并写明 Purpose / Trigger / Failure
 - **一个 always 块内不混放不相关信号** —— 除非共用同一套控制逻辑(同一状态机、同一事务生命周期、
   同一寄存器组)。无法说明其共同控制关系时拆分

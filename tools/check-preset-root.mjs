@@ -321,6 +321,11 @@ check(
 check(stepText(2).includes("参考"), "第三步里有「先建参考,再定方案」");
 check(/Python/u.test(stepText(2)), "第三步问用户要不要用 Python 写参考模型");
 check(/流程图/u.test(stepText(3)), "第四步画实现思路流程图");
+// 拍数/延迟要写成可判定的拍数(实测教训:只验数值的判据挡不住"结果晚一拍"这类错位)
+check(
+  /拍数\/延迟类判据要写成拍数/u.test(specSkill) && /不比对时机的判据挡不住时序错位|只比对数值/u.test(specSkill),
+  "规格技能要求:延迟/拍数类判据写成具体拍数,并说明只验数值挡不住时序错位"
+);
 // 第五步:测试平台 + 输入数据 + 对照数据 + 比对格式(有则请用户给,没有则自己定)
 const dataStep = stepText(4);
 check(/测试平台/u.test(dataStep), "第五步问测试平台的实现要求");

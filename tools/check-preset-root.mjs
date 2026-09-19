@@ -273,25 +273,75 @@ check(projectSkills.length === 9, `工程级 9 个(实际 ${projectSkills.length
 
 // ── fpga-module-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
 //
-// 顺序:① 先定做模块还是做工程(没说就问) → ② 问器件(不同器件写法不一样) →
-// ③ 讨论方案(含"要不要用 Python 写参考模型") → ④ 画实现思路流程图让他确认。
+// 顺序:① 先定做模块还是做工程(没说就问) → ② 问器件(器件决定写法) →
+// ③ 讨论方案(含"要不要用 Python 写参考模型") → ④ 画实现思路流程图让用户确认 →
+// ⑤ 明确测试平台的实现要求与输入/输出数据来源 → ⑥ 明确比对(comp)的要求与对照数据来源。
+// (⑤⑥ 都是"有要求就按用户的,没有就自己定"。)
 // 顺序错了等于第一句话就问偏(比如先问功能、把方向与器件留到最后),所以按位置钉住。
 const specSkill = readFileSync(join(skillDir, "fpga-module-spec", "SKILL.md"), "utf8");
-const stepAt = ["第一步", "第二步", "第三步", "第四步"].map((step) => specSkill.indexOf(`## ${step}:`));
+const STEPS = ["第一步", "第二步", "第三步", "第四步", "第五步", "第六步"];
+const stepAt = STEPS.map((step) => specSkill.indexOf(`## ${step}:`));
 check(
   stepAt.every((at) => at >= 0),
-  `fpga-module-spec 写明了一到四步(缺:${["第一步", "第二步", "第三步", "第四步"].filter((_, index) => stepAt[index] < 0).join("、") || "无"})`
+  `fpga-module-spec 写明了一到六步(缺:${STEPS.filter((_, index) => stepAt[index] < 0).join("、") || "无"})`
 );
-check(stepAt.every((at, index) => index === 0 || at > stepAt[index - 1]), "四步按顺序排列");
+check(stepAt.every((at, index) => index === 0 || at > stepAt[index - 1]), "六步按顺序排列");
 const stepText = (index) => specSkill.slice(stepAt[index], stepAt[index + 1] ?? specSkill.length);
 check(stepText(0).includes("模块") && stepText(0).includes("工程"), "第一步先定「做模块还是做工程」");
 check(stepText(0).includes("fpga-project-spec"), "第一步把「做工程」指向 fpga-project-spec");
-check(stepText(1).includes("器件") && /写法不一样|写法要改/u.test(stepText(1)), "第二步问器件,并说明为什么(不同器件写法不一样)");
+check(
+  stepText(1).includes("器件") && /写法/u.test(stepText(1)),
+  "第二步确定器件,并说明为什么(器件决定写法)"
+);
 check(stepText(2).includes("参考"), "第三步里有「先建参考,再定方案」");
 check(/Python/u.test(stepText(2)), "第三步问用户要不要用 Python 写参考模型");
 check(/流程图/u.test(stepText(3)), "第四步画实现思路流程图");
+// 第五步:测试平台要求 + 输入/输出数据(有则请用户给,没有则自己定)
+const dataStep = stepText(4);
+check(/测试平台/u.test(dataStep), "第五步问测试平台的实现要求");
+check(/输入数据/u.test(dataStep) && /输出数据/u.test(dataStep), "第五步问输入与输出数据");
+check(
+  /请用户提供|请其提供|由用户提供/u.test(dataStep) && /自己确定|本环节确定|由本环节决定/u.test(dataStep),
+  "第五步写明:用户有要求就按用户的,没有就自己定"
+);
+// 六个步骤是讨论环节,不是问卷:每步都要先写清"要定下来的结论",再写讨论内容与注意事项
+check(/讨论的顺序,不是问卷|不是问卷/u.test(specSkill), "开篇点明六步是讨论顺序、不是问卷");
+for (const [index, step] of STEPS.entries()) {
+  check(
+    /要定下来的/u.test(stepText(index)),
+    `${step} 写清了这一步要定下来的结论(而不是只列问题)`
+  );
+}
+check(
+  STEPS.every((_, index) => /注意/.test(stepText(index)) || index === 0),
+  "各步把易错点放在「注意」里,与讨论内容分开"
+);
+// 第六步:比对(comp)的要求与对照数据 —— 与第五步同一套问法
+const compStep = stepText(5);
+check(/比对/u.test(compStep), "第六步问比对(comp)的要求");
+check(
+  /golden|对照数据/u.test(compStep) && /请用户提供|请其提供/u.test(compStep),
+  "第六步问对照数据从哪来、用户有就请他给"
+);
+check(/NOT_APPLICABLE/u.test(compStep), "第六步说明:不需要比对的模块记 NOT_APPLICABLE");
+check(/样本/u.test(compStep), "第六步明确样本规模(0 样本不得判 PASS)");
 // 器件必须先于流程图:器件会影响流程图里的原语/资源选择
 check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
+
+// 原型是三个环节共同的参考(用户明确要求):写 RTL 照它、测试平台拿它的输出当期望、
+// 比对拿它当 golden 来源 —— 曾经只写了"comp 的参考模型来源",漏了另外两处。
+const prototypeText = stepText(2);
+check(/原型/u.test(prototypeText), "第三步讲了 Python 原型");
+check(
+  ["RTL", "测试平台", "比对"].every((word) => prototypeText.includes(word)),
+  "第三步写明原型是 RTL / 测试平台 / 比对共同的参考"
+);
+for (const downstream of ["fpga-module-sim", "fpga-module-comp"]) {
+  check(
+    /原型/u.test(readFileSync(join(skillDir, downstream, "SKILL.md"), "utf8")),
+    `${downstream} 去到 spec 里的原型拿参考(不然这条参考链是断的)`
+  );
+}
 //
 // 这一条是那份《轻量化优化建议》的核心诉求:技能是按需取用的能力地图,不是必经流水线。
 // 口气很容易在以后改文案时长回来,所以钉两条:
@@ -311,7 +361,11 @@ for (const skill of ["fpga-module-spec", "fpga-project-spec"]) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
   check(/^```mermaid$/mu.test(text), `${skill} 里有**独立的** Mermaid 围栏块(不是只在句子里提了句 mermaid)`);
   check(/流程图|框图/u.test(text), `${skill} 要求把实现思路画出来`);
-  check(/确认/u.test(text) && /(他没|他点头|他确认|图没确认)/u.test(text), `${skill} 要求画完让用户确认`);
+  // 确认必须与"图"绑在一起(只说"确认"可能是确认别的);措辞不限,断言的是这条关系
+  check(
+    /图[^。]{0,30}确认|确认[^。]{0,30}图/u.test(text),
+    `${skill} 要求画完让用户确认(确认与流程图绑在一起)`
+  );
   check(/5~15|5-15|5～15/u.test(text), `${skill} 给了规模上限(图太大反而看不清)`);
 }
 

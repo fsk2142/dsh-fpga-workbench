@@ -138,7 +138,7 @@ function main() {
   const convention = findConvention(start);
   if (convention === undefined) {
     console.error(`从 ${resolve(start)} 向上没找到 .fpga-workbench.json`);
-    console.error("这个文件是整套流程的锚点:它在哪,阶段文件夹就在哪。先跑 fpga-spec 那个技能把它建出来。");
+    console.error("这个文件是整套流程的锚点:它在哪,阶段文件夹就在哪。先跑 fpga-module-spec 那个技能把它建出来。");
     return 2;
   }
 

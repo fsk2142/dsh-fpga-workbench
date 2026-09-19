@@ -1,9 +1,9 @@
 ---
-name: fpga-review
+name: fpga-module-review
 description: 审 FPGA 代码、方案或验收结论时用:审查 RTL 结构与命名、时钟复位与跨时钟域处理、接口握手、设计断言、验收判据覆盖、参考模型独立性、时序约束。支持局部审查与早期风险审查;正式结论给 approved / changes requested / blocked。
 ---
 
-# review:代码审查
+# module-review:代码审查
 
 ## 三种审法(按用户要什么选)
 

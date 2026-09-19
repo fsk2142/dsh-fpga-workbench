@@ -239,6 +239,14 @@ for (const skill of skillNames) {
   }
   check(meta?.name === skill, `${skill} 的 frontmatter name 与目录名一致(实际 ${JSON.stringify(meta?.name)})`);
   check(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(String(meta?.name)), `${skill} 的名字是 kebab-case(技能名的合法字符集)`);
+  // 命名统一:模块类 fpga-module-*、工程类 fpga-project-*(用户要求对称);
+  // 一级标题去掉 fpga- 前缀,与技能名一致(`# module-lint:…` / `# project-impl:…`)
+  check(
+    /^fpga-(module|project)-/u.test(skill),
+    `${skill} 带级别前缀(module- 或 project-)`
+  );
+  const heading = /^# ([a-z-]+):/mu.exec(readFileSync(file, "utf8"))?.[1];
+  check(heading === skill.replace(/^fpga-/u, ""), `${skill} 的一级标题与技能名一致(实际 ${String(heading)})`);
   check(typeof meta?.description === "string" && meta.description.length > 0, `${skill} 写了 description(否则加载器直接忽略)`);
   // 触发场景要写在 description 里(那张能力地图靠它选技能),不能只写"某阶段之后使用"
   check(
@@ -253,16 +261,26 @@ for (const skill of skillNames) {
   );
 }
 
-// ── fpga-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
+// ── 级别划分清楚:模块 7 个 / 工程 9 个 ──────────────────────────────────────
+const moduleSkills = skillNames.filter((name) => name.startsWith("fpga-module-"));
+const projectSkills = skillNames.filter((name) => name.startsWith("fpga-project-"));
+check(
+  moduleSkills.length + projectSkills.length === skillNames.length,
+  `每个技能都能看出属于哪一级(没前缀的:${skillNames.filter((name) => !/^fpga-(module|project)-/u.test(name)).join("、") || "无"})`
+);
+check(moduleSkills.length === 7, `模块级 7 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
+check(projectSkills.length === 9, `工程级 9 个(实际 ${projectSkills.length}:${projectSkills.join("、")})`);
+
+// ── fpga-module-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
 //
 // 顺序:① 先定做模块还是做工程(没说就问) → ② 问器件(不同器件写法不一样) →
 // ③ 讨论方案(含"要不要用 Python 写参考模型") → ④ 画实现思路流程图让他确认。
 // 顺序错了等于第一句话就问偏(比如先问功能、把方向与器件留到最后),所以按位置钉住。
-const specSkill = readFileSync(join(skillDir, "fpga-spec", "SKILL.md"), "utf8");
+const specSkill = readFileSync(join(skillDir, "fpga-module-spec", "SKILL.md"), "utf8");
 const stepAt = ["第一步", "第二步", "第三步", "第四步"].map((step) => specSkill.indexOf(`## ${step}:`));
 check(
   stepAt.every((at) => at >= 0),
-  `fpga-spec 写明了一到四步(缺:${["第一步", "第二步", "第三步", "第四步"].filter((_, index) => stepAt[index] < 0).join("、") || "无"})`
+  `fpga-module-spec 写明了一到四步(缺:${["第一步", "第二步", "第三步", "第四步"].filter((_, index) => stepAt[index] < 0).join("、") || "无"})`
 );
 check(stepAt.every((at, index) => index === 0 || at > stepAt[index - 1]), "四步按顺序排列");
 const stepText = (index) => specSkill.slice(stepAt[index], stepAt[index + 1] ?? specSkill.length);
@@ -277,7 +295,7 @@ check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
 //
 // 这一条是那份《轻量化优化建议》的核心诉求:技能是按需取用的能力地图,不是必经流水线。
 // 口气很容易在以后改文案时长回来,所以钉两条:
-// - 提示词里不许出现阶段箭头链(曾经是 `fpga-spec → fpga-lint → …`)
+// - 提示词里不许出现阶段箭头链(曾经是 `fpga-module-spec → fpga-module-lint → …`)
 // - 提示词必须写明"能力地图 / 不是必经流水线"
 const persona = /prefix: \|-([\s\S]*?)\n\n- id: /u.exec(readFileSync(join(presetDir, "agent.cordis.yml"), "utf8"))?.[1] ?? "";
 check(persona !== "", "读得到 persona 的 prefix");
@@ -289,7 +307,7 @@ check(/用户当前的问题|用户当前任务/u.test(persona), "提示词把'�
 check(/流程图/u.test(persona) && /确认/u.test(persona), "提示词要求'把实现思路画成图给他确认'");
 
 // 两个 spec 技能都要真的要求画图(不是只在提示词里提一句)
-for (const skill of ["fpga-spec", "fpga-project-spec"]) {
+for (const skill of ["fpga-module-spec", "fpga-project-spec"]) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
   check(/^```mermaid$/mu.test(text), `${skill} 里有**独立的** Mermaid 围栏块(不是只在句子里提了句 mermaid)`);
   check(/流程图|框图/u.test(text), `${skill} 要求把实现思路画出来`);

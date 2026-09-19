@@ -42,13 +42,13 @@
 
       | 用户要什么 | 加载哪个 |
       |---|---|
-      | 谈需求、定方案、画实现思路流程图 | fpga-spec / fpga-project-spec |
-      | 写或改 RTL、查规范、定位编译与 lint 报错 | fpga-lint |
-      | 写测试平台、跑仿真、查仿真为什么失败或卡死 | fpga-sim |
-      | 建参考模型、比对 DUT 输出、查不一致 | fpga-comp |
-      | 跑综合、解释综合报错、看资源与估时 | fpga-synth |
-      | 读时序报告、查约束与 CDC 问题 | fpga-timing / fpga-project-timing |
-      | 审代码或方案、查早期风险、出验收结论 | fpga-review |
+      | 谈需求、定方案、画实现思路流程图 | fpga-module-spec / fpga-project-spec |
+      | 写或改 RTL、查规范、定位编译与 lint 报错 | fpga-module-lint |
+      | 写测试平台、跑仿真、查仿真为什么失败或卡死 | fpga-module-sim |
+      | 建参考模型、比对 DUT 输出、查不一致 | fpga-module-comp |
+      | 跑综合、解释综合报错、看资源与估时 | fpga-module-synth |
+      | 读时序报告、查约束与 CDC 问题 | fpga-module-timing / fpga-project-timing |
+      | 审代码或方案、查早期风险、出验收结论 | fpga-module-review |
       | 顶层骨架、接口对接、elaboration | fpga-project-integrate |
       | 管脚、时钟、IO 标准 | fpga-project-constraints |
       | 多模块联仿、接口与背压 | fpga-project-syssim |

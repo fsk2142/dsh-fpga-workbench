@@ -1,9 +1,9 @@
 ---
-name: fpga-synth
+name: fpga-module-synth
 description: 综合 FPGA 模块时用:建模块工程、跑综合、判断综合过没过、解释综合报错、看资源占用与估时;也用于确定或更换目标器件与综合策略。也支持"只想评估一下资源/能不能收敛"的探索性综合。
 ---
 
-# synth:综合
+# module-synth:综合
 
 **两种用法,别混为一谈:**
 
@@ -13,7 +13,7 @@ description: 综合 FPGA 模块时用:建模块工程、跑综合、判断综合
 
 ## 前置
 
-1. 找约定文件 `.fpga-workbench.json`(模块根),见 `fpga-spec`
+1. 找约定文件 `.fpga-workbench.json`(模块根),见 `fpga-module-spec`
 2. `spec/spec.md` 里要有**目标器件与封装** —— 没定就别开综合
 3. **建议** `lint` 已 PASS、`sim` 已 PASS(没仿真就综合,容易把问题拖到时序那一关才发现)——
    但正在定位综合报错、或用户只想要一次资源评估时,不必先回去补前面的环节

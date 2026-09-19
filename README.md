@@ -141,6 +141,20 @@ FPGA 工具链的信息与警告,与"不影响正常会话"冲突。所以工具
 `includeDefaultRoots` 保持默认的 `true`:你的工作区技能与用户技能在本模式下**照常可见**,
 这里是追加,不是替换。
 
+**注意技能是从 `~/.dsh/.agent-presets/<id>/skills/` 扫的,不是从包里扫的** —— 启动时
+`ensureUserPreset` 把包内预设同步进用户预设目录(`cpSync`,只合并不删)。所以**包内删掉或改名的
+技能,用户目录里那份不会自己消失**,还照样被加载(改一次技能名就会新旧两套同时生效)。
+为此同步时做三件事,顺序不能反:
+
+1. **先备份**:用户改过或新增的文件,连同"包内已删的旧文件"一起,备份到
+   `$DSH_HOME/.fpga-workbench-backup/<时间>/`;
+2. **再清掉包里已经没有的**:上次清单里记过的,加上 **`skills/` 下所有包内已没有的**
+   (技能留着就直接改变 AI 行为,不能等清单);
+3. **同步并写清单** `$DSH_HOME/.fpga-workbench-backup/synced-files.json`(记我们写过哪些文件;
+   放预设目录**外面**,否则"两棵树是否一致"永远为假、每次启动都白同步)。
+
+用户自己在预设目录里加的东西(不在清单、也不在 `skills/` 下)一律不动。
+
 ## 三条必须知道的约束
 
 **一、`files` 白名单必须包含 `lib` 与 `presets`。**
@@ -194,13 +208,13 @@ node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件�
 
   | 技能 | 干什么 | 结果落在哪 |
   |---|---|---|
-  | `fpga-spec` | 讨论与规格:谈功能 → 建参考(翻资料 / Python 原型)→ 落规格 | `spec/spec.md` |
-  | `fpga-lint` | 写完 RTL 统一检查:Verilator + 规范逐条对 | `lint/lint.md` |
-  | `fpga-sim` | 功能仿真:命令行 vsim,测试平台自检 + 看门狗 | `sim/sim.md` |
-  | `fpga-comp` | 与参考模型 / golden 比对,差异归属 | `comp/comp.md` |
-  | `fpga-synth` | Vivado 批处理综合(频率是观察值,不是门禁) | `synth/synth.md` |
-  | `fpga-timing` | 读综合后时序报告:约束是否干净 + CDC | `timing/timing.md` |
-  | `fpga-review` | 审查:AC 覆盖、结构、跨域、握手、独立性 | `review/review.md` |
+  | `fpga-module-spec` | 讨论与规格:谈功能 → 建参考(翻资料 / Python 原型)→ 落规格 | `spec/spec.md` |
+  | `fpga-module-lint` | 写完 RTL 统一检查:Verilator + 规范逐条对 | `lint/lint.md` |
+  | `fpga-module-sim` | 功能仿真:命令行 vsim,测试平台自检 + 看门狗 | `sim/sim.md` |
+  | `fpga-module-comp` | 与参考模型 / golden 比对,差异归属 | `comp/comp.md` |
+  | `fpga-module-synth` | Vivado 批处理综合(频率是观察值,不是门禁) | `synth/synth.md` |
+  | `fpga-module-timing` | 读综合后时序报告:约束是否干净 + CDC | `timing/timing.md` |
+  | `fpga-module-review` | 审查:AC 覆盖、结构、跨域、握手、独立性 | `review/review.md` |
 
   入口是**按需取用**,不是阶段流水线:写一个模块时通常走 spec → lint → sim(→ comp / synth /
   timing)→ review,但每一步都可以单独调用,出问题就回到那一步重来,不必补齐整条链。

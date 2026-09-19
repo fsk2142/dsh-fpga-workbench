@@ -379,8 +379,18 @@ const stale = staleShippedFiles(staleSource, staleTarget, shippedBefore);
 check(stale.includes("skills/gone/SKILL.md"), "上次是我们写的、包里已删的文件会被清掉", JSON.stringify(stale));
 check(!stale.includes("skills/keep-me/SKILL.md"), "包里还提供的文件不动");
 check(!stale.includes("用户自己的笔记.md"), "用户自己加的文件不在清单里 → 不删");
-check(staleShippedFiles(staleSource, staleTarget, undefined).length === 0, "没有清单时什么都不删(首次升级宁可留着)");
 check(listFiles(staleSource).join(",") === "skills/keep-me/SKILL.md", "listFiles 给出相对路径且用 / 分隔");
+
+// 技能这类"留着就直接改变 AI 行为"的目录:即使没有清单(第一次升级、或技能刚改名)也要清 ——
+// 否则一次改名会让新旧两套技能同时被加载。
+const noManifest = staleShippedFiles(staleSource, staleTarget, undefined);
+check(noManifest.includes("skills/gone/SKILL.md"), "没有清单时,skills/ 下包内已没有的文件仍然清掉");
+check(!noManifest.includes("用户自己的笔记.md"), "没有清单时,清单外且不在 skills/ 下的文件照样不删");
+// 清单里记过、但位于 skills/ 之外的(比如旧模板):按清单删
+writeFileSync(join(staleTarget, "旧模板.sv"), "包里已经没有的模板\n");
+const withManifest = staleShippedFiles(staleSource, staleTarget, [...shippedBefore, "旧模板.sv"]);
+check(withManifest.includes("旧模板.sv"), "清单里记过、位于 skills/ 之外的文件按清单删");
+check(!staleShippedFiles(staleSource, staleTarget, undefined).includes("旧模板.sv"), "没有清单时不动 skills/ 之外的文件");
 
 // ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
 //

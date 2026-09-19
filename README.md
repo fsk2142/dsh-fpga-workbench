@@ -17,11 +17,25 @@
 ## 安装
 
 ```powershell
-# 从工作区(开发时用)
+# 从本机工作区(开发时用)
 dsh plugin --profile desktop add file:C:\Work\dsh-fpga-workbench
+
+# 从 git 仓库(换机器、或不想带着源码目录时用)
+dsh plugin --profile desktop add git+ssh://git@github.com/fsk2142/dsh-fpga-workbench.git
 ```
 
 装完**重启 DSH Desktop**,新建会话时预设选择器里就会出现「FPGA 开发模式」。
+
+**git 装法要知道的三件事**:
+
+1. **不需要构建步骤**。`lib/` 里是可执行的 JS,没有编译产物 —— 包直接就能跑,
+   所以仓库里没有 `prepare` / `dist`。git 装法取的是**仓库检出**(不是 `pnpm pack` 的产物),
+   因此开发自检目录 `tools/` 与 `.tmp/` 也会被一起取下来;前者只是开发用的守卫脚本、
+   不参与加载(`exports` 只暴露 `lib/*` 与 `cordis.patch.yml`),不影响运行。
+2. **要指定分支或标签时**在地址后面加 `#`:`...#v0.4.0` 或 `...#main`。
+   不打标签就跟着 `main` 走,升级时重新 `add` 一次即可。
+3. `pnpm pack` 打出来的 tarball **只含** `lib` / `presets` / `cordis.patch.yml` / `package.json` /
+   `README.md`(`files` 白名单),发布用与 git 装法的内容差异就在这里。
 
 > 刷新安装用 `node C:\Work\dsh-fpga-workbench\tools\install.mjs`(先校验、不一致才重装、
 > 并逐字节校验结果)。**必须在你自己的终端里跑** —— 受限沙箱里 pnpm 无法在 profile

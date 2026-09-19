@@ -2,6 +2,13 @@
 node_modules/
 *.log
 
+# 仿真器的产物(实测踩过:agent 在仓库根跑了一次 vsim,落下 transcript 挂在 git status 上。
+# 它们都属于"跑出来就有、不该进版本库"的那类,和 *.log 一起挡掉)
+transcript
+*.wlf
+work/
+vsim.wlf
+
 # 打包/安装验证的临时区,不放任何源文件
 .tmp/
 

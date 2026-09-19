@@ -397,6 +397,12 @@ check(
   /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-lint", "SKILL.md"), "utf8")),
   "检查技能写明 VHDL 源码不覆盖(记 NOT_APPLICABLE)"
 );
+// 节奏按用户的习惯:写完再统一检查(边写边跑效率低);只保留"排查具体报错时可单查"这个例外
+const lintText = readFileSync(join(skillDir, "fpga-module-lint", "SKILL.md"), "utf8");
+check(
+  /写完[\s\S]{0,16}检查/u.test(lintText) && !/随时可跑/u.test(lintText),
+  "检查技能按用户节奏:写完再统一检查(不是'随时可跑'/'边写边跑')"
+);
 const checkRtlText = readFileSync(join(presetDir, "tools", "check-rtl.mjs"), "utf8");
 check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "check-rtl 认 .v 的 TB,并对 VHDL 有明确交代");
 

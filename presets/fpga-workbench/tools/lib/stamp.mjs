@@ -39,12 +39,13 @@ export function snakeCase(name) {
  * @param kind - `rtl` / `tb` / `xdc`。
  * @param name - 模块名。
  * @param template - 模板路径(扩展名跟着它走,用户模板是 `.vhd` 就出 `.vhd`)。
- * @returns 相对路径;`xdc` 不给默认(由调用方用 `--out` 指定)。
+ * @returns 相对路径:`rtl/<模块名>.<ext>` / `sim/tb_<snake>.<ext>` / `synth/<模块名>.<ext>`。
  */
 export function defaultDestination(kind, name, template) {
   const ext = extname(template);
   if (kind === "rtl") return join("rtl", `${name}${ext}`);
   if (kind === "tb") return join("sim", `tb_${snakeCase(name)}${ext}`);
+  if (kind === "xdc") return join("synth", `${name}${ext}`);
   return undefined;
 }
 

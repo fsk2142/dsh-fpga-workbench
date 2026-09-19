@@ -44,7 +44,7 @@ description: 在开始一个 FPGA 模块、或要改动它的行为时用:先确
 该文件是整套流程的锚点:**其所在目录即环节目录所在目录**。模块根下固定这几个目录:
 
 ```
-spec/  rtl/  sim/  comp/  synth/  timing/
+spec/  rtl/  sim/  verif/  synth/
 ```
 
 - `spec/` 属于本环节:`spec.md` 放规格,`flow.md` 放实现思路流程图,`explore/` 放探索产物
@@ -217,7 +217,7 @@ flowchart LR
 node "<自带命令目录>\spec-scaffold.mjs" <模块根> --kind module
 ```
 
-它写锚点 `.fpga-workbench.json`(kind 与 spec 路径),并建好 `spec/ rtl/ sim/ comp/ synth/ timing/`
+它写锚点 `.fpga-workbench.json`(kind 与 spec 路径),并建好 `spec/ rtl/ sim/ verif/ synth/`
 与 `spec/explore/`。先加 `--dry-run` 看一遍要建什么;已有锚点不会被覆盖(要重建用 `--force`)。
 **它只建目录,不生成空的 spec.md / flow.md / lint.md** —— 那些由讨论与各环节的真运行产出。
 

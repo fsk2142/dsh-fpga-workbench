@@ -1,4 +1,4 @@
-// 自带工具脚本的功能自检(spec-scaffold / rtl-new / rtl-check / sim-new / stage-status)。
+// 自带工具脚本的功能自检(spec-scaffold / rtl-new / rtl-check / sim-new / synth-new)。
 //
 // 为什么必须机器验:这两个脚本是"确定性检查",价值全在判得准。误报一次,人就再也不信它了。
 // 所以这里用真文件跑,断言的是会真出错的性质:
@@ -11,14 +11,13 @@
 // 沙箱限制:node 不能开管道抓子进程输出,所以内容断言直接 import 函数;退出码单独用
 // spawnSync(stdio:"ignore") 验(不开管道,能拿到 status)。
 import { spawnSync } from "node:child_process";
-import { existsSync, copyFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/rtl-check.mjs";
 import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/spec-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
-import { collect, findConvention, readVerdict } from "../presets/fpga-workbench/tools/stage-status.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
@@ -97,9 +96,6 @@ writeFileSync(join(SANDBOX, "good-mod", "sim", "tb_good.sv"), goodTb);
 writeFileSync(join(SANDBOX, "bad-mod", "rtl", "bad.sv"), badRtl);
 writeFileSync(join(SANDBOX, "bad-mod", "ip", "vendor.sv"), badRtl); // ip/ 不该被扫
 writeFileSync(join(SANDBOX, ".fpga-workbench.json"), JSON.stringify({ kind: "module", spec: "spec/spec.md" }));
-// 机械检查报告与 RTL 同目录;审查报告在模块根(按需,不占目录)
-writeFileSync(join(SANDBOX, "status-demo", "rtl", "lint.md"), "# lint\n\n- 结论:PASS\n");
-writeFileSync(join(SANDBOX, "status-demo", "sim", "sim.md"), "# sim\n\n跑了一遍,没有发现异常。\n");
 
 // ── check-rtl:合规与违规 ────────────────────────────────────────────────────
 const blocking = (file, isTb) => checkFile(file, isTb);
@@ -161,51 +157,6 @@ check(
 check(scanned.some((file) => file.endsWith("bad.sv")), "rtl/ 下的源码被收到");
 check(!scanned.some((file) => file.includes("/work/")), "跳过 work/ 这类生成目录(仿真库不在检查范围)");
 
-// ── stage-status ───────────────────────────────────────────────────────────
-check(
-  findConvention(join(SANDBOX, "status-demo", "rtl")) === join(SANDBOX, ".fpga-workbench.json"),
-  "从子目录向上能找到约定文件"
-);
-check(findConvention(join(ROOT, "tools")) === undefined, "没有约定文件时返回 undefined(调用方要退 2)");
-// 环节名是 rtl,但报告文件叫 lint.md(报告与 RTL 同目录)—— 两者都要对上
-check(readVerdict(join(SANDBOX, "status-demo", "rtl", "lint.md"), "rtl")?.verdict === "PASS", "读得出 `结论:PASS`");
-
-const fullWidth = join(SANDBOX, "status-demo", "sim", "full.md");
-writeFileSync(fullWidth, "# sim\n\n结论：FAIL\n");
-check(readVerdict(fullWidth, "sim")?.verdict === "FAIL", "全角冒号的结论也认");
-writeFileSync(join(SANDBOX, "status-demo", "spec.md"), "spec_state: confirmed\n");
-check(readVerdict(join(SANDBOX, "status-demo", "spec.md"), "spec")?.verdict === "CONFIRMED", "spec 环节用 spec_state 兜底");
-
-// SANDBOX 不清理:上一次跑留下的 review.md 会让"未做(按需)"这条测不准,先清掉。
-// spec/spec.md 则一律重写,保证两条断言既确定又能反复跑。
-const reviewFile = join(SANDBOX, "status-demo", "review.md");
-if (existsSync(reviewFile)) unlinkSync(reviewFile);
-mkdirSync(join(SANDBOX, "status-demo", "spec"), { recursive: true });
-writeFileSync(join(SANDBOX, "status-demo", "spec", "spec.md"), "spec_state: confirmed\n");
-
-const rows = collect(join(SANDBOX, "status-demo"), ["spec", "rtl", "sim", "comp", "review"]);
-const byStage = new Map(rows.map((row) => [row.stage, row.state]));
-check(byStage.get("rtl") === "PASS", `rtl 读的是 rtl/lint.md(实际 ${String(byStage.get("rtl"))})`);
-check(byStage.get("sim") === "有产物但没写结论", `没写结论的文件被认出来(实际 ${String(byStage.get("sim"))})`);
-check(byStage.get("comp") === "未开始", `没有目录的环节是"未开始"(实际 ${String(byStage.get("comp"))})`);
-check(byStage.get("spec") === "CONFIRMED", `spec 读的是 spec/spec.md 里的 spec_state(实际 ${String(byStage.get("spec"))})`);
-check(byStage.get("review") === "未做(按需)", `审查没做过时是"未做(按需)",不误报成未开始(实际 ${String(byStage.get("review"))})`);
-
-// 审查的结论是 approved / changes requested / blocked —— 读不出来就等于审查白做
-// (认不出来只影响显示:这个脚本是汇总,不是门禁)
-writeFileSync(reviewFile, "# review\n\n结论:APPROVED\n");
-check(readVerdict(reviewFile, "review")?.verdict === "APPROVED", "读得出 `结论:APPROVED`");
-const reviewRow = collect(join(SANDBOX, "status-demo"), ["review"]).at(0);
-check(reviewRow.state === "APPROVED" && reviewRow.valid === true, "审查结论被当成合法取值(实际 " + String(reviewRow.state) + "/" + String(reviewRow.valid) + ")");
-writeFileSync(reviewFile, "# review\n\n结论:CHANGES_REQUESTED\n");
-check(
-  readVerdict(reviewFile, "review")?.verdict === "CHANGES_REQUESTED"
-    && collect(join(SANDBOX, "status-demo"), ["review"]).at(0).valid === true,
-  "读得出 `结论:CHANGES_REQUESTED`"
-);
-writeFileSync(reviewFile, "# review\n\n结论:changes requested\n");
-check(readVerdict(reviewFile, "review")?.verdict === "CHANGES", "写成两词也至少读得出前半(不 gag)");
-
 // 外来代码(厂商 IP / 他人模块)放 rtl/ip/ —— 它不按本模块的格式规范检查,不跳过就会成片误报
 mkdirSync(join(SANDBOX, "ip-skip-mod", "rtl", "ip"), { recursive: true });
 writeFileSync(join(SANDBOX, "ip-skip-mod", "rtl", "good.sv"), goodRtl);
@@ -222,10 +173,14 @@ check(
 const stamp = String(Date.now());
 const scaffoldMod = join(SANDBOX, `scaffold-mod-${stamp}`);
 const modulePlan = planScaffold(scaffoldMod, { kind: "module" });
-check(modulePlan.dirs.length === 7, `模块级骨架 7 个目录(6 个环节 + spec/explore;实际 ${modulePlan.dirs.length})`);
+check(modulePlan.dirs.length === 6, `模块级骨架 6 个目录(5 个环节 + spec/explore;实际 ${modulePlan.dirs.length})`);
 check(
   modulePlan.dirs.some((dir) => dir.endsWith("rtl")) && !modulePlan.dirs.some((dir) => dir.endsWith("lint")),
   "机械检查报告跟 RTL 同目录,所以不建 lint/ 目录"
+);
+check(
+  modulePlan.dirs.some((dir) => dir.endsWith("verif")) && !modulePlan.dirs.some((dir) => dir.endsWith("comp")),
+  "验证环节的目录是 verif/(不叫 comp)"
 );
 check(
   !modulePlan.dirs.some((dir) => dir.endsWith("review")),
@@ -273,11 +228,11 @@ check(
 );
 check(projectPlan.dirs.some((dir) => dir.endsWith(join("project", "board"))), "建了工程级的 board/");
 check(
-  projectPlan.dirs.some((dir) => dir.endsWith(join("uart", "sim"))) && projectPlan.dirs.some((dir) => dir.endsWith(join("ddr", "timing"))),
+  projectPlan.dirs.some((dir) => dir.endsWith(join("uart", "sim"))) && projectPlan.dirs.some((dir) => dir.endsWith(join("ddr", "synth"))),
   "每个模块各自一套模块级文件夹"
 );
 
-// ── new-file:按模板起文件(只替模块名,内容原样保留) ──────────────────────
+// ── 起文件(rtl-new / sim-new / synth-new:各环节一个入口,只替模块名) ──────
 const bundledRtl = readFileSync(join(TEMPLATES, "rtl.sv"), "utf8");
 const rendered = renderTemplate(bundledRtl, "UartRx");
 check(rendered.replaced.join(",") === "ModuleName", `只替模块名(实际替了 ${rendered.replaced.join("、") || "无"})`);
@@ -299,7 +254,7 @@ check(
   "测试平台落到 sim/tb_<snake>.sv(驼峰转下划线)"
 );
 check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("sim", "tb_uart_rx.vhd"), "扩展名跟着模板走");
-check(defaultDestination("xdc", "UartRx", "C:/t/c.xdc") === undefined, "约束文件不给默认位置(不瞎猜)");
+check(defaultDestination("xdc", "UartRx", "C:/t/c.xdc") === join("synth", "UartRx.xdc"), "约束文件落 synth/<模块名>.xdc");
 
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
 const run = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: "ignore" }).status;
@@ -320,19 +275,27 @@ check(run("rtl-check.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规
 check(run("rtl-check.mjs", [join(SANDBOX, "bad-mod")]) === 1, "check-rtl 违规 → 退出码 1");
 check(run("rtl-check.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有警告 → 退出码 0(警告不拦门禁)");
 check(run("rtl-check.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
-check(run("stage-status.mjs", [join(SANDBOX, "status-demo")]) === 0, "stage-status 有约定文件 → 0");
-check(run("stage-status.mjs", [join(ROOT, "tools")]) === 2, "stage-status 没约定文件 → 2");
-check(run("spec-scaffold.mjs", []) === 2, "init-scaffold 不给根目录 → 退出码 2");
-// new-file:起文件、不覆盖已有文件、模板不存在要报错
+check(run("spec-scaffold.mjs", []) === 2, "spec-scaffold 不给根目录 → 退出码 2");
+// 起文件:不覆盖已有文件、模板不存在要报错
 const newFileRoot = join(SANDBOX, `new-file-${stamp}`);
 check(
   run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 0,
-  "new-file 按模板起文件 → 退出码 0"
+  "rtl-new 按模板起文件 → 退出码 0"
 );
 check(existsSync(join(newFileRoot, "rtl", "uart_rx.sv")), "RTL 落在 rtl/ 下");
 check(
   run("rtl-check.mjs", [newFileRoot]) === 0,
   "模板生成的文件直接过机械检查(骨架开箱合规)"
+);
+check(
+  run("sim-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "tb.sv")]) === 0
+    && existsSync(join(newFileRoot, "sim", "tb_uart_rx.sv")),
+  "sim-new 把测试平台落在 sim/tb_<模块名>.sv"
+);
+check(
+  run("synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0
+    && existsSync(join(newFileRoot, "synth", "uart_rx.xdc")),
+  "synth-new 把约束落在 synth/<模块名>.xdc"
 );
 check(
   run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 1,

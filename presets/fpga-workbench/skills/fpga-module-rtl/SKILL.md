@@ -152,8 +152,7 @@ node "<自带命令目录>\rtl-check.mjs" <模块目录>
 
 ## 产物
 
-写 `<模块根>/rtl/lint.md`(报告与 RTL 同目录:`rtl/` 既是源码目录,也放本环节的检查结论;
-`stage-status` 按此位置读结论)。内容:
+写 `<模块根>/rtl/lint.md`(报告与 RTL 同目录:`rtl/` 既是源码目录,也放本环节的检查结论)。内容:
 
 - **结论**:`PASS` / `FAIL` / `BLOCKED` / `NOT_APPLICABLE`
 - 执行过的**命令原文**(可直接复现)

@@ -49,7 +49,7 @@ presets/fpga-workbench/
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
     templates/                自带模板:rtl.sv / tb.sv / constraints.xdc(写法规范的载体)
-    tools/                    自带命令:spec-scaffold.mjs(建骨架)/ rtl-new.mjs + sim-new.mjs(按模板起文件)/ rtl-check.mjs(规范检查)/ stage-status.mjs(汇总);lib/ 是内部模块
+    tools/                    自带命令:spec-scaffold.mjs(建骨架)/ rtl-new.mjs + sim-new.mjs + synth-new.mjs(按模板起文件)/ rtl-check.mjs(规范检查);lib/ 是内部模块
 tools/                        8 个自检 + install.mjs + 依赖安全/锁文件比对
 ```
 
@@ -66,7 +66,7 @@ tools/                        8 个自检 + install.mjs + 依赖安全/锁文件
 | RTL | `node presets/fpga-workbench/tools/rtl-new.mjs <模块根> <模块名> --template <RTL 模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起 RTL 文件:复制模板、**只替模块名**,其余内容原样保留;默认落 `rtl/<模块名>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 | RTL | `node presets/fpga-workbench/tools/rtl-check.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
 | 仿真 | `node presets/fpga-workbench/tools/sim-new.mjs <模块根> <模块名> --template <测试平台模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起测试平台;默认落 `sim/tb_<模块名>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
-| 汇总 | `node presets/fpga-workbench/tools/stage-status.mjs <目录>` | 各环节状态汇总:读各环节结果里的 `结论:...`,一眼看出做到哪了 | 0 正常 / 2 找不到 `.fpga-workbench.json` |
+| 综合 | `node presets/fpga-workbench/tools/synth-new.mjs <模块根> <模块名> --template <约束模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起约束文件;默认落 `synth/<模块名>.xdc` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 
 另外两条规则与旧包一致,不要自行加严:
 
@@ -209,20 +209,19 @@ node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件�
 
 - ✅ 模式本身可用:预设随插件走,选择器里可选
 - ✅ 五个路径可用:设置页配置 → 宿主核对存在性 → **本模式的会话提示**拿到路径与调用姿势
-- ✅ **模块开发的七个阶段技能**(`presets/fpga-workbench/skills/`),按阶段加载,一个阶段一个:
+- ✅ **模块开发的五个环节技能**(`presets/fpga-workbench/skills/`),按需加载,一个环节一个:
 
-  | 技能 | 干什么 | 结果落在哪 |
-  |---|---|---|
-  | `fpga-module-spec` | 讨论与规格:定方向(模块/工程)→ 定器件 → 方案(参考模型)→ 实现思路流程图(用户确认)→ 测试平台与数据 → 比对与对照数据;收尾用脚本一次建骨架 | `spec/spec.md` + `spec/flow.md` |
-  | `fpga-module-rtl` | 写 RTL(用设置里的模板起文件)+ 编译器检查 + 规范逐条对 | `rtl/`(报告 `rtl/lint.md`) |
-  | `fpga-module-sim` | 功能仿真:命令行 vsim,测试平台自检 + 看门狗 | `sim/sim.md` |
-  | `fpga-module-comp` | 与参考模型 / golden 比对,差异归属 | `comp/comp.md` |
-  | `fpga-module-synth` | Vivado 批处理综合(频率是观察值,不是门禁) | `synth/synth.md` |
-  | `fpga-module-timing` | 读综合后时序报告:约束是否干净 + CDC | `timing/timing.md` |
-  | `fpga-module-review` | 审查(按需):AC 覆盖、结构、跨域、握手、参考模型独立性 | `<模块根>/review.md`(不占目录) |
+  | 环节 | 技能 | 干什么 | 结果落在哪 |
+  |---|---|---|---|
+  | 规格 | `fpga-module-spec` | **讨论**:定方向(模块/工程)→ 定器件 → 方案(参考模型)→ 实现思路流程图(用户确认)→ 测试平台与数据 → 验证与对照数据;收尾用脚本一次建骨架 | `spec/spec.md` + `spec/flow.md` |
+  | RTL | `fpga-module-rtl` | **编写**:按依据写(接口照 spec、路径照 flow.md、参数照参考资料),模板起文件 + 编译器检查 + 规范逐条对 | `rtl/`(报告 `rtl/lint.md`) |
+  | 仿真 | `fpga-module-sim` | **仿真**:命令行 vsim,测试平台自检 + 看门狗 | `sim/sim.md` |
+  | 验证 | `fpga-module-verif` | **验证**:独立参考模型 / golden 与 DUT 输出比对,差异归属 | `verif/verif.md` |
+  | 综合 | `fpga-module-synth` | **综合门禁 + 综合后时序**:批处理综合;约束是否干净、CDC | `synth/synth.md` + `synth/timing.md` |
+  | 审查 | `fpga-module-review` | 审查(**按需能力,不是环节**):AC 覆盖、结构、跨域、握手、参考模型独立性 | `<模块根>/review.md`(不占目录) |
 
-  入口是**按需取用**,不是阶段流水线:写一个模块时通常走 spec → lint → sim(→ comp / synth /
-  timing)→ review,但每一步都可以单独调用,出问题就回到那一步重来,不必补齐整条链。
+  入口是**按需取用**,不是阶段流水线:写一个模块时通常走 spec → rtl → sim →(verif / synth),
+  但每一步都可以单独调用,出问题就回到那一步重来,不必补齐整条链。
 
   早期雏形 `fpga-module-flow` 已删除(它的产物路径是当初拍定的、已被这些技能取代;
   Git 历史里能翻到)。

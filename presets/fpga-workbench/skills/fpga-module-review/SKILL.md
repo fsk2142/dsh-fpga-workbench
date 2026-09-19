@@ -11,7 +11,7 @@ description: 审 FPGA 代码、方案或验收结论时用:审查 RTL 结构与�
 - **早期风险审查**:模块还没做完也能审。看不出结论的地方就写"未完成 / 未验证",并指出
   最可能出问题之处 —— 此时的价值在于尽早发现方向问题。
 - **验收审查**(`approved` / `changes requested` / `blocked`):**只有这一种**要求证据齐备 ——
-  `rtl`(机械检查)、`sim`、(有比对的)`comp`、(要综合的)`synth` 都得有结论。
+  `rtl`(机械检查)、`sim`、`verif`(有比对的)、(要综合的)`synth` 都得有结论。
 
 前两种不要求前置齐备;缺的环节如实标出即可。第三种里若有环节挂着 `BLOCKED` 或完全没有结论,
 **不得给 `approved`** —— 如实说明缺什么,把结论定为 `changes requested` 或 `blocked`。
@@ -43,7 +43,7 @@ description: 审 FPGA 代码、方案或验收结论时用:审查 RTL 结构与�
 
 ## 产物
 
-写 `<模块根>/review.md`(**审查是按需能力,不占目录**;`stage-status` 按这个位置读结论):
+写 `<模块根>/review.md`(**审查是按需能力,不占目录**):
 
 - **结论行**(汇总命令靠它读进度,写成一个词):
   `结论:APPROVED` / `结论:CHANGES_REQUESTED` / `结论:BLOCKED`

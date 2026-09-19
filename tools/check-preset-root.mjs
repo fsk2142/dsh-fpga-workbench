@@ -261,14 +261,15 @@ for (const skill of skillNames) {
   );
 }
 
-// ── 级别划分清楚:模块 7 个 / 工程 9 个 ──────────────────────────────────────
+// ── 级别划分清楚:模块 6 个 / 工程 9 个 ──────────────────────────────────────
+// 模块级六个 = 五个环节(spec/rtl/sim/verif/synth)+ 审查(按需能力,不占目录)
 const moduleSkills = skillNames.filter((name) => name.startsWith("fpga-module-"));
 const projectSkills = skillNames.filter((name) => name.startsWith("fpga-project-"));
 check(
   moduleSkills.length + projectSkills.length === skillNames.length,
   `每个技能都能看出属于哪一级(没前缀的:${skillNames.filter((name) => !/^fpga-(module|project)-/u.test(name)).join("、") || "无"})`
 );
-check(moduleSkills.length === 7, `模块级 7 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
+check(moduleSkills.length === 6, `模块级 6 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
 check(projectSkills.length === 9, `工程级 9 个(实际 ${projectSkills.length}:${projectSkills.join("、")})`);
 
 // ── fpga-module-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
@@ -341,7 +342,7 @@ check(
   /走不通|不可行/u.test(rtlText) && /改[^。]{0,8}(图|spec)/u.test(rtlText),
   "rtl 技能写明:图走不通要回去改图/规格并重新确认,不得默默换路径"
 );
-for (const reader of ["fpga-module-rtl", "fpga-module-sim", "fpga-module-comp"]) {
+for (const reader of ["fpga-module-rtl", "fpga-module-sim", "fpga-module-verif"]) {
   check(
     /参考资料/u.test(readFileSync(join(skillDir, reader, "SKILL.md"), "utf8")),
     `${reader} 会去 spec 的「参考资料」取参照(参考链不能断)`
@@ -369,34 +370,26 @@ check(
   ["RTL", "测试平台", "比对"].every((word) => prototypeText.includes(word)),
   "第三步写明原型是 RTL / 测试平台 / 比对共同的参考"
 );
-for (const downstream of ["fpga-module-sim", "fpga-module-comp"]) {
+for (const downstream of ["fpga-module-sim", "fpga-module-verif"]) {
   check(
     /原型/u.test(readFileSync(join(skillDir, downstream, "SKILL.md"), "utf8")),
     `${downstream} 去到 spec 里的原型拿参考(不然这条参考链是断的)`
   );
 }
 
-// ── 环节目录契约(用户定过的形态) ──────────────────────────────────────────
+// ── 环节契约(用户定过的形态) ──────────────────────────────────────────────
 //
-// 两处容易漂移、而漂移了又不报错:
-// · spec-scaffold 建的目录 vs stage-status 认的环节 —— 不一致就会出现"建了没人读"或"读一个
-//   不存在的目录"
-// · 报告位置:机械检查报告与 RTL 同目录(`rtl/lint.md`);审查是按需能力,不占目录
+// 模块级就是五个环节:**规格(讨论)→ RTL(编写)→ 仿真 → 验证(比对)→ 综合(门禁 + 综合后时序)**。
+// 这里钉死名字与顺序,防止以后漂回 lint/comp/timing 那套旧名,或又冒出一个"审核环节"。
 const scaffoldSource = readFileSync(join(presetDir, "tools", "spec-scaffold.mjs"), "utf8");
-const statusSource = readFileSync(join(presetDir, "tools", "stage-status.mjs"), "utf8");
 const scaffoldStages = JSON.parse(/MODULE_STAGES = (\[[^\]]*\])/u.exec(scaffoldSource)[1]);
-const statusStages = JSON.parse(/MODULE_STAGES = (\[[^\]]*\])/u.exec(statusSource)[1]);
-check(scaffoldStages.includes("rtl"), `骨架建 rtl/ 目录(实际 ${scaffoldStages.join("、")})`);
-check(!scaffoldStages.includes("lint"), "骨架不建 lint/ 目录(报告跟 RTL 放一起)");
-check(!scaffoldStages.includes("review"), "骨架不建 review/ 目录(审查按需)");
 check(
-  scaffoldStages.every((stage) => statusStages.includes(stage)),
-  `骨架建的每个目录,汇总工具都认(骨架 ${scaffoldStages.join("、")} / 汇总 ${statusStages.join("、")})`
+  scaffoldStages.join(",") === "spec,rtl,sim,verif,synth",
+  `模块级环节固定为 spec,rtl,sim,verif,synth(实际 ${scaffoldStages.join("、")})`
 );
-check(
-  statusStages.filter((stage) => !scaffoldStages.includes(stage)).join(",") === "review",
-  `汇总里多出来的只有 review(它不占目录;实际多出 ${statusStages.filter((s) => !scaffoldStages.includes(s)).join("、")})`
-);
+check(!scaffoldStages.includes("lint"), "骨架不建 lint/ 目录(机械检查报告跟 RTL 放一起)");
+check(!scaffoldStages.includes("timing"), "模块级不单设 timing/ 目录(综合后时序归综合环节)");
+check(!scaffoldStages.includes("review"), "骨架不建 review/ 目录(审查是按需能力,不占目录)");
 check(
   /rtl\/lint\.md/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
   "机械检查报告写在 rtl/lint.md"
@@ -404,6 +397,16 @@ check(
 check(
   /<模块根>\/review\.md/u.test(readFileSync(join(skillDir, "fpga-module-review", "SKILL.md"), "utf8")),
   "审查报告写在 <模块根>/review.md"
+);
+// 综合环节要同时管门禁与时序(用户口径);验证环节的产物落 verif/
+const synthSkillText = readFileSync(join(skillDir, "fpga-module-synth", "SKILL.md"), "utf8");
+check(
+  /综合门禁/.test(synthSkillText) && /时序/.test(synthSkillText),
+  "综合环节同时管综合门禁与综合后时序"
+);
+check(
+  /<模块根>\/verif\/verif\.md/u.test(readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8")),
+  "验证报告写在 verif/verif.md"
 );
 check(
   !/verif/u.test(readFileSync(join(presetDir, "tools", "rtl-check.mjs"), "utf8")),

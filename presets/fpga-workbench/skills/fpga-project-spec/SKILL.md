@@ -24,7 +24,7 @@ description: 在开始一个 FPGA 工程、或要改动整个工程的需求时�
 ├── .fpga-workbench.json        kind: project
 ├── project/                    ← 工程级环节目录(本环节:project/spec/)
 ├── Prj_File/<器件工程>/         ← Vivado 工程,是工具的地盘,不往里写
-└── <模块们>/                    ← 每个模块一套 spec/ rtl/ sim/ comp/ synth/ timing/
+└── <模块们>/                    ← 每个模块一套 spec/ rtl/ sim/ verif/ synth/
 ```
 
 找不到约定文件即询问用户:本次是**工程**还是**模块**、工作区根目录在哪 —— 骨架由脚本在收尾时

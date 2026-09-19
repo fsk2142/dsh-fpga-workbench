@@ -430,7 +430,7 @@ check(
 );
 // 旧布局的残留:sim/ 已并入 verif/,检查器与技能里都不该再从 sim/ 找测试平台
 check(
-  !/(^|[^a-z])sim\//u.test(readFileSync(join(presetDir, "tools", "rtl-check.mjs"), "utf8")),
+  !/(^|[^a-z])sim\//u.test(readFileSync(join(presetDir, "tools", "module", "rtl-check.mjs"), "utf8")),
   "rtl-check 里没有 sim/ 残留(测试平台现在在 verif/ 下找)"
 );
 // 文件名跟着设置里选的语言走:TB 的扩展名不能写死 .sv(选 VHDL 就是 .vhd),
@@ -585,7 +585,7 @@ check(
   /--lint-only/u.test(runSection),
   "那一节里也点名编译器那条命令(不是只说'跑检查')"
 );
-const checkRtlText = readFileSync(join(presetDir, "tools", "rtl-check.mjs"), "utf8");
+const checkRtlText = readFileSync(join(presetDir, "tools", "module", "rtl-check.mjs"), "utf8");
 check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "rtl-check 认 .v 的 TB,并对 VHDL 有明确交代");
 // 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点
 check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "rtl-check 跳过 ip/ 目录(外来代码不按本规范查)");

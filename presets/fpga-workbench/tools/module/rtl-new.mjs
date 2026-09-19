@@ -7,7 +7,7 @@
 // 退出码:0 成功 / 1 目标已存在且未加 --force / 2 参数或环境不对
 import { pathToFileURL } from "node:url";
 
-import { parseStampArgs, stampFile } from "./lib/stamp.mjs";
+import { parseStampArgs, stampFile } from "../lib/stamp.mjs";
 
 /** 入口。 */
 function main() {

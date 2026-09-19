@@ -49,25 +49,27 @@ presets/fpga-workbench/
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
     templates/                自带模板:rtl.sv / tb.sv / constraints.xdc(写法规范的载体)
-    tools/                    自带命令:spec-scaffold.mjs(建骨架)/ rtl-new.mjs + verif-new.mjs + synth-new.mjs(按模板起文件)/ rtl-check.mjs(规范检查);lib/ 是内部模块
+    tools/                    自带命令,**按级别分目录**:module/ 只放模块级、project/ 只放工程级、
+                              顶层是两级共用(spec-scaffold.mjs)、lib/ 是内部模块(不是命令)
 tools/                        8 个自检 + install.mjs + 依赖安全/锁文件比对
 ```
 
-## 自带命令:只做"一条命令能判成败"的事
+## 自带命令:按级别分目录,按环节分命令
 
 技能的判据写在文档里,靠 AI 逐条看;**能用一条命令判定成败的,做成脚本** —— 这类检查脚本比
 人可靠,而且每次代价一样:
 
-命令名**带环节前缀**(一看就知道属于哪个环节,不跨环节混用;`tools/lib/` 是内部模块,不是命令):
+命令按**级别**分目录(`module/` 只放模块级、`project/` 只放工程级、顶层两级共用),名字再带**环节**
+前缀 —— 级别与环节两样都要一眼看出来:
 
-| 环节 | 命令 | 干什么 | 退出码 |
-|---|---|---|---|
-| 规格 | `node presets/fpga-workbench/tools/spec-scaffold.mjs <根目录> [--kind module\|project] [--modules A,B] [--force] [--dry-run]` | 一次建好环节目录骨架 + 锚点 `.fpga-workbench.json`(幂等;只建目录,不生成空报告) | 0 成功 / 1 出错 / 2 参数不对 |
-| RTL | `node presets/fpga-workbench/tools/rtl-new.mjs <模块根> <模块名> --template <RTL 模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起 RTL 文件:复制模板、**只替模块名**,其余内容原样保留;默认落 `rtl/<模块名>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
-| RTL | `node presets/fpga-workbench/tools/rtl-check.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
-| 验证 | `node presets/fpga-workbench/tools/verif-new.mjs <模块根> <模块名> --template <测试平台模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起测试平台;默认落 `verif/tb_<模块名下划线形式>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
-| 验证 | `node presets/fpga-workbench/tools/verif-wave.mjs <模块根> [模块名] [--sim-path <仿真器>] [--tb <测试平台>] [--dry-run]` | **给人看波形**:编译 + 开 GUI + `log -r /*` + 加波形 + 停在 0 时刻(不自动 run);生成 `verif/wave.do` | 0 已打开/已生成 / 1 找不到平台或设计 / 2 参数或环境问题 |
-| 综合 | `node presets/fpga-workbench/tools/synth-new.mjs <模块根> <模块名> --template <约束模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起约束文件;默认落 `synth/<模块名>.xdc` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
+| 级别 | 环节 | 命令 | 干什么 | 退出码 |
+|---|---|---|---|---|
+| 两级共用 | 规格 | `node presets/fpga-workbench/tools/spec-scaffold.mjs <根目录> [--kind module\|project] [--modules A,B] [--force] [--dry-run]` | 一次建好环节目录骨架 + 锚点 `.fpga-workbench.json`(幂等;只建目录,不生成空报告) | 0 成功 / 1 出错 / 2 参数不对 |
+| 模块级 | RTL | `node presets/fpga-workbench/tools/module/rtl-new.mjs <模块根> <模块名> --template <RTL 模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起 RTL 文件:复制模板、**只替模块名**,其余内容原样保留;默认落 `rtl/<模块名>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
+| 模块级 | RTL | `node presets/fpga-workbench/tools/module/rtl-check.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
+| 模块级 | 验证 | `node presets/fpga-workbench/tools/module/verif-new.mjs <模块根> <模块名> --template <测试平台模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起测试平台;默认落 `verif/tb_<模块名下划线形式>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
+| 模块级 | 验证 | `node presets/fpga-workbench/tools/module/verif-wave.mjs <模块根> [模块名] [--sim-path <仿真器>] [--tb <测试平台>] [--dry-run]` | **给人看波形**:编译 + 开 GUI + `log -r /*` + 加波形 + 停在 0 时刻(不自动 run);生成 `verif/wave.do` | 0 已打开/已生成 / 1 找不到平台或设计 / 2 参数或环境问题 |
+| 模块级 | 综合 | `node presets/fpga-workbench/tools/module/synth-new.mjs <模块根> <模块名> --template <约束模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起约束文件;默认落 `synth/<模块名>.xdc` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 
 另外两条规则与旧包一致,不要自行加严:
 

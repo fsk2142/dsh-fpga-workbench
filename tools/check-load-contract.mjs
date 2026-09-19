@@ -176,16 +176,17 @@ function runBundle(source, options) {
 }
 
 // ── 1. 语法 ─────────────────────────────────────────────────────────────────
-// 自带工具目录里含子目录(tools/lib —— 各环节入口共用的内部模块),语法检查要跟着递归,
-// 否则要么漏检 lib/ 下的文件,要么拿目录去跑 `node --check`。
-const toolFiles = readdirSync(BUNDLED_TOOLS, { withFileTypes: true }).flatMap((entry) => {
-  const rel = join("presets", "fpga-workbench", "tools", entry.name);
-  if (entry.isFile()) return [rel];
-  if (!entry.isDirectory()) return [];
-  return readdirSync(join(ROOT, rel), { withFileTypes: true })
-    .filter((inner) => inner.isFile() && inner.name.endsWith(".mjs"))
-    .map((inner) => join(rel, inner.name));
-});
+// 自带工具目录是分层的(lib/ 是内部模块、module/ 与 project/ 是各级命令),语法检查要**递归到底**,
+// 否则要么漏检子目录里的文件,要么拿目录去跑 `node --check`。
+const toolFiles = [];
+const walkTools = (rel) => {
+  for (const entry of readdirSync(join(ROOT, rel), { withFileTypes: true })) {
+    const child = join(rel, entry.name);
+    if (entry.isDirectory()) walkTools(child);
+    else if (entry.isFile() && entry.name.endsWith(".mjs")) toolFiles.push(child);
+  }
+};
+walkTools(join("presets", "fpga-workbench", "tools"));
 const loadable = [
   ...readdirSync(LIB).filter((name) => name.endsWith(".js")).map((name) => join("lib", name)),
   ...toolFiles

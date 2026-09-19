@@ -15,13 +15,15 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/rtl-check.mjs";
+import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/rtl-check.mjs";
 import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/spec-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
-import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/verif-wave.mjs";
+import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/module/verif-wave.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
+// 级别落到目录上:模块级命令在 tools/module/(工程级的以后放 tools/project/)
+const MODULE_TOOLS = join(TOOLS, "module");
 const TEMPLATES = join(ROOT, "presets", "fpga-workbench", "templates");
 const SANDBOX = join(ROOT, ".tmp", "fpga-tools-check");
 
@@ -274,7 +276,12 @@ check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("verif", "tb_ua
 check(defaultDestination("xdc", "UartRx", "C:/t/c.xdc") === join("synth", "UartRx.xdc"), "约束文件落 synth/<模块名>.xdc");
 
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
-const run = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: "ignore" }).status;
+// spec-scaffold 是两级共用(在 tools/ 顶层);其余被调用的都是模块级命令(在 tools/module/)
+const run = (script, args) => {
+  const path = existsSync(join(TOOLS, script)) ? join(TOOLS, script) : join(MODULE_TOOLS, script);
+  return spawnSync(process.execPath, [path, ...args], { stdio: "ignore" }).status;
+};
+
 
 // 语言边界:TB 扩展名跟设置里选的仿真语言走 —— 只认 .sv 的话,Verilog 的测试平台会被静默跳过
 mkdirSync(join(SANDBOX, "tb-v-mod", "rtl"), { recursive: true });

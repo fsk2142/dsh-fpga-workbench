@@ -11,7 +11,7 @@
 //
 // 只 import lib/toolchain.js:它只用 node 内置模块,而 lib/index.js 要 schemastery,
 // 后者只在 profile 的 node_modules 里,从仓库 import 会解析失败。
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -27,7 +27,8 @@ import {
   probeFilesystem,
   resolveTemplates,
   staleShippedFiles,
-  statusOf
+  statusOf,
+  toolPath
 } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -485,12 +486,18 @@ check(modeSource.includes('inject = ["systemPrompt"]'), "模式半侧的 inject 
 check(modeSource.includes("describeEnv(") && modeSource.includes("probeFilesystem"), "模式半侧复用 lib/toolchain.js 的定义,不另写一份文案");
 check(!modeSource.includes("child_process") && !modeSource.includes("spawn("), "模式半侧不起进程(命令交给 shell 工具跑)");
 
-// 自带命令按环节分,名字带环节前缀(用户要求:一眼看出属于哪个环节,不要跨环节混用)。
-// 以前是 init-scaffold / new-file / check-rtl 这种通用名,看不出归属,也容易在错的环节被调用。
+// 自带命令按**级别 + 环节**分,两者都要一眼看出来(用户要求:不要跨级别或跨环节混用)。
+// 以前是 init-scaffold / new-file / check-rtl 这种通用名,看不出归属;级别后来才落到目录上
+// (tools/module/ 与 tools/project/),命令名本身仍然只看得出环节 —— 所以两条都要断言。
 const STAGE_PREFIX = { "规格环节": "spec-", "RTL 环节": "rtl-", "验证环节": "verif-" };
+const LEVELS = ["module", "project", "shared"];
 check(
   TOOLS.every((tool) => typeof tool.stage === "string" && tool.stage !== ""),
   "每个自带命令都标了属于哪个环节"
+);
+check(
+  TOOLS.every((tool) => LEVELS.includes(tool.level)),
+  `每个自带命令都标了级别(module / project / shared;实际:${[...new Set(TOOLS.map((tool) => String(tool.level)))].join("、")})`
 );
 const prefixViolations = TOOLS.filter((tool) => {
   const prefix = STAGE_PREFIX[tool.stage];
@@ -507,7 +514,52 @@ check(
 );
 check(
   TOOLS.every((tool) => !tool.file.includes("/") && !tool.file.includes("\\")),
-  "命令都在工具目录顶层(tools/lib 是内部模块,不算命令)"
+  "命令名本身不带路径(级别由 tools/<级别>/ 目录表示,不塞进文件名)"
+);
+// 级别要落到真实目录上:module 的必须在 tools/module/、project 的在 tools/project/、
+// shared 的在 tools/ 顶层 —— 这样"拿错级别的命令"在文件系统上就不存在。
+const wrongDir = TOOLS.filter((tool) => {
+  const expected = tool.level === "module" ? "module" : tool.level === "project" ? "project" : "";
+  return !toolPath(tool).includes(join("tools", expected, tool.file));
+});
+check(
+  wrongDir.length === 0,
+  `命令都放在自己级别的目录里(不合规:${wrongDir.map((tool) => `${tool.file}(${tool.level})`).join("、") || "无"})`
+);
+check(
+  TOOLS.every((tool) => existsSync(toolPath(tool))),
+  "每个登记的命令文件都在(路径按级别拼得出来)"
+);
+// 文档与技能里写的路径必须**带级别**:`tools/<环节>.mjs` 这种旧写法会让调用方少一层目录,
+// 而且看不出这条命令属于哪一级(用户就是为这个提出来的)。
+const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+const documented = [
+  ["README.md", readFileSync(join(rootDir, "README.md"), "utf8")],
+  ...TOOLS.map((tool) => [`${tool.file} 的说明`, String(tool.what ?? "")])
+];
+const levelMissing = documented.filter(([, text]) => /tools\/(rtl|verif|synth)-[a-z]+\.mjs/u.test(text));
+check(
+  levelMissing.length === 0,
+  `文档里的命令路径都带级别目录(漏:${levelMissing.map(([name]) => name).join("、") || "无"})`
+);
+// 反向:README 里写的路径要真按级别解析得到,而且解析出的文件名与登记一致 —— 这条能抓住
+// "路径写错一层"或"文件搬了忘了改文档"。
+const readmeText = documented[0][1];
+const pathMismatch = [];
+for (const match of readmeText.matchAll(/presets\/fpga-workbench\/tools\/((?:module\/|project\/)?)([a-z-]+\.mjs)/gu)) {
+  const [, dir, file] = match;
+  const tool = TOOLS.find((entry) => entry.file === file);
+  if (tool === undefined) {
+    pathMismatch.push(`${file}(未登记)`);
+    continue;
+  }
+  const expected = tool.level === "shared" ? "" : `${tool.level}/`;
+  if (dir !== expected) pathMismatch.push(`${file}(写在 ${dir || "顶层"},应在 ${expected || "顶层"})`);
+  if (!existsSync(toolPath(tool))) pathMismatch.push(`${file}(文件不在)`);
+}
+check(
+  pathMismatch.length === 0 && readmeText.includes("tools/module/"),
+  `README 里的命令路径与级别登记一致(问题:${pathMismatch.join("、") || "无"})`
 );
 // 命令的说明会原样进会话提示,所以落点必须跟代码一致:`verif-new` 走 defaultDestination,
 // 模块名会转下划线(UartRx → tb_uart_rx.sv),且落在 verif/(仿真与比对是同一个环节)。

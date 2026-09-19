@@ -90,12 +90,21 @@ node "<自带命令目录>\setup-scaffold.mjs" <工作区根> --kind project --m
 ```
 
 它写工作区根的 `.fpga-workbench.json`(`kind: project`)、建好 `project/` 下全部工程级环节目录,
-并给每个模块各自建一套模块级环节目录(`spec/ rtl/ verif/ synth/`,含各自的锚点)。先加 `--dry-run`
-看一遍;已有锚点不覆盖(要重建用 `--force`)。**它只建目录,不生成空的 spec.md / flow.md。**
+并给每个模块各自建一套模块级环节目录(`spec/ rtl/ verif/ synth/`,含各自的锚点),同时落一份本模式的
+工作区规则 `AGENTS.fpga.md`(已存在就跳过)。先加 `--dry-run` 看一遍;已有锚点不覆盖(要重建用
+`--force`)。**它只建目录,不生成空的 spec.md / flow.md。**
 
-然后写 `project/spec/spec.md`(含**框图位置**与模块清单表)与 `project/spec/flow.md`,经用户确认,
-模块清单表里每个模块的"做到哪一步"都指得回去。有模块尚未跑完模块级流程 → 如实写出来,
-**不得假设它会通过**。
+## 产物
+
+写 `project/spec/` 两处,写完经用户确认:
+
+- `spec.md`:结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ 需求与架构 +
+  **模块清单表**(每个模块一行:职责 / 接口 / 依赖 / 做到哪一步)+ 器件与工程 + IP 策略 + 上板要验什么
+- `flow.md`:整机框图(Mermaid 本体),spec.md 里指向它
+
+清单表里每个模块的"做到哪一步"都指得回去。有模块尚未跑完模块级流程 → 如实写出来,
+**不得假设它会通过**;这种情况结论记 `BLOCKED` 并列出缺项(器件未定、模块状态说不清同理)。
+方案与框图确认完毕、清单对账完毕 → `PASS`;这次不涉及工程级改动 → `NOT_APPLICABLE`。
 
 ## 必须停下来问用户的时候
 

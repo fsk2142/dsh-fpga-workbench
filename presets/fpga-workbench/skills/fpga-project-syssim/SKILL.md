@@ -27,8 +27,28 @@ description: 把多个模块接起来之后做系统级仿真时用:写顶层测
 2. 激励:优先用**真实的一段数据**(工程里已有的数据文件),比随机数更能暴露问题
 3. 检查:数据比对 + 握手断言 —— 判"数据对不对"照模块级那套走(`fpga-module-verif`):
    拿独立参照比,比对脚本直接**复用模块级的参考模型**,不要另写一套(独立模型写两遍必然分叉)
-4. 跑法同模块级:命令写进 `project/syssim/run.do`,`vsim -c -do run.do` 一次调用;全程命令行,
-   不弹界面。要人工看波形时用 `tools/module/module-verif-wave.mjs` 打开 GUI
+
+## 本环节要跑的命令
+
+跑法与模块级同一条路 —— 命令写进脚本,一次调用,全程命令行:
+
+```
+# project/syssim/run.do
+onerror {quit -code 1}
+if {[file exists work]} { catch {vdel -lib work -all} }
+vlib work
+vlog -sv <顶层与各模块源码...> tb_<顶层>.sv
+vsim -c -voptargs="+acc=rn" tb_<顶层>
+run -all
+quit -f
+```
+
+```powershell
+cd <工作区根>/project/syssim
+& "<仿真器路径>" -c -do run.do
+```
+
+要人工看波形时用模块级那条:`node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"`。
 
 ## 判据
 
@@ -40,8 +60,11 @@ description: 把多个模块接起来之后做系统级仿真时用:写顶层测
 
 ## 产物
 
-写 `<工作区根>/project/syssim/syssim.md`:结论 + 命令原文 + 激励数据来源 +
-比对方式与结果 + 覆盖了哪些跨模块路径、哪些**没覆盖**。
+写 `<工作区根>/project/syssim/syssim.md`:
+
+- 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)
+- 命令原文 + 激励数据来源 + 比对方式与结果
+- 覆盖了哪些跨模块路径、哪些**没覆盖**
 
 系统仿真失败时,先排查接口(位宽/握手/时钟域),而非某个模块的内部逻辑 ——
 模块级已经各自验过了。

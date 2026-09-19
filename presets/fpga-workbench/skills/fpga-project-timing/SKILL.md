@@ -41,17 +41,25 @@ description: 判断整个 FPGA 工程时序是否收敛时用:读布局布线后
 
 **绝不得为了让报告变绿去放宽约束。** 那样上板会以更难查的方式失败。
 
-## 报告从哪看
+## 本环节要跑的命令
 
-- 实现后的时序摘要报告(`report_timing_summary`),在 impl run 的报告目录里
-- 违例明细看 `report_timing -max_paths N -sort_by slack`
-- 按需看时钟交互 `report_clock_interaction`、跨域 `report_cdc`
+报告已经存在就直接读;要自己跑一遍时,在实现后的工程里跑这几条:
+
+```tcl
+report_timing_summary -file <报告路径>
+report_timing -max_paths 20 -sort_by slack -file <违例明细路径>
+report_clock_interaction -file <时钟交互路径>
+report_cdc -file <跨域报告路径>
+```
+
+- 违例明细看最差的那几条(`report_timing -max_paths N -sort_by slack`),不必逐条罗列
+- 时序报告与约束状态都在 impl run 的报告目录里;命令原文记入 `timing.md`
 
 ## 产物
 
 写 `<工作区根>/project/timing/timing.md`:
 
-- 结论 + 报告文件的完整路径
+- 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ 报告文件的完整路径
 - 时钟清单:名字、周期、WNS、是否约束上
 - 未约束路径计数
 - 最差几条违例路径的简表(起点/终点/裕量/所属时钟域)

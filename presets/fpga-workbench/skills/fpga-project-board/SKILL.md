@@ -19,7 +19,9 @@ description: 把 bitstream 下载到板子上做实测验证时用:下载与回�
 2. `project/timing/timing.md` 是 PASS —— 时序没过就上板,看到的现象不可信
 3. 有 bit 文件(`project/impl/impl.md` 里有路径),且**与当前代码对应**(不是旧版本的残留)
 
-## 下载
+## 本环节要跑的命令
+
+Vivado 硬件管理器里跑(命令原文记入产物;GUI 亦可,但要写清点了哪几步):
 
 ```
 connect_hw_server
@@ -32,7 +34,8 @@ program_hw_devices [current_hw_device]
 
 - **加 `-verify` 跑一次**(`program_hw_devices -verify`)—— 它能抓出配置数据传输出错,
   避免把传输问题当作逻辑问题排查
-- GUI 操作亦可,但**下载命令须记入产物**,否则无法说明当时的下载方式
+- 抓到的内部信号要在**波形窗口**细看时,与模块级同一条路:`module-verif-wave.mjs`(加载对应
+  设计、加好波形、停在 0 时刻由人操作)
 
 ## 固化到 Flash(需要掉电保持时)
 
@@ -55,7 +58,7 @@ write_cfgmem -force -format MCS -size <容量MB> -interface <SPIx4|BPIx16> \
 
 **人工观察**(相机实拍、示波器、肉眼)单独记一栏,注明是人工判断,**不进自动判据**。
 
-## 判据取值
+## 判据
 
 - **PASS**:两层都过(波形符合 + 回读数据一致)
 - **FAIL**:数据不一致 / 握手卡死 / 输出不对
@@ -66,6 +69,8 @@ write_cfgmem -force -format MCS -size <容量MB> -interface <SPIx4|BPIx16> \
 ## 产物
 
 写 `<工作区根>/project/board/board.md`:
+
+- 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)
 
 - 结论 + 板子与器件型号 + bit 文件路径(哪一次实现出的)
 - 下载命令原文(含 `-verify` 结果)

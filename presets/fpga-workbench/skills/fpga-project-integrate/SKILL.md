@@ -33,6 +33,18 @@ description: 把一个或多个模块接进 FPGA 工程顶层时用:分配时钟
 5. **加进工程**:源文件加进 Vivado 工程的 srcs;IP 加到工程里(按器件选对应目录)
 6. **连通性**:跑一次 elaborate 或综合,确认没有未连接端口、没有多驱动、位宽不匹配
 
+## 本环节要跑的命令
+
+集成本身是编辑工作(改顶层、接接口),真正要跑的是**连通性检查** —— 与模块级用同一套工具:
+
+| 干什么 | 命令 |
+|---|---|
+| elaborate / 综合看连通性 | Vivado 批处理:`open_project <工程>` → `launch_runs synth_1`(或 `synth_design -rtl` 只做 elaborate) |
+| 机械规范(顶层自己的代码) | `node "<自带命令目录>\module\module-rtl-check.mjs" <工作区根>` |
+| 看波形(定位接口问题时) | `node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"` |
+
+**早期集成**只跑 elaborate 就够(便宜、快);**正式验收**要求模块级结论齐(见「前置」)。
+
 ## 判据
 
 - **PASS**:elaborate/综合能过;顶层没有未连接或悬空端口;跨时钟域的地方在顶层有明确处理

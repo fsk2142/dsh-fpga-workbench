@@ -526,15 +526,25 @@ const verdictWords = (text) => [...text.matchAll(VERDICTS)].map((m) => m[0]);
 // 每个技能的判定词集合是**自己的**口径:审查用 approved/changes requested/blocked,
 // 环节报告用 PASS/FAIL/BLOCKED/NOT_APPLICABLE/UNVERIFIED。审查正文里提到下游的 FAIL
 // (说某个环节挂 FAIL)不算它的判定词,所以按技能限定可用的词,而不是全文搜大写词。
-const MODULE_VERDICT_SETS = {
+const VERDICT_SETS = {
   "fpga-module-rtl": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-synth": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-module-review": ["APPROVED", "CHANGES_REQUESTED", "BLOCKED"],
+  // 工程级九篇(2026-09-19 与模块级对齐时补齐):环节报告都用同一套五个词;
+  // 审计有自己的三档(PASS / WARN / FAIL),不套环节报告那套 —— 见 fpga-project-audit
+  "fpga-project-spec": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-integrate": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-constraints": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-syssim": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-impl": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-timing": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-board": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-release": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
 };
-for (const [skill, allowed] of Object.entries(MODULE_VERDICT_SETS)) {
+for (const [skill, allowed] of Object.entries(VERDICT_SETS)) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
-  // 取的是"把判定词一次列全"的那一处:sim/synth/verif 写成 `结论(PASS / FAIL / …)`,
+  // 取的是"把判定词一次列全"的那一处:大多数写成 `结论(PASS / FAIL / …)`,
   // rtl/review 写成 `- **结论**:`PASS` / `FAIL` / …`。同一文件里前面可能还有别的 `结论:` 提法
   // (synth 就有一句),所以扫全部匹配、挑出真的带判定词的那一处。
   const candidates = [...text.matchAll(/结论[^\n]*?(?:\(([^)]*)\)|:((?:[^`\n]*`[^`]+`[^\n]*)+))/gu)].map(
@@ -548,17 +558,20 @@ for (const [skill, allowed] of Object.entries(MODULE_VERDICT_SETS)) {
   const extra = listed.filter((word) => !allowed.includes(word));
   check(extra.length === 0, `${skill} 的结论行只用自己的判定词(多出:${extra.join("、") || "无"})`);
 }
-// 工程级的集成环节同样有判定词,产物那行原来只写"结论 + …",词一个没列 —— 同样补齐。
-// (工程级其余八篇还没逐篇过,这里只钉这篇已改的,免得把还没审的也一起断言成现状。)
-const integrateText = readFileSync(join(skillDir, "fpga-project-integrate", "SKILL.md"), "utf8");
-const integrateListed = verdictWords(
-  [...integrateText.matchAll(/结论[^\n]*?(?:\(([^)]*)\)|:((?:[^`\n]*`[^`]+`[^\n]*)+))/gu)]
-    .map((m) => m[1] ?? m[2] ?? "")
-    .find((line) => verdictWords(line).length > 1) ?? ""
+// 工程级九篇**每篇都要有自己的判定词清单**。审计是例外:它的结论是三档 PASS / WARN / FAIL
+// (见该篇「输出格式」),所以在清单之外单独断言它把这三档写清了。
+for (const skill of skillNames.filter((name) => name.startsWith("fpga-project-") && name !== "fpga-project-audit")) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  check(/结论\(`PASS`/u.test(text), `${skill} 的产物写明了结论取值`);
+}
+const auditText = readFileSync(join(skillDir, "fpga-project-audit", "SKILL.md"), "utf8");
+check(
+  /PASS[\s\S]{0,40}WARN[\s\S]{0,40}FAIL/u.test(auditText),
+  "审计写明自己的三档结论(PASS / WARN / FAIL)"
 );
-check(integrateListed.length > 0, `fpga-project-integrate 的结论行列出了判定词(实际:${integrateListed.join(" / ") || "无"})`);
 // 集成时"模块从哪来"也要先问用户(与 rtl 的现成子模块同一条口径):用户已有一律直接用,
 // 不要集成时自己另写一个顶上 —— 那样模块自己那边的结论就对不上了。
+const integrateText = readFileSync(join(skillDir, "fpga-project-integrate", "SKILL.md"), "utf8");
 check(
   /模块从哪来|模块来源/u.test(integrateText) &&
     /先问用户/u.test(integrateText) &&

@@ -33,7 +33,7 @@ description: 写或改 FPGA 模块的 RTL 时用:按依据编写(接口照 `spec
 **不要从空文件写起,也不要手抄模板。** 用自带命令把模板复制成目标文件(命令名就是环节:`rtl-new`):
 
 ```powershell
-node "<自带命令目录>\rtl-new.mjs" <模块根> <模块名> --template "<RTL 模板路径>"
+node "<自带命令目录>\module\rtl-new.mjs" <模块根> <模块名> --template "<RTL 模板路径>"
 ```
 
 - 模板路径取设置里配好的那份(见会话开头「本机 FPGA 工具链」的模板一节;留空即插件自带那套)
@@ -122,7 +122,7 @@ node "<自带命令目录>\rtl-new.mjs" <模块根> <模块名> --template "<RTL
 **机械部分先跑自带命令**(路径见会话开头「本模式自带的命令」):
 
 ```powershell
-node "<自带命令目录>\rtl-check.mjs" <模块目录>
+node "<自带命令目录>\module\rtl-check.mjs" <模块目录>
 ```
 
 覆盖文件头、九个小节块、端口类型、复位极性、always_ff、end/else、断言、制表符、行尾、代码行非英文、
@@ -146,7 +146,7 @@ node "<自带命令目录>\rtl-check.mjs" <模块目录>
 | 对应 | 命令 | 看什么 |
 |---|---|---|
 | 第二步 | `& "<编译器路径>" --lint-only -Wall --top-module <顶层模块名> <文件...>` | error / warning,判法见第二步 |
-| 第三步 | `node "<自带命令目录>\rtl-check.mjs" <模块目录>` | 退出码与带行号的条目,判法见第三步 |
+| 第三步 | `node "<自带命令目录>\module\rtl-check.mjs" <模块目录>` | 退出码与带行号的条目,判法见第三步 |
 
 - `rtl-check` 会顺带查一眼 `verif/tb_*` —— 所以"这一轮全绿"包含测试平台的机械规范,
   **第一次跑仿真前那部分也该是干净的**

@@ -628,6 +628,39 @@ check(
 // 路径口径统一:IP 实体写 rtl/ip/、仿真模型写 verif/ —— 不许再出现裸的 `ip/` 路径
 const bareIp = skillNames.filter((skill) => /`ip\//u.test(readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")));
 check(bareIp.length === 0, `技能里没有裸的 \`ip/\` 路径(应写 rtl/ip/ 或 verif/;实际 ${bareIp.join("、") || "无"})`);
+// 技能里写的命令路径必须带**级别目录**(module/ 或 project/),两级共用的在顶层 ——
+// 用户就是为"分不清命令属于哪一级"提的这条;写错一层或漏一层都要报红。
+const toolFiles = new Map(
+  readdirSync(join(presetDir, "tools", "module"), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
+    .map((entry) => [entry.name, "module"])
+);
+toolFiles.set("spec-scaffold.mjs", "");
+const levelProblems = [];
+for (const skill of skillNames) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  for (const match of text.matchAll(/自带命令目录>\\(?:(module|project)\\)?([a-z-]+\.mjs)/gu)) {
+    const [, dir, file] = match;
+    const expected = toolFiles.get(file);
+    if (expected === undefined) {
+      levelProblems.push(`${skill}:${file}(未登记)`);
+      continue;
+    }
+    if ((dir ?? "") !== expected) {
+      levelProblems.push(`${skill}:${file}(写在 ${dir ?? "顶层"},应在 ${expected || "顶层"})`);
+    }
+  }
+  // 也拦一手"完全没写级别目录"的旧写法 —— 但两级共用的那几条本来就该在顶层,不算问题
+  for (const match of text.matchAll(/自带命令目录>\\([a-z-]+\.mjs)/gu)) {
+    if (toolFiles.get(match[1]) !== undefined && toolFiles.get(match[1]) !== "") {
+      levelProblems.push(`${skill}:${match[1]}(没带级别目录)`);
+    }
+  }
+}
+check(
+  levelProblems.length === 0,
+  `技能里的命令路径都带对级别目录(问题:${levelProblems.join("、") || "无"})`
+);
 // 第一步必须是"用模板生成文件再编写"(用户要求):先落模板骨架,再填逻辑
 check(
   /第一步:用模板生成文件/u.test(lintText) && /第二步:编译器检查/u.test(lintText) && /第三步:逐条核对规范/u.test(lintText),

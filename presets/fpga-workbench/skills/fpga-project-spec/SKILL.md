@@ -24,7 +24,7 @@ description: 在开始一个 FPGA 工程、或要改动整个工程的需求时�
 ├── .fpga-workbench.json        kind: project
 ├── project/                    ← 工程级环节目录(本环节:project/spec/)
 ├── Prj_File/<器件工程>/         ← Vivado 工程,是工具的地盘,不往里写
-└── <模块们>/                    ← 每个模块一套 spec/ rtl/ sim/ verif/ synth/
+└── <模块们>/                    ← 每个模块一套 spec/ rtl/ verif/ synth/
 ```
 
 找不到约定文件即询问用户:本次是**工程**还是**模块**、工作区根目录在哪 —— 骨架由脚本在收尾时
@@ -83,15 +83,15 @@ flowchart LR
 
 ## 出口
 
-方案确认后一次建好骨架 —— **不要手工逐个建目录**:
+方案确认后一次建好骨架 —— **不要手工逐个建目录**(这条命令两级共用,所以在 `tools/` 顶层):
 
 ```
 node "<自带命令目录>\spec-scaffold.mjs" <工作区根> --kind project --modules <模块名,逗号分隔>
 ```
 
 它写工作区根的 `.fpga-workbench.json`(`kind: project`)、建好 `project/` 下全部工程级环节目录,
-并给每个模块各自建一套模块级环节目录(含各自的锚点)。先加 `--dry-run` 看一遍;已有锚点不覆盖
-(要重建用 `--force`)。**它只建目录,不生成空的 spec.md / flow.md。**
+并给每个模块各自建一套模块级环节目录(`spec/ rtl/ verif/ synth/`,含各自的锚点)。先加 `--dry-run`
+看一遍;已有锚点不覆盖(要重建用 `--force`)。**它只建目录,不生成空的 spec.md / flow.md。**
 
 然后写 `project/spec/spec.md`(含**框图位置**与模块清单表)与 `project/spec/flow.md`,经用户确认,
 模块清单表里每个模块的"做到哪一步"都指得回去。有模块尚未跑完模块级流程 → 如实写出来,

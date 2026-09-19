@@ -268,14 +268,26 @@ check(
 
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
 const run = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: "ignore" }).status;
+
+// 语言边界:TB 扩展名跟设置里选的仿真语言走 —— 只认 .sv 的话,Verilog 的测试平台会被静默跳过
+mkdirSync(join(SANDBOX, "tb-v-mod", "rtl"), { recursive: true });
+mkdirSync(join(SANDBOX, "tb-v-mod", "sim"), { recursive: true });
+writeFileSync(join(SANDBOX, "tb-v-mod", "sim", "tb_only.v"), goodTb);
+check(
+  run("check-rtl.mjs", [join(SANDBOX, "tb-v-mod")]) === 0,
+  "sim/ 下的 .v 测试平台会被检查(只认 .sv 的话这里会退 2)"
+);
+mkdirSync(join(SANDBOX, "vhdl-mod", "rtl"), { recursive: true });
+writeFileSync(join(SANDBOX, "vhdl-mod", "rtl", "top.vhd"), "-- VHDL 源码\n");
+check(run("check-rtl.mjs", [join(SANDBOX, "vhdl-mod")]) === 2, "纯 VHDL 项目:如实退 2(本检查器不覆盖,不得当通过)");
+
 check(run("check-rtl.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");
 check(run("check-rtl.mjs", [join(SANDBOX, "bad-mod")]) === 1, "check-rtl 违规 → 退出码 1");
 check(run("check-rtl.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有警告 → 退出码 0(警告不拦门禁)");
 check(run("check-rtl.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
 check(run("stage-status.mjs", [join(SANDBOX, "status-demo")]) === 0, "stage-status 有约定文件 → 0");
 check(run("stage-status.mjs", [join(ROOT, "tools")]) === 2, "stage-status 没约定文件 → 2");
-check(run("init-scaffold.mjs", []) === 2, "init-scaffold 不给根目录 → 退出码 2");
-check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli"), "--kind", "bogus"]) === 2, "--kind 非法 → 退出码 2");
+check(run("init-scaffold.mjs", []) === 2, "init-scaffold 不给根目录 → 退出码 2");check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli"), "--kind", "bogus"]) === 2, "--kind 非法 → 退出码 2");
 check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "建模块骨架 → 退出码 0");
 check(
   existsSync(join(SANDBOX, "scaffold-cli", "rtl")) && existsSync(join(SANDBOX, "scaffold-cli", ".fpga-workbench.json")),

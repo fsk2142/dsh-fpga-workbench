@@ -389,6 +389,16 @@ check(
   !/verif/u.test(readFileSync(join(presetDir, "tools", "check-rtl.mjs"), "utf8")),
   "check-rtl 里没有旧布局的 verif/ 残留(测试平台在 sim/ 下找)"
 );
+// 文件名跟着设置里选的语言走:TB 的扩展名不能写死 .sv(选 VHDL 就是 .vhd),
+// 而 VHDL 本检查器不覆盖 —— 必须说清"记 NOT_APPLICABLE",不能静默当通过
+const simSkillText = readFileSync(join(skillDir, "fpga-module-sim", "SKILL.md"), "utf8");
+check(/仿真语言/u.test(simSkillText) && /\.vhd/u.test(simSkillText), "仿真技能写明 TB 扩展名跟仿真语言走(含 .vhd)");
+check(
+  /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-lint", "SKILL.md"), "utf8")),
+  "检查技能写明 VHDL 源码不覆盖(记 NOT_APPLICABLE)"
+);
+const checkRtlText = readFileSync(join(presetDir, "tools", "check-rtl.mjs"), "utf8");
+check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "check-rtl 认 .v 的 TB,并对 VHDL 有明确交代");
 
 //
 // 这一条是那份《轻量化优化建议》的核心诉求:技能是按需取用的能力地图,不是必经流水线。

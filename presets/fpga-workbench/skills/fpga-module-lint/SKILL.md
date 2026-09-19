@@ -15,7 +15,9 @@ description: 写或改 RTL、查编码规范、定位 lint 或编译报错时用
 
 1. 找约定文件 `.fpga-workbench.json`(在模块根;找不到则询问用户,见 `fpga-module-spec`)
 2. 读 `spec/spec.md`:接口、判据、器件在其中 —— 规范检查的例外也按它判
-3. 确认待查源码(默认 `rtl/` 下的 `.v` / `.sv`,递归)
+3. 确认待查源码:**按设置里选的 RTL 语言**取 `rtl/` 下的源码(SystemVerilog / Verilog → `.sv` / `.v`,
+   递归)。源码是 VHDL 时本检查器不覆盖 —— 那就在结论里记 `NOT_APPLICABLE` 并说明原因,
+   **不得当成通过**
 
 ## 第一步:编译器检查
 
@@ -84,6 +86,6 @@ node "<自带命令目录>\check-rtl.mjs" <模块目录>
 - 编译器报的 error / warning 逐条处理:改了哪里,或就地豁免的理由
 - 逐条规范的核对结果;未通过的写清 `文件:行`
 - `BLOCKED` 的情形:编译器未就绪(设置里标了「未就绪」)→ 如实说明并停下,**不得假装跑过**
-- `NOT_APPLICABLE`:`rtl/` 下还没有源码
+- `NOT_APPLICABLE`:`rtl/` 下还没有源码,或源码是 VHDL(本检查器只覆盖 SystemVerilog / Verilog)
 
 结论与证据均须能指回去。**未跑 lint 即进仿真,等于把问题推到下游。**

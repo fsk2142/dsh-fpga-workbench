@@ -42,9 +42,10 @@ const HEADER_FIELDS = [
 /**
  * 递归收集 HDL 源文件。
  * @param dir - 起始目录。
+ * @param pattern - 文件名匹配(默认 SystemVerilog / Verilog;另用它来找 VHDL)。
  * @returns 文件绝对路径列表(已排序)。
  */
-export function collectHdl(dir) {
+export function collectHdl(dir, pattern = /\.(sv|v)$/iu) {
   const out = [];
   const walk = (current) => {
     let entries;
@@ -59,7 +60,7 @@ export function collectHdl(dir) {
         const name = entry.name.toLowerCase();
         if (SKIP_DIRS.has(name) || name.endsWith("_prj") || name.startsWith(".")) continue;
         walk(full);
-      } else if (entry.isFile() && /\.(sv|v)$/iu.test(entry.name)) {
+      } else if (entry.isFile() && pattern.test(entry.name)) {
         out.push(full);
       }
     }
@@ -67,6 +68,12 @@ export function collectHdl(dir) {
   walk(dir);
   return out.sort();
 }
+
+/** 测试平台文件名:扩展名跟着设置里选的仿真语言走(`.sv` / `.v` / `.vhd`),按语言过滤。 */
+const TESTBENCH = /^tb_.*\.(sv|v)$/iu;
+
+/** VHDL 源文件(本检查器不覆盖,但必须说出来,不能静默当通过)。 */
+const VHDL = /\.(vhd|vhdl)$/iu;
 
 /**
  * 跑一个文件上的全部规则。
@@ -222,16 +229,30 @@ function main() {
     return 2;
   }
 
-  // 测试平台与仿真脚本放 <模块根>/sim/(与仿真结果同目录,按文件名区分),这里只认 tb_*.sv
+  // 测试平台与仿真脚本放 <模块根>/sim/(与仿真结果同目录,按文件名区分)。
+  // 扩展名跟设置里选的仿真语言走:.sv / .v 都能认,.vhd 不认(见下面的提示)。
   const simDir = join(moduleRoot, "sim");
   const testbenches = existsSync(simDir)
-    ? readdirSync(simDir).filter((name) => /^tb_.*\.sv$/iu.test(name)).map((name) => join(simDir, name)).sort()
+    ? readdirSync(simDir).filter((name) => TESTBENCH.test(name)).map((name) => join(simDir, name)).sort()
     : [];
 
   const targets = [...collectHdl(rtlDir).map((file) => [file, false]), ...testbenches.map((file) => [file, true])];
   if (targets.length === 0) {
+    // 只有 VHDL 时不能说"没有源码"(那会让人以为目录是空的);说清本检查器不覆盖 VHDL
+    const vhdl = [...collectHdl(rtlDir, VHDL), ...collectHdl(simDir, VHDL)];
+    if (vhdl.length > 0) {
+      console.error(`本检查器只覆盖 SystemVerilog / Verilog;检测到 ${vhdl.length} 个 VHDL 文件(rtl/ 或 sim/),未做机械检查。`);
+      console.error("VHDL 项目请把这一环节记为 NOT_APPLICABLE 并说明原因 —— 不要当成通过。");
+      return 2;
+    }
     console.error(`rtl/ 下没有 .v/.sv 源码:${rtlDir}`);
     return 2;
+  }
+
+  // 已经检查了 SV/Verilog,但 sim/ 里还有 VHDL 测试平台 → 如实点名未检查的部分(走 stdout:这不是错误)
+  const uncheckedTb = existsSync(simDir) ? readdirSync(simDir).filter((name) => VHDL.test(name)) : [];
+  if (uncheckedTb.length > 0) {
+    console.log(`注意:sim/ 下有 ${uncheckedTb.length} 个 VHDL 测试平台(${uncheckedTb.join("、")}),本检查器未检查。`);
   }
 
   const report = targets.map(([file, isTb]) => ({

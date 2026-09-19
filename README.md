@@ -205,8 +205,8 @@ node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件�
   入口是**按需取用**,不是阶段流水线:写一个模块时通常走 spec → lint → sim(→ comp / synth /
   timing)→ review,但每一步都可以单独调用,出问题就回到那一步重来,不必补齐整条链。
 
-  早期雏形 `fpga-module-flow` 已弃用,挪到 `docs/legacy/`(不在技能扫描范围内,留作对照;
-  Git 历史里也在)。
+  早期雏形 `fpga-module-flow` 已删除(它的产物路径是当初拍定的、已被这些技能取代;
+  Git 历史里能翻到)。
 - ✅ **工程级流程**(9 个技能,`fpga-project-*`):**早期集成随时可做**(搭骨架、试接口、
   定位集成问题,把未验证的模块标注清楚);**正式集成验收**才要求相关模块的模块级结论齐。
 

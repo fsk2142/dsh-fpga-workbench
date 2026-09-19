@@ -414,6 +414,25 @@ check(
   run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--force"]) === 0,
   "--force 才覆盖"
 );
+// `--out` 是相对根目录的路径:`..` 逃逸与绝对路径都要挡在写之前(审查指出、实测复现过:
+// 不挡的话 `--out "..\x.sv"` 会真写到根目录外面)
+const escapeRoot = join(SANDBOX, `escape-${stamp}`, "mod");
+mkdirSync(escapeRoot, { recursive: true });
+const escapeTarget = join(SANDBOX, `escape-${stamp}`, "escaped.sv");
+check(
+  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--out", join("..", "escaped.sv")]) === 2,
+  "--out 用 .. 逃出根目录 → 退出码 2"
+);
+check(!existsSync(escapeTarget), "逃逸请求没有真的写出文件(挡在写之前)");
+check(
+  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--out", escapeTarget]) === 2,
+  "--out 传绝对路径 → 退出码 2"
+);
+check(
+  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--out", join("rtl", "sub", "uart_rx.sv")]) === 0
+    && existsSync(join(escapeRoot, "rtl", "sub", "uart_rx.sv")),
+  "根目录内的子目录照样能写(护栏不误伤合法用法)"
+);
 check(
   run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "no-such.sv")]) === 2,
   "模板不存在 → 退出码 2(不猜模板)"

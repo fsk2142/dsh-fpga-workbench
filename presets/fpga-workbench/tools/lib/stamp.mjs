@@ -13,7 +13,7 @@
 //
 // 故意不做的事:不猜模板、不改模板内容、不覆盖已有文件(除非 --force)。
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, extname, join } from "node:path";
+import { dirname, extname, isAbsolute, join, relative as relativePath, resolve } from "node:path";
 
 /** 唯一会被替换的两个占位符。其余 `<...>` 原样保留 —— 内容不归这个脚本管。 */
 export const NAME_TOKENS = ["ModuleName", "module_snake"];
@@ -110,7 +110,21 @@ export function stampFile(options) {
     console.error("这种模板没有默认位置 —— 用 --out <相对模块根的路径> 指定放哪。");
     return 2;
   }
-  const target = join(root, relative);
+  // `--out` 是**相对根目录**的路径,不许拿它写到根目录外面去。
+  // 实测过:不挡的话 `--out "..\x.sv"` 会真把文件落在模块根之外(绝对路径在 Windows 上会被
+  // join 拼坏、退 1,属于另一种"没写出去",不必单独处理)。挡在写之前,并说清合法范围。
+  if (isAbsolute(relative)) {
+    console.error(`--out 要写相对路径(相对根目录),收到绝对路径:${relative}`);
+    return 2;
+  }
+  const rootResolved = resolve(root);
+  const target = resolve(rootResolved, relative);
+  const inside = relativePath(rootResolved, target);
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) {
+    console.error(`--out 指向根目录之外,已拒绝:${relative}`);
+    console.error(`合法范围只能是根目录(及其子目录)里面:${rootResolved}`);
+    return 2;
+  }
   if (existsSync(target) && options.force !== true) {
     console.error(`目标已存在,不覆盖:${target}(要覆盖加 --force)`);
     return 1;

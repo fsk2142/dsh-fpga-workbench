@@ -304,7 +304,13 @@ check(readyText.includes("-mode batch"), "提示里给出 Vivado 的非交互调
 check(readyText.includes(prepared.modelsimPath) && readyText.includes("-c -do"), "提示里给出 ModelSim 的命令行调用方式");
 check(readyText.includes("--lint-only"), "提示里给出 Verilator 的 lint 调用方式");
 check(!readyText.includes("未就绪"), "全部就绪时不出现未就绪清单");
-check(readyText.includes(prepared.cachePath) && readyText.includes("不要污染 RTL 源码目录"), "产物只写缓存目录这条约定在提示里");
+// 产物落点的分工:大型可再生的进缓存目录,结论要指着的留在环节目录 —— 两处说法必须一致
+// (曾经提示段写"所有中间产物只写缓存",技能又要求日志/波形留在 verif/,用的人不知道该信哪条)
+check(
+  readyText.includes(prepared.cachePath) && readyText.includes("大型可再生的东西") &&
+    readyText.includes("留在各自环节目录"),
+  "提示里写明产物落点的分工(缓存目录 vs 环节目录)"
+);
 check(readyText.includes("where"), "提示里写明权威来源,不让 agent 去 PATH 猜");
 
 const halfText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith([]));
@@ -313,7 +319,7 @@ check(halfText.includes("编译器路径:未配置"), "没填的项:说成未配
 check(halfText.includes("比特流生成"), "未就绪时带上会跳过哪些步骤");
 
 const noCacheText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith(["C:\\vivado.bat"]));
-check(!noCacheText.includes("不要污染 RTL 源码目录"), "缓存目录没就绪时,不提产物落盘约定(它落不下去)");
+check(!noCacheText.includes("大型可再生的东西"), "缓存目录没就绪时,不提产物落盘约定(它落不下去)");
 
 const unreadable = describeEnv(undefined, probeWith([]));
 check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设置时如实说读不到,而不是当成没配");

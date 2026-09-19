@@ -493,6 +493,16 @@ check(
   /module-verif-wave\.mjs/u.test(verifSkillText) && /波形/u.test(verifSkillText),
   "验证技能写明看波形的手段(module-verif-wave:开 GUI、加波形、不自动 run)"
 );
+// 验证**不只有文件 golden 一种**(审查指出,2026-09-19):FIFO / UART / 握手这类常靠独立
+// scoreboard、断言与协议检查。技能要把这些手段列全,同时守住独立性底线。
+check(
+  /scoreboard/u.test(verifSkillText) && /协议检查/u.test(verifSkillText),
+  "验证技能列出文件比对之外的手段(独立 scoreboard / 协议检查等)"
+);
+check(
+  /没有 golden 但有[\s\S]{0,60}不是不适用|既没有文件比对[\s\S]{0,40}可独立检查/u.test(verifSkillText),
+  "验证技能写明:没有 golden 不等于本环节不适用(两者都拿不出来才算)"
+);
 // 比对口径上确实拿不准时(读不出样本 / 容差 / golden 来路)要**回去问用户**,
 // 不许自己改比对口径把结论凑过去 —— 判据一松,后面所有结论都不作数。
 check(

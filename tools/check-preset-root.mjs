@@ -246,7 +246,9 @@ for (const skill of skillNames) {
     `${skill} 的 description 说清了"什么时候用"(不是只写阶段顺序)`
   );
   check(
-    !/第一阶段|下一阶段|一口气写完|这一关过了才进|流程必须跑完并通过确认|OBSERVE_ONLY/u.test(readFileSync(file, "utf8")),
+    // `阶段 ?[0-9]` 收的是"阶段 0 / 阶段 2"这种编号标题 —— 它暗示存在一条编号流水线,
+    // 而技能是按需取用的能力(各技能的一级标题统一写成 `名字:做什么`)。
+    !/第一阶段|第二阶段|阶段 ?[0-9]|下一阶段|一口气写完|这一关过了才进|流程必须跑完并通过确认|OBSERVE_ONLY/u.test(readFileSync(file, "utf8")),
     `${skill} 里没有残留的"阶段链/硬门禁"口气`
   );
 }

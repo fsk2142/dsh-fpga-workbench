@@ -420,6 +420,42 @@ check(
   /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
   "检查技能写明 VHDL 源码不覆盖(记 NOT_APPLICABLE)"
 );
+// 判定词是给"接手的人"读的,所以文件里宣称的判定词集合必须真的覆盖所有会出现的结论 ——
+// sim 曾经自相矛盾:正文说"没有测试平台 ≠ 不适用",判据那行却写着 NOT_APPLICABLE。
+const VERDICTS = /PASS|FAIL|BLOCKED|NOT_APPLICABLE|UNVERIFIED|APPROVED|CHANGES_REQUESTED/gu;
+const verdictWords = (text) => [...text.matchAll(VERDICTS)].map((m) => m[0]);
+for (const skill of ["fpga-module-sim", "fpga-module-rtl", "fpga-module-synth"]) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  // 取的是"把判定词一次列全"的那一处:sim/synth 写成 `结论(PASS / FAIL / …)`,
+  // rtl 写成 `- **结论**:`PASS` / `FAIL` / …`。同一文件里前面可能还有别的 `结论:` 提法
+  // (synth 就有一句),所以扫全部匹配、挑出真的带判定词的那一处。
+  const candidates = [...text.matchAll(/结论[^\n]*?(?:\(([^)]*)\)|:((?:[^`\n]*`[^`]+`[^\n]*)+))/gu)].map(
+    (m) => m[1] ?? m[2] ?? ""
+  );
+  const listed = verdictWords(candidates.find((line) => verdictWords(line).length > 1) ?? "");
+  check(listed.length > 0, `${skill} 的结论行列出了判定词(实际:${listed.join(" / ") || "无"})`);
+  const used = [...new Set(verdictWords(text))];
+  const missing = used.filter((word) => !listed.includes(word));
+  check(missing.length === 0, `${skill} 的结论行没有漏掉它用到的判定词(漏:${missing.join("、") || "无"})`);
+}
+// sim 的"没有测试平台"必须记 UNVERIFIED/NOT_APPLICABLE 二选一里正确的那一个:
+// 用户口径是"要验证功能却没平台 = 未验证",只有本来就无可仿真行为的模块才算不适用。
+check(
+  /没有测试平台[\s\S]{0,40}(UNVERIFIED|BLOCKED)/u.test(simSkillText),
+  "仿真技能写明:没有测试平台记 UNVERIFIED/BLOCKED,不是 NOT_APPLICABLE"
+);
+// 已删除的能力不许在文案里复活:stage-status 是用户明确去掉的(记录进度意义不大),
+// 但"自带的汇总命令"这类说法会留在技能与提示词里,读了会去找一个不存在的命令。
+// agent.cordis.yml 是预设的组装,预设被复制到用户预设目录后它才生效 —— 里面的文案同样要查。
+const shippedTexts = [
+  ["README.md", readFileSync(join(ROOT, "README.md"), "utf8")],
+  ["agent.cordis.yml", readFileSync(join(presetDir, "agent.cordis.yml"), "utf8")],
+  ...skillNames.map((skill) => [`${skill}/SKILL.md`, readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")]),
+];
+for (const [name, text] of shippedTexts) {
+  const dead = ["stage-status", "汇总命令"].filter((word) => text.includes(word));
+  check(dead.length === 0, `${name} 没有引用已删除的进度汇总命令(实际:${dead.join("、") || "无"})`);
+}
 // 节奏按用户的习惯:写完再统一检查(边写边跑效率低);只保留"排查具体报错时可单查"这个例外
 const lintText = readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8");
 check(

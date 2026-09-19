@@ -79,8 +79,8 @@
         清空、不可逆的批量改动 —— 先核实目标与依据,并让用户点头,不要自行推断参数。
       - 长任务的结论与证据落到文件里(模块级写模块自己的阶段文件夹,工程级写工作区根下的
         `project/`),不要只留在对话里 —— 会话会被压缩,文件不会。结果文件里保留
-        `结论:PASS`(或 FAIL / BLOCKED / NOT_APPLICABLE / UNVERIFIED)那一行,自带的汇总命令
-        靠它读进度;接手长任务或想快速看进度时跑一次汇总命令,短任务不必。
+        `结论:PASS`(或 FAIL / BLOCKED / NOT_APPLICABLE / UNVERIFIED)那一行,接手时长任务的人
+        读这一行就知道上个环节停在哪;短任务不必。
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'

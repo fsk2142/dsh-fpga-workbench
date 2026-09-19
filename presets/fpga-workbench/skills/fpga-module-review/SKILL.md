@@ -45,7 +45,7 @@ description: 审 FPGA 代码、方案或验收结论时用:审查 RTL 结构与�
 
 写 `<模块根>/review.md`(**审查是按需能力,不占目录**):
 
-- **结论行**(汇总命令靠它读进度,写成一个词):
+- **结论行**(写成一个词,接手的人一眼看到审到哪):
   `结论:APPROVED` / `结论:CHANGES_REQUESTED` / `结论:BLOCKED`
 - 正文里可以用自然语言写同一件事(approved / changes requested / blocked),两种都要有
 - 逐条核对结果(上述九条,一条一行)

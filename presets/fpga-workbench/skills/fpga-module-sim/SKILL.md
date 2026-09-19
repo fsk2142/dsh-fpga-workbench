@@ -102,7 +102,10 @@ xsim tb_sim -runall
 - **PASS**:`err_cnt = 0`,日志里出现成功标记,进程退出码 0
 - **FAIL**:非零退出,或日志里出现 `$error` / `$fatal`,或超时 `TB TIMEOUT`
 - **BLOCKED**:vsim 没就绪(设置里标了「未就绪」)→ 如实说明并停下,不得假装跑过
-- **NOT_APPLICABLE**:`sim/` 下还没有测试平台(`tb_*`,扩展名按仿真语言)
+- **UNVERIFIED**:`sim/` 下还没有测试平台(`tb_*`,扩展名按仿真语言)、本次目标就是验证功能。
+  这**不是** `NOT_APPLICABLE` —— 通常答案是把测试平台写出来(见上面「没有测试平台 ≠ 仿真不适用」)
+- **NOT_APPLICABLE**:只有这个模块**本来就没有可仿真的行为**(例如纯约束 / 纯管脚类改动),
+  已说明理由才算
 
 挂死或超时时,先怀疑:时钟没起、复位没放、握手没接上、位宽对错。**不得第一反应就是调大看门狗。**
 
@@ -110,7 +113,7 @@ xsim tb_sim -runall
 
 写 `<模块根>/sim/sim.md`:
 
-- 结论(`PASS` / `FAIL` / `BLOCKED` / `NOT_APPLICABLE`)
+- 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)
 - 跑过的**命令原文**(或该 `run.do` 的路径),可直接复制复现
 - PASS 时:成功标记那一行原文
 - FAIL 时:错误列表 + 日志路径 + 判断的原因(以及改了什么)

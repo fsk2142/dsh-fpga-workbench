@@ -503,8 +503,8 @@ check(
   /写完[\s\S]{0,16}检查/u.test(lintText) && !/随时可跑/u.test(lintText),
   "检查技能按用户节奏:写完再统一检查(不是'随时可跑'/'边写边跑')"
 );
-const runSection = /## 跑什么[^\n]*\n([\s\S]*?)(?=\n## )/u.exec(lintText)?.[1] ?? "";
-check(runSection !== "", "检查技能有一节专讲『跑什么、什么时候跑』(命令与时机写在一起)");
+const runSection = /## 本环节要跑的命令([\s\S]*?)(?=\n## )/u.exec(lintText)?.[1] ?? "";
+check(runSection !== "", "检查技能有一节专讲『本环节要跑的命令』(命令与时机写在一起)");
 check(
   /写完之后|三步都写完之后/u.test(runSection) && /rtl-check\.mjs/u.test(runSection),
   "那一节里同时写明时机(写完之后)与要跑的命令(rtl-check.mjs),不是只提'跑全量'"

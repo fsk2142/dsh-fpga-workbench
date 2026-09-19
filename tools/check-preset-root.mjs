@@ -253,7 +253,27 @@ for (const skill of skillNames) {
   );
 }
 
-// ── 任务驱动(不是阶段流水线)────────────────────────────────────────────────
+// ── fpga-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
+//
+// 顺序:① 先定做模块还是做工程(没说就问) → ② 问器件(不同器件写法不一样) →
+// ③ 讨论方案(含"要不要用 Python 写参考模型") → ④ 画实现思路流程图让他确认。
+// 顺序错了等于第一句话就问偏(比如先问功能、把方向与器件留到最后),所以按位置钉住。
+const specSkill = readFileSync(join(skillDir, "fpga-spec", "SKILL.md"), "utf8");
+const stepAt = ["第一步", "第二步", "第三步", "第四步"].map((step) => specSkill.indexOf(`## ${step}:`));
+check(
+  stepAt.every((at) => at >= 0),
+  `fpga-spec 写明了一到四步(缺:${["第一步", "第二步", "第三步", "第四步"].filter((_, index) => stepAt[index] < 0).join("、") || "无"})`
+);
+check(stepAt.every((at, index) => index === 0 || at > stepAt[index - 1]), "四步按顺序排列");
+const stepText = (index) => specSkill.slice(stepAt[index], stepAt[index + 1] ?? specSkill.length);
+check(stepText(0).includes("模块") && stepText(0).includes("工程"), "第一步先定「做模块还是做工程」");
+check(stepText(0).includes("fpga-project-spec"), "第一步把「做工程」指向 fpga-project-spec");
+check(stepText(1).includes("器件") && /写法不一样|写法要改/u.test(stepText(1)), "第二步问器件,并说明为什么(不同器件写法不一样)");
+check(stepText(2).includes("参考"), "第三步里有「先建参考,再定方案」");
+check(/Python/u.test(stepText(2)), "第三步问用户要不要用 Python 写参考模型");
+check(/流程图/u.test(stepText(3)), "第四步画实现思路流程图");
+// 器件必须先于流程图:器件会影响流程图里的原语/资源选择
+check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
 //
 // 这一条是那份《轻量化优化建议》的核心诉求:技能是按需取用的能力地图,不是必经流水线。
 // 口气很容易在以后改文案时长回来,所以钉两条:

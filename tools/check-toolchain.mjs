@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import {
   FIELDS,
   NS,
+  TOOLS,
   backupChangedFiles,
   describeEnv,
   inspectTools,
@@ -470,6 +471,31 @@ check(modeSource.includes("systemPrompt.section("), "模式半侧注册提示段
 check(modeSource.includes('inject = ["systemPrompt"]'), "模式半侧的 inject 是服务名数组(写成对象会让这一行整个不激活)");
 check(modeSource.includes("describeEnv(") && modeSource.includes("probeFilesystem"), "模式半侧复用 lib/toolchain.js 的定义,不另写一份文案");
 check(!modeSource.includes("child_process") && !modeSource.includes("spawn("), "模式半侧不起进程(命令交给 shell 工具跑)");
+
+// 自带命令按环节分,名字带环节前缀(用户要求:一眼看出属于哪个环节,不要跨环节混用)。
+// 以前是 init-scaffold / new-file / check-rtl 这种通用名,看不出归属,也容易在错的环节被调用。
+const STAGE_PREFIX = { "规格环节": "spec-", "RTL 环节": "rtl-", "仿真环节": "sim-" };
+check(
+  TOOLS.every((tool) => typeof tool.stage === "string" && tool.stage !== ""),
+  "每个自带命令都标了属于哪个环节"
+);
+const prefixViolations = TOOLS.filter((tool) => {
+  const prefix = STAGE_PREFIX[tool.stage];
+  return prefix !== undefined && !tool.file.startsWith(prefix);
+});
+check(
+  prefixViolations.length === 0,
+  `命令名带环节前缀(不合规:${prefixViolations.map((tool) => `${tool.file}(${tool.stage})`).join("、") || "无"})`
+);
+check(new Set(TOOLS.map((tool) => tool.file)).size === TOOLS.length, "同一命令不重复登记");
+check(
+  !TOOLS.some((tool) => /new-file|stamp/u.test(tool.file)),
+  "起文件的命令按环节分开(rtl-new / sim-new),不是一个大而全的通用入口"
+);
+check(
+  TOOLS.every((tool) => !tool.file.includes("/") && !tool.file.includes("\\")),
+  "命令都在工具目录顶层(tools/lib 是内部模块,不算命令)"
+);
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");
 if (failures.length > 0) process.exitCode = 1;

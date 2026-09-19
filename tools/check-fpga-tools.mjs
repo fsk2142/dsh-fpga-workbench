@@ -1,4 +1,4 @@
-// 自带工具脚本的功能自检(check-rtl.mjs / stage-status.mjs)。
+// 自带工具脚本的功能自检(spec-scaffold / rtl-new / rtl-check / sim-new / stage-status)。
 //
 // 为什么必须机器验:这两个脚本是"确定性检查",价值全在判得准。误报一次,人就再也不信它了。
 // 所以这里用真文件跑,断言的是会真出错的性质:
@@ -15,8 +15,9 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, unlinkSync, writeFil
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/check-rtl.mjs";
-import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/init-scaffold.mjs";
+import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/rtl-check.mjs";
+import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/spec-scaffold.mjs";
+import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
 import { collect, findConvention, readVerdict } from "../presets/fpga-workbench/tools/stage-status.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -276,6 +277,30 @@ check(
   "每个模块各自一套模块级文件夹"
 );
 
+// ── new-file:按模板起文件(只替模块名,内容原样保留) ──────────────────────
+const bundledRtl = readFileSync(join(TEMPLATES, "rtl.sv"), "utf8");
+const rendered = renderTemplate(bundledRtl, "UartRx");
+check(rendered.replaced.join(",") === "ModuleName", `只替模块名(实际替了 ${rendered.replaced.join("、") || "无"})`);
+check(!rendered.text.includes("<ModuleName>"), "模块名占位符替干净了");
+check(rendered.text.includes("<DATE>") && rendered.text.includes("<Author>"), "日期 / 作者不动(内容归模板自己管)");
+check(rendered.remaining.includes("DATE") && rendered.remaining.includes("Author"), "没替的占位符会被提示出来");
+
+// 用户自己的模板(没有任何占位符)→ 必须与模板逐字节一致
+const plainTemplate = join(SANDBOX, "plain-tb.vhd");
+writeFileSync(plainTemplate, "-- 我自己的模板\nentity tb_x is end entity;\n");
+const plain = renderTemplate(readFileSync(plainTemplate, "utf8"), "UartRx");
+check(plain.text === readFileSync(plainTemplate, "utf8"), "没有占位符的模板:原样复制,一个字节都不改");
+check(plain.replaced.length === 0, "没有占位符时不谎报'替换了什么'");
+
+// 落点与文件名
+check(defaultDestination("rtl", "UartRx", "C:/t/rtl.sv") === join("rtl", "UartRx.sv"), "RTL 落到 rtl/<模块名>.sv");
+check(
+  defaultDestination("tb", "UartRx", "C:/t/tb.sv") === join("sim", "tb_uart_rx.sv"),
+  "测试平台落到 sim/tb_<snake>.sv(驼峰转下划线)"
+);
+check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("sim", "tb_uart_rx.vhd"), "扩展名跟着模板走");
+check(defaultDestination("xdc", "UartRx", "C:/t/c.xdc") === undefined, "约束文件不给默认位置(不瞎猜)");
+
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
 const run = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: "ignore" }).status;
 
@@ -284,26 +309,50 @@ mkdirSync(join(SANDBOX, "tb-v-mod", "rtl"), { recursive: true });
 mkdirSync(join(SANDBOX, "tb-v-mod", "sim"), { recursive: true });
 writeFileSync(join(SANDBOX, "tb-v-mod", "sim", "tb_only.v"), goodTb);
 check(
-  run("check-rtl.mjs", [join(SANDBOX, "tb-v-mod")]) === 0,
+  run("rtl-check.mjs", [join(SANDBOX, "tb-v-mod")]) === 0,
   "sim/ 下的 .v 测试平台会被检查(只认 .sv 的话这里会退 2)"
 );
 mkdirSync(join(SANDBOX, "vhdl-mod", "rtl"), { recursive: true });
 writeFileSync(join(SANDBOX, "vhdl-mod", "rtl", "top.vhd"), "-- VHDL 源码\n");
-check(run("check-rtl.mjs", [join(SANDBOX, "vhdl-mod")]) === 2, "纯 VHDL 项目:如实退 2(本检查器不覆盖,不得当通过)");
+check(run("rtl-check.mjs", [join(SANDBOX, "vhdl-mod")]) === 2, "纯 VHDL 项目:如实退 2(本检查器不覆盖,不得当通过)");
 
-check(run("check-rtl.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");
-check(run("check-rtl.mjs", [join(SANDBOX, "bad-mod")]) === 1, "check-rtl 违规 → 退出码 1");
-check(run("check-rtl.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有警告 → 退出码 0(警告不拦门禁)");
-check(run("check-rtl.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
+check(run("rtl-check.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");
+check(run("rtl-check.mjs", [join(SANDBOX, "bad-mod")]) === 1, "check-rtl 违规 → 退出码 1");
+check(run("rtl-check.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有警告 → 退出码 0(警告不拦门禁)");
+check(run("rtl-check.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
 check(run("stage-status.mjs", [join(SANDBOX, "status-demo")]) === 0, "stage-status 有约定文件 → 0");
 check(run("stage-status.mjs", [join(ROOT, "tools")]) === 2, "stage-status 没约定文件 → 2");
-check(run("init-scaffold.mjs", []) === 2, "init-scaffold 不给根目录 → 退出码 2");check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli"), "--kind", "bogus"]) === 2, "--kind 非法 → 退出码 2");
-check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "建模块骨架 → 退出码 0");
+check(run("spec-scaffold.mjs", []) === 2, "init-scaffold 不给根目录 → 退出码 2");
+// new-file:起文件、不覆盖已有文件、模板不存在要报错
+const newFileRoot = join(SANDBOX, `new-file-${stamp}`);
+check(
+  run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 0,
+  "new-file 按模板起文件 → 退出码 0"
+);
+check(existsSync(join(newFileRoot, "rtl", "uart_rx.sv")), "RTL 落在 rtl/ 下");
+check(
+  run("rtl-check.mjs", [newFileRoot]) === 0,
+  "模板生成的文件直接过机械检查(骨架开箱合规)"
+);
+check(
+  run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 1,
+  "已存在的文件不覆盖 → 退出码 1"
+);
+check(
+  run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--force"]) === 0,
+  "--force 才覆盖"
+);
+check(
+  run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "no-such.sv")]) === 2,
+  "模板不存在 → 退出码 2(不猜模板)"
+);
+check(run("rtl-new.mjs", [newFileRoot, "uart_rx"]) === 2, "不给 --template → 退出码 2");check(run("spec-scaffold.mjs", [join(SANDBOX, "scaffold-cli"), "--kind", "bogus"]) === 2, "--kind 非法 → 退出码 2");
+check(run("spec-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "建模块骨架 → 退出码 0");
 check(
   existsSync(join(SANDBOX, "scaffold-cli", "rtl")) && existsSync(join(SANDBOX, "scaffold-cli", ".fpga-workbench.json")),
   "CLI 真的把骨架建出来了"
 );
-check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复建同一目录也返回 0(幂等)");
+check(run("spec-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复建同一目录也返回 0(幂等)");
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;

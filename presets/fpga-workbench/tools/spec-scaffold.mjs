@@ -1,4 +1,4 @@
-// 一次性建立模块 / 工程的阶段文件夹骨架。
+// 规格环节:一次性建立模块 / 工程的骨架(阶段文件夹 + 锚点)。
 //
 // 为什么要有它:目录名与个数是固定的,但手工逐个建立容易漏(漏了后面的技能会去找不存在的目录),
 // 不同会话建出来的也不一致。这把"建骨架"变成一条命令:
@@ -9,7 +9,7 @@
 // 只建目录与锚点,**不生成空的 spec.md / flow.md** —— 报告要由讨论产出,不预置占位内容。
 //
 // 用法:
-//   node init-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
+//   node spec-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
 // 退出码:0 成功 / 1 出错 / 2 参数不对
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -110,7 +110,7 @@ function parseArgs(argv) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.root === undefined) {
-    console.error("用法:node init-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]");
+    console.error("用法:node spec-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]");
     return 2;
   }
   if (args.kind !== "module" && args.kind !== "project") {

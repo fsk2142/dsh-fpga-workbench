@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const LIB = join(ROOT, "lib");
+const BUNDLED_TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -175,9 +176,19 @@ function runBundle(source, options) {
 }
 
 // ── 1. 语法 ─────────────────────────────────────────────────────────────────
+// 自带工具目录里含子目录(tools/lib —— 各环节入口共用的内部模块),语法检查要跟着递归,
+// 否则要么漏检 lib/ 下的文件,要么拿目录去跑 `node --check`。
+const toolFiles = readdirSync(BUNDLED_TOOLS, { withFileTypes: true }).flatMap((entry) => {
+  const rel = join("presets", "fpga-workbench", "tools", entry.name);
+  if (entry.isFile()) return [rel];
+  if (!entry.isDirectory()) return [];
+  return readdirSync(join(ROOT, rel), { withFileTypes: true })
+    .filter((inner) => inner.isFile() && inner.name.endsWith(".mjs"))
+    .map((inner) => join(rel, inner.name));
+});
 const loadable = [
   ...readdirSync(LIB).filter((name) => name.endsWith(".js")).map((name) => join("lib", name)),
-  ...readdirSync(join(ROOT, "presets", "fpga-workbench", "tools")).map((name) => join("presets", "fpga-workbench", "tools", name))
+  ...toolFiles
 ];
 const broken = loadable.filter((rel) => spawnSync(process.execPath, ["--check", join(ROOT, rel)], { stdio: "ignore" }).status !== 0);
 check(broken.length === 0, `${loadable.length} 个可加载文件语法通过`, broken.join(", "));

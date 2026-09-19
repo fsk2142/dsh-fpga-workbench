@@ -49,7 +49,7 @@ presets/fpga-workbench/
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
     templates/                自带模板:rtl.sv / tb.sv / constraints.xdc(写法规范的载体)
-    tools/                    自带命令:init-scaffold.mjs(一次建骨架)/ check-rtl.mjs(规范检查)/ stage-status.mjs(阶段汇总)
+    tools/                    自带命令:spec-scaffold.mjs(建骨架)/ rtl-new.mjs + sim-new.mjs(按模板起文件)/ rtl-check.mjs(规范检查)/ stage-status.mjs(汇总);lib/ 是内部模块
 tools/                        8 个自检 + install.mjs + 依赖安全/锁文件比对
 ```
 
@@ -58,11 +58,15 @@ tools/                        8 个自检 + install.mjs + 依赖安全/锁文件
 技能的判据写在文档里,靠 AI 逐条看;**能用一条命令判定成败的,做成脚本** —— 这类检查脚本比
 人可靠,而且每次代价一样:
 
-| 命令 | 干什么 | 退出码 |
-|---|---|---|
-| `node presets/fpga-workbench/tools/init-scaffold.mjs <根目录> [--kind module\|project] [--modules A,B] [--force] [--dry-run]` | 一次性建好阶段文件夹骨架 + 锚点 `.fpga-workbench.json`(幂等;只建目录,不生成空报告) | 0 成功 / 1 出错 / 2 参数不对 |
-| `node presets/fpga-workbench/tools/check-rtl.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
-| `node presets/fpga-workbench/tools/stage-status.mjs <目录>` | 阶段状态汇总:读各阶段结果里的 `结论:...`,一眼看出做到哪了 | 0 正常 / 2 找不到 `.fpga-workbench.json` |
+命令名**带环节前缀**(一看就知道属于哪个环节,不跨环节混用;`tools/lib/` 是内部模块,不是命令):
+
+| 环节 | 命令 | 干什么 | 退出码 |
+|---|---|---|---|
+| 规格 | `node presets/fpga-workbench/tools/spec-scaffold.mjs <根目录> [--kind module\|project] [--modules A,B] [--force] [--dry-run]` | 一次建好环节目录骨架 + 锚点 `.fpga-workbench.json`(幂等;只建目录,不生成空报告) | 0 成功 / 1 出错 / 2 参数不对 |
+| RTL | `node presets/fpga-workbench/tools/rtl-new.mjs <模块根> <模块名> --template <RTL 模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起 RTL 文件:复制模板、**只替模块名**,其余内容原样保留;默认落 `rtl/<模块名>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
+| RTL | `node presets/fpga-workbench/tools/rtl-check.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
+| 仿真 | `node presets/fpga-workbench/tools/sim-new.mjs <模块根> <模块名> --template <测试平台模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起测试平台;默认落 `sim/tb_<模块名>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
+| 汇总 | `node presets/fpga-workbench/tools/stage-status.mjs <目录>` | 各环节状态汇总:读各环节结果里的 `结论:...`,一眼看出做到哪了 | 0 正常 / 2 找不到 `.fpga-workbench.json` |
 
 另外两条规则与旧包一致,不要自行加严:
 
@@ -86,7 +90,7 @@ RTL 的文件头、九个小节块、端口对齐这些**格式**都是各自的
 
 这样换一套模板 = 换写法规范,技能一个字都不用改。
 
-**已知边界(别指望它做不到的事)**:`check-rtl.mjs` 这个机械检查器认的是**自带那套约定** ——
+**已知边界(别指望它做不到的事)**:`rtl-check.mjs` 这个机械检查器认的是**自带那套约定** ——
 文件头字段、九个小节块、端口对齐、复位高有效。换成你自己的模板时:
 
 - 格式细节(缩进、对齐、注释风格)会跟着你的模板走 ✓

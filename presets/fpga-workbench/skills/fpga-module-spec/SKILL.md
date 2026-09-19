@@ -214,7 +214,7 @@ flowchart LR
 **1. 建骨架**(模块根已存在就跳过这一步的目录部分,脚本幂等):
 
 ```
-node "<自带工具目录>/init-scaffold.mjs" <模块根> --kind module
+node "<自带命令目录>\spec-scaffold.mjs" <模块根> --kind module
 ```
 
 它写锚点 `.fpga-workbench.json`(kind 与 spec 路径),并建好 `spec/ rtl/ sim/ comp/ synth/ timing/`

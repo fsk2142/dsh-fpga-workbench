@@ -330,16 +330,16 @@ check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
 
 // 收尾(用户要求):产物除 spec.md 外,流程图要单独成文;骨架用自带脚本一次建好,不手工建目录
 check(/flow\.md/u.test(specSkill), "模块级写明流程图单独存成 spec/flow.md(不只塞在 spec.md 里)");
-check(/init-scaffold\.mjs/u.test(specSkill), "模块级写明用自带脚本一次性建骨架");
+check(/spec-scaffold\.mjs/u.test(specSkill), "模块级写明用自带脚本一次性建骨架");
 check(/--dry-run/u.test(specSkill), "模块级提示先 --dry-run 看一眼");
 const projectSpec = readFileSync(join(skillDir, "fpga-project-spec", "SKILL.md"), "utf8");
 check(/flow\.md/u.test(projectSpec), "工程级写明框图单独存成 project/spec/flow.md");
-check(/init-scaffold\.mjs/u.test(projectSpec), "工程级写明用自带脚本建骨架");
+check(/spec-scaffold\.mjs/u.test(projectSpec), "工程级写明用自带脚本建骨架");
 check(
   /--kind project/u.test(projectSpec) && /--modules/u.test(projectSpec),
   "工程级调用脚本时带上 --kind project 与 --modules(给每个模块建一套)"
 );
-check(existsSync(join(presetDir, "tools", "init-scaffold.mjs")), "自带 init-scaffold.mjs 确实在包里");
+check(existsSync(join(presetDir, "tools", "spec-scaffold.mjs")), "自带 spec-scaffold.mjs 确实在包里");
 
 // 原型是三个环节共同的参考(用户明确要求):写 RTL 照它、测试平台拿它的输出当期望、
 // 比对拿它当 golden 来源 —— 曾经只写了"comp 的参考模型来源",漏了另外两处。
@@ -359,10 +359,10 @@ for (const downstream of ["fpga-module-sim", "fpga-module-comp"]) {
 // ── 环节目录契约(用户定过的形态) ──────────────────────────────────────────
 //
 // 两处容易漂移、而漂移了又不报错:
-// · init-scaffold 建的目录 vs stage-status 认的环节 —— 不一致就会出现"建了没人读"或"读一个
+// · spec-scaffold 建的目录 vs stage-status 认的环节 —— 不一致就会出现"建了没人读"或"读一个
 //   不存在的目录"
 // · 报告位置:机械检查报告与 RTL 同目录(`rtl/lint.md`);审查是按需能力,不占目录
-const scaffoldSource = readFileSync(join(presetDir, "tools", "init-scaffold.mjs"), "utf8");
+const scaffoldSource = readFileSync(join(presetDir, "tools", "spec-scaffold.mjs"), "utf8");
 const statusSource = readFileSync(join(presetDir, "tools", "stage-status.mjs"), "utf8");
 const scaffoldStages = JSON.parse(/MODULE_STAGES = (\[[^\]]*\])/u.exec(scaffoldSource)[1]);
 const statusStages = JSON.parse(/MODULE_STAGES = (\[[^\]]*\])/u.exec(statusSource)[1]);
@@ -386,8 +386,8 @@ check(
   "审查报告写在 <模块根>/review.md"
 );
 check(
-  !/verif/u.test(readFileSync(join(presetDir, "tools", "check-rtl.mjs"), "utf8")),
-  "check-rtl 里没有旧布局的 verif/ 残留(测试平台在 sim/ 下找)"
+  !/verif/u.test(readFileSync(join(presetDir, "tools", "rtl-check.mjs"), "utf8")),
+  "rtl-check 里没有旧布局的 verif/ 残留(测试平台在 sim/ 下找)"
 );
 // 文件名跟着设置里选的语言走:TB 的扩展名不能写死 .sv(选 VHDL 就是 .vhd),
 // 而 VHDL 本检查器不覆盖 —— 必须说清"记 NOT_APPLICABLE",不能静默当通过
@@ -403,10 +403,10 @@ check(
   /写完[\s\S]{0,16}检查/u.test(lintText) && !/随时可跑/u.test(lintText),
   "检查技能按用户节奏:写完再统一检查(不是'随时可跑'/'边写边跑')"
 );
-const checkRtlText = readFileSync(join(presetDir, "tools", "check-rtl.mjs"), "utf8");
-check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "check-rtl 认 .v 的 TB,并对 VHDL 有明确交代");
+const checkRtlText = readFileSync(join(presetDir, "tools", "rtl-check.mjs"), "utf8");
+check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "rtl-check 认 .v 的 TB,并对 VHDL 有明确交代");
 // 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点
-check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "check-rtl 跳过 ip/ 目录(外来代码不按本规范查)");
+check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "rtl-check 跳过 ip/ 目录(外来代码不按本规范查)");
 check(/rtl\/ip\//u.test(lintText), "检查技能写明外来代码放 rtl/ip/,检查会跳过");
 // IP 流程(用户要求):用到 IP 先问用户"自建还是你提供";生成/拿到后按用途归位 ——
 // 仿真文件 → sim/,RTL 与综合用的部分(含 .xci)→ rtl/ip/
@@ -417,6 +417,11 @@ check(
 check(
   /rtl\/ip\//u.test(lintText) && /仿真用的文件|仿真模型/u.test(lintText),
   "rtl 技能写明 IP 的归位规则(实体与 .xci → rtl/ip/,仿真模型 → sim/)"
+);
+// 起文件靠复制模板,不靠手抄:脚本只替模块名,内容原样保留(用户定的口径)
+check(
+  /rtl-new\.mjs/u.test(lintText) && /只替模块名/u.test(lintText),
+  "rtl 技能写明用 rtl-new.mjs 复制模板,且只替模块名"
 );
 // 路径口径统一:IP 实体就写 rtl/ip/、仿真模型写 sim/ —— 不许再出现裸的 `ip/` 路径
 const bareIp = skillNames.filter((skill) => /`ip\//u.test(readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")));

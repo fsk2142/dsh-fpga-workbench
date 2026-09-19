@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 模块 RTL 的机械规范检查 —— 从 FPGAWorkFlowKit 的 check_rtl_compliance.py 移植,
+// RTL 环节:模块 RTL 的机械规范检查 —— 从 FPGAWorkFlowKit 的 check_rtl_compliance.py 移植,
 // 规则与宽容度照抄,不自己加严:
 //
 //   * 用户 2026-09-03 裁决:纯格式检查要宽容。文件头只要求"顶部有分隔条 + 前 15 行内
@@ -11,7 +11,7 @@
 //     WARN_CHECKS 一致);其余是 FAIL。
 //
 // 用法:
-//   node check-rtl.mjs [<模块目录>] [--json]
+//   node rtl-check.mjs [<模块目录>] [--json]
 // 模块目录默认当前目录;扫 <模块>/rtl 下的 .v/.sv,并顺带检查 <模块>/sim/tb_*.sv。
 // 退出码:0 全部通过(可以只有警告) / 1 有 FAIL / 2 用法或环境错误。
 
@@ -222,7 +222,7 @@ const isFailure = (issue) => !WARN_ONLY.has(issue.rule);
 function main() {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
-    console.log("用法:node check-rtl.mjs [<模块目录>] [--json]");
+    console.log("用法:node rtl-check.mjs [<模块目录>] [--json]");
     return 0;
   }
   const asJson = args.includes("--json");
@@ -231,7 +231,7 @@ function main() {
   const rtlDir = join(moduleRoot, "rtl");
   if (!existsSync(rtlDir)) {
     console.error(`找不到 rtl/ 目录:${rtlDir}`);
-    console.error("用法:node check-rtl.mjs [<模块目录>] —— 模块目录下要有 rtl/。");
+    console.error("用法:node rtl-check.mjs [<模块目录>] —— 模块目录下要有 rtl/。");
     return 2;
   }
 

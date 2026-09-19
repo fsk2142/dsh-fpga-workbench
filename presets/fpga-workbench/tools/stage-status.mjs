@@ -18,7 +18,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /**
- * 模块级的环节(与 init-scaffold.mjs 的 MODULE_STAGES 必须一致)。
+ * 模块级的环节(与 spec-scaffold.mjs 的 MODULE_STAGES 必须一致)。
  *
  * `review` 也在名单里(汇总时能看到审没审),但它**不占目录** —— 见 {@link RESULT_TARGETS}。
  */

@@ -262,7 +262,7 @@ for (const skill of skillNames) {
 }
 
 // ── 级别划分清楚:模块 6 个 / 工程 9 个 ──────────────────────────────────────
-// 模块级六个 = 五个环节(spec/rtl/sim/verif/synth)+ 审查(按需能力,不占目录)
+// 模块级五个 = 四个环节(spec/rtl/verif/synth)+ 审查(按需能力,不占目录)
 const moduleSkills = skillNames.filter((name) => name.startsWith("fpga-module-"));
 const projectSkills = skillNames.filter((name) => name.startsWith("fpga-project-"));
 check(
@@ -467,6 +467,20 @@ check(
   /verif-wave\.mjs/u.test(verifSkillText) && /波形/u.test(verifSkillText),
   "验证技能写明看波形的手段(verif-wave:开 GUI、加波形、不自动 run)"
 );
+// 比对方式本身有疑问时(格式对不上 / 容差拿不准 / golden 来路不明)要**回去问用户**,
+// 不许自己改比对口径把结论凑过去 —— 判据一松,后面所有结论都不作数。
+check(
+  /比对方式[\s\S]{0,40}问用户|问用户[\s\S]{0,40}比对/u.test(verifSkillText),
+  "验证技能写明:比对方式有问题就回去问用户"
+);
+check(
+  /(不得|不许|不要)[\s\S]{0,20}(自行|自己)?改比对口径/u.test(verifSkillText),
+  "验证技能写明:不得自行改比对口径(判据一松,后续结论都不作数)"
+);
+check(
+  /格式对不上|容差/u.test(verifSkillText) && /golden[\s\S]{0,30}(来路|版本)/u.test(verifSkillText),
+  "验证技能点名三类要问用户的比对问题(格式 / 容差 / golden 来路)"
+);
 
 check(
   /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
@@ -480,7 +494,6 @@ const verdictWords = (text) => [...text.matchAll(VERDICTS)].map((m) => m[0]);
 // 环节报告用 PASS/FAIL/BLOCKED/NOT_APPLICABLE/UNVERIFIED。审查正文里提到下游的 FAIL
 // (说某个环节挂 FAIL)不算它的判定词,所以按技能限定可用的词,而不是全文搜大写词。
 const MODULE_VERDICT_SETS = {
-  "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-module-rtl": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-synth": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
@@ -563,19 +576,20 @@ check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "rtl-check 
 // 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点
 check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "rtl-check 跳过 ip/ 目录(外来代码不按本规范查)");
 check(/rtl\/ip\//u.test(lintText), "检查技能写明外来代码放 rtl/ip/,检查会跳过");
-// IP 流程(用户要求):用到 IP 先问用户"自建还是你提供";生成/拿到后按用途归位 ——
-// 仿真文件 → sim/,RTL 与综合用的部分(含 .xci)→ rtl/ip/
+// IP 流程(用户要求):用到 IP 先问用户"自建还是他提供";生成/拿到后按用途归位 ——
+// 仿真文件 → verif/,RTL 与综合用的部分(含 .xci)→ rtl/ip/
+// 断言用"问用户 + 生成/提供"这组语义,不钉具体措辞:文案会随精炼改词(如"不要"→"不得")
 check(
-  /问用户/u.test(lintText) && /(自己生成|你生成)/u.test(lintText),
+  /问用户/u.test(lintText) && /(由本环节生成|自己生成|你生成)/u.test(lintText),
   "rtl 技能写明:用到 IP 核先问用户是自建还是他提供"
 );
 check(
   /rtl\/ip\//u.test(lintText) && /仿真用的文件|仿真模型/u.test(lintText),
-  "rtl 技能写明 IP 的归位规则(实体与 .xci → rtl/ip/,仿真模型 → sim/)"
+  "rtl 技能写明 IP 的归位规则(实体与 .xci → rtl/ip/,仿真模型 → verif/)"
 );
 // 一个文件写不下就拆子模块(用户 2026-09-19 指出原来缺这条):要写明**什么时候拆**
 // (一个文件写不完整块逻辑就拆),而且**判据是功能、不是代码行数**(用户当场点明),
-// 以及要用现成的子模块时先问用户"你提供还是我写" —— 与 IP 那条同一套问法。
+// 以及要用现成的子模块时先问用户"他提供还是本环节写" —— 与 IP 那条同一套问法。
 // 只断言"拆"不够:曾经只有"拆了之后放哪",没有触发条件。
 const splitSection = /### 一个模块拆多个文件时([\s\S]*?)\n### /u.exec(lintText)?.[1] ?? "";
 check(splitSection !== "", "rtl 技能有「一个模块拆多个文件时」一节");
@@ -584,12 +598,12 @@ check(
   "那一节写明拆子模块的触发条件(一个文件写不完整块逻辑就拆)"
 );
 check(
-  /按功能|依据是功能/u.test(splitSection) && !/行数[\s\S]{0,12}(就拆|作为判据)/u.test(splitSection),
+  /判据是功能|按功能|依据是功能/u.test(splitSection) && !/行数[\s\S]{0,12}(就拆|作为判据)/u.test(splitSection),
   "那一节的判据写在功能上,不是代码行数"
 );
 check(
   /子模块[\s\S]{0,80}先问用户|先问用户[\s\S]{0,80}子模块/u.test(splitSection) &&
-    /你提供|你来提供/u.test(splitSection),
+    /(用户提供|你提供|你来提供)/u.test(splitSection),
   "那一节写明:要用现成的子模块,先问用户是他提供还是由本环节写"
 );
 // 起文件靠复制模板,不靠手抄:脚本只替模块名,内容原样保留(用户定的口径)
@@ -597,9 +611,9 @@ check(
   /rtl-new\.mjs/u.test(lintText) && /只替模块名/u.test(lintText),
   "rtl 技能写明用 rtl-new.mjs 复制模板,且只替模块名"
 );
-// 路径口径统一:IP 实体就写 rtl/ip/、仿真模型写 sim/ —— 不许再出现裸的 `ip/` 路径
+// 路径口径统一:IP 实体写 rtl/ip/、仿真模型写 verif/ —— 不许再出现裸的 `ip/` 路径
 const bareIp = skillNames.filter((skill) => /`ip\//u.test(readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")));
-check(bareIp.length === 0, `技能里没有裸的 \`ip/\` 路径(应写 rtl/ip/ 或 sim/;实际 ${bareIp.join("、") || "无"})`);
+check(bareIp.length === 0, `技能里没有裸的 \`ip/\` 路径(应写 rtl/ip/ 或 verif/;实际 ${bareIp.join("、") || "无"})`);
 // 第一步必须是"用模板生成文件再编写"(用户要求):先落模板骨架,再填逻辑
 check(
   /第一步:用模板生成文件/u.test(lintText) && /第二步:编译器检查/u.test(lintText) && /第三步:逐条核对规范/u.test(lintText),

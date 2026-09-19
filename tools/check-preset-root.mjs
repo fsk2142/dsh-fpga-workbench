@@ -269,24 +269,31 @@ check(
   moduleSkills.length + projectSkills.length === skillNames.length,
   `每个技能都能看出属于哪一级(没前缀的:${skillNames.filter((name) => !/^fpga-(module|project)-/u.test(name)).join("、") || "无"})`
 );
-check(moduleSkills.length === 6, `模块级 6 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
+check(moduleSkills.length === 5, `模块级 5 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
 check(projectSkills.length === 9, `工程级 9 个(实际 ${projectSkills.length}:${projectSkills.join("、")})`);
 
 // ── fpga-module-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
 //
 // 顺序:① 先定做模块还是做工程(没说就问) → ② 问器件(器件决定写法) →
 // ③ 讨论方案(含"要不要用 Python 写参考模型") → ④ 画实现思路流程图让用户确认 →
-// ⑤ 明确测试平台的实现要求与输入/输出数据来源 → ⑥ 明确比对(comp)的要求与对照数据来源。
-// (⑤⑥ 都是"有要求就按用户的,没有就自己定"。)
+// ⑤ 明确验证要求与对照数据(测试平台怎么搭 / 输入数据 / 对照数据 / 比对格式)。
+// (⑤ 是"有要求就按用户的,没有就自己定"。)
+//
+// 原来是六步(测试平台与数据 / 比对各一步);仿真与比对合成 verif 环节后合并成第五步 ——
+// 两件事本来是一件事,分两步问会出现"没有比对对象却先定了测试平台"这种半截结论。
 // 顺序错了等于第一句话就问偏(比如先问功能、把方向与器件留到最后),所以按位置钉住。
 const specSkill = readFileSync(join(skillDir, "fpga-module-spec", "SKILL.md"), "utf8");
-const STEPS = ["第一步", "第二步", "第三步", "第四步", "第五步", "第六步"];
+const STEPS = ["第一步", "第二步", "第三步", "第四步", "第五步"];
 const stepAt = STEPS.map((step) => specSkill.indexOf(`## ${step}:`));
 check(
   stepAt.every((at) => at >= 0),
-  `fpga-module-spec 写明了一到六步(缺:${STEPS.filter((_, index) => stepAt[index] < 0).join("、") || "无"})`
+  `fpga-module-spec 写明了一到五步(缺:${STEPS.filter((_, index) => stepAt[index] < 0).join("、") || "无"})`
 );
-check(stepAt.every((at, index) => index === 0 || at > stepAt[index - 1]), "六步按顺序排列");
+check(
+  !/## 第六步:/u.test(specSkill),
+  "没有残留的第六步(测试平台与比对已合并成第五步)"
+);
+check(stepAt.every((at, index) => index === 0 || at > stepAt[index - 1]), "五步按顺序排列");
 const stepText = (index) => specSkill.slice(stepAt[index], stepAt[index + 1] ?? specSkill.length);
 check(stepText(0).includes("模块") && stepText(0).includes("工程"), "第一步先定「做模块还是做工程」");
 check(stepText(0).includes("fpga-project-spec"), "第一步把「做工程」指向 fpga-project-spec");
@@ -297,16 +304,16 @@ check(
 check(stepText(2).includes("参考"), "第三步里有「先建参考,再定方案」");
 check(/Python/u.test(stepText(2)), "第三步问用户要不要用 Python 写参考模型");
 check(/流程图/u.test(stepText(3)), "第四步画实现思路流程图");
-// 第五步:测试平台要求 + 输入/输出数据(有则请用户给,没有则自己定)
+// 第五步:测试平台 + 输入数据 + 对照数据 + 比对格式(有则请用户给,没有则自己定)
 const dataStep = stepText(4);
 check(/测试平台/u.test(dataStep), "第五步问测试平台的实现要求");
-check(/输入数据/u.test(dataStep) && /输出数据/u.test(dataStep), "第五步问输入与输出数据");
+check(/输入数据/u.test(dataStep) && /对照数据/u.test(dataStep), "第五步问输入数据与对照数据");
 check(
   /请用户提供|请其提供|由用户提供/u.test(dataStep) && /自己确定|本环节确定|由本环节决定/u.test(dataStep),
   "第五步写明:用户有要求就按用户的,没有就自己定"
 );
-// 六个步骤是讨论环节,不是问卷:每步都要先写清"要定下来的结论",再写讨论内容与注意事项
-check(/讨论的顺序,不是问卷|不是问卷/u.test(specSkill), "开篇点明六步是讨论顺序、不是问卷");
+// 五个步骤是讨论环节,不是问卷:每步都要先写清"要定下来的结论",再写讨论内容与注意事项
+check(/讨论的顺序,不是问卷|不是问卷/u.test(specSkill), "开篇点明五步是讨论顺序、不是问卷");
 for (const [index, step] of STEPS.entries()) {
   check(
     /要定下来的/u.test(stepText(index)),
@@ -317,15 +324,15 @@ check(
   STEPS.every((_, index) => /注意/.test(stepText(index)) || index === 0),
   "各步把易错点放在「注意」里,与讨论内容分开"
 );
-// 第六步:比对(comp)的要求与对照数据 —— 与第五步同一套问法
-const compStep = stepText(5);
-check(/比对/u.test(compStep), "第六步问比对(comp)的要求");
+// 第五步也要问比对那一半(合并的是步骤,不是内容)
+const compStep = stepText(4);
+check(/比对/u.test(compStep), "第五步问比对的要求");
 check(
   /golden|对照数据/u.test(compStep) && /请用户提供|请其提供/u.test(compStep),
-  "第六步问对照数据从哪来、用户有就请他给"
+  "第五步问对照数据从哪来、用户有就请他给"
 );
-check(/NOT_APPLICABLE/u.test(compStep), "第六步说明:不需要比对的模块记 NOT_APPLICABLE");
-check(/样本/u.test(compStep), "第六步明确样本规模(0 样本不得判 PASS)");
+check(/NOT_APPLICABLE/u.test(compStep), "第五步说明:不需要比对的模块记 NOT_APPLICABLE");
+check(/样本/u.test(compStep), "第五步明确样本规模(0 样本不得判 PASS)");
 // 器件必须先于流程图:器件会影响流程图里的原语/资源选择
 check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
 
@@ -342,7 +349,7 @@ check(
   /走不通|不可行/u.test(rtlText) && /改[^。]{0,8}(图|spec)/u.test(rtlText),
   "rtl 技能写明:图走不通要回去改图/规格并重新确认,不得默默换路径"
 );
-for (const reader of ["fpga-module-rtl", "fpga-module-sim", "fpga-module-verif"]) {
+for (const reader of ["fpga-module-rtl", "fpga-module-verif"]) {
   check(
     /参考资料/u.test(readFileSync(join(skillDir, reader, "SKILL.md"), "utf8")),
     `${reader} 会去 spec 的「参考资料」取参照(参考链不能断)`
@@ -362,15 +369,15 @@ check(
 );
 check(existsSync(join(presetDir, "tools", "spec-scaffold.mjs")), "自带 spec-scaffold.mjs 确实在包里");
 
-// 原型是三个环节共同的参考(用户明确要求):写 RTL 照它、测试平台拿它的输出当期望、
-// 比对拿它当 golden 来源 —— 曾经只写了"comp 的参考模型来源",漏了另外两处。
+// 原型是 RTL 与验证共同的参考(用户明确要求):写 RTL 照它,验证拿它当 golden 来源与参考模型。
+// 仿真与比对合成 verif 之后,这两处落点没变,只是"测试平台"与"比对"归了同一篇。
 const prototypeText = stepText(2);
 check(/原型/u.test(prototypeText), "第三步讲了 Python 原型");
 check(
-  ["RTL", "测试平台", "比对"].every((word) => prototypeText.includes(word)),
-  "第三步写明原型是 RTL / 测试平台 / 比对共同的参考"
+  ["RTL", "验证"].every((word) => prototypeText.includes(word)),
+  "第三步写明原型是 RTL / 验证共同的参考(参考模型与 golden 的来源)"
 );
-for (const downstream of ["fpga-module-sim", "fpga-module-verif"]) {
+for (const downstream of ["fpga-module-verif"]) {
   check(
     /原型/u.test(readFileSync(join(skillDir, downstream, "SKILL.md"), "utf8")),
     `${downstream} 去到 spec 里的原型拿参考(不然这条参考链是断的)`
@@ -379,17 +386,20 @@ for (const downstream of ["fpga-module-sim", "fpga-module-verif"]) {
 
 // ── 环节契约(用户定过的形态) ──────────────────────────────────────────────
 //
-// 模块级就是五个环节:**规格(讨论)→ RTL(编写)→ 仿真 → 验证(比对)→ 综合(门禁 + 综合后时序)**。
+// 模块级就是四个环节:**规格(讨论)→ RTL(编写)→ 验证(跑出数据 + 独立比对)→ 综合(门禁 + 综合后时序)**。
+// 仿真与比对合成一个环节(用户口径 2026-09-19):测试平台只负责把数据跑出来,判"对不对"要拿独立
+// 参照比 —— 劈成两半会让人以为"仿真跑绿了"就等于"对了"。骨架里因此没有 sim/。
 // 这里钉死名字与顺序,防止以后漂回 lint/comp/timing 那套旧名,或又冒出一个"审核环节"。
 const scaffoldSource = readFileSync(join(presetDir, "tools", "spec-scaffold.mjs"), "utf8");
 const scaffoldStages = JSON.parse(/MODULE_STAGES = (\[[^\]]*\])/u.exec(scaffoldSource)[1]);
 check(
-  scaffoldStages.join(",") === "spec,rtl,sim,verif,synth",
-  `模块级环节固定为 spec,rtl,sim,verif,synth(实际 ${scaffoldStages.join("、")})`
+  scaffoldStages.join(",") === "spec,rtl,verif,synth",
+  `模块级环节固定为 spec,rtl,verif,synth(实际 ${scaffoldStages.join("、")})`
 );
 check(!scaffoldStages.includes("lint"), "骨架不建 lint/ 目录(机械检查报告跟 RTL 放一起)");
 check(!scaffoldStages.includes("timing"), "模块级不单设 timing/ 目录(综合后时序归综合环节)");
 check(!scaffoldStages.includes("review"), "骨架不建 review/ 目录(审查是按需能力,不占目录)");
+check(!scaffoldStages.includes("sim"), "骨架不建 sim/ 目录(仿真与比对合成 verif/,测试平台不再单占一个目录)");
 check(
   /rtl\/lint\.md/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
   "机械检查报告写在 rtl/lint.md"
@@ -404,39 +414,53 @@ check(
   /综合门禁/.test(synthSkillText) && /时序/.test(synthSkillText),
   "综合环节同时管综合门禁与综合后时序"
 );
+const verifSkillText = readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8");
 check(
-  /<模块根>\/verif\/verif\.md/u.test(readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8")),
+  /<模块根>\/verif\/verif\.md/u.test(verifSkillText),
   "验证报告写在 verif/verif.md"
 );
+// 验证环节现在是"跑出来 + 比对"两件事:缺了哪一半这条断言都会红
 check(
-  !/verif/u.test(readFileSync(join(presetDir, "tools", "rtl-check.mjs"), "utf8")),
-  "rtl-check 里没有旧布局的 verif/ 残留(测试平台在 sim/ 下找)"
+  /测试平台/.test(verifSkillText) && /参考模型|golden/.test(verifSkillText) && /比对/.test(verifSkillText),
+  "验证技能同时管测试平台(跑出数据)与独立比对(判对不对)"
+);
+check(
+  /归属/.test(verifSkillText) && /找用户|请用户/.test(verifSkillText),
+  "验证技能写明:不一致时自己判归属(RTL / 测试平台 / 模型),判不了找用户"
+);
+// 旧布局的残留:sim/ 已并入 verif/,检查器与技能里都不该再从 sim/ 找测试平台
+check(
+  !/(^|[^a-z])sim\//u.test(readFileSync(join(presetDir, "tools", "rtl-check.mjs"), "utf8")),
+  "rtl-check 里没有 sim/ 残留(测试平台现在在 verif/ 下找)"
 );
 // 文件名跟着设置里选的语言走:TB 的扩展名不能写死 .sv(选 VHDL 就是 .vhd),
 // 而 VHDL 本检查器不覆盖 —— 必须说清"记 NOT_APPLICABLE",不能静默当通过
-const simSkillText = readFileSync(join(skillDir, "fpga-module-sim", "SKILL.md"), "utf8");
-check(/仿真语言/u.test(simSkillText) && /\.vhd/u.test(simSkillText), "仿真技能写明 TB 扩展名跟仿真语言走(含 .vhd)");
+check(/仿真语言/u.test(verifSkillText) && /\.vhd/u.test(verifSkillText), "验证技能写明 TB 扩展名跟仿真语言走(含 .vhd)");
 // ModelSim 的跑法:run -all / quit -f 是仿真器命令,得放进 .do 再一次调用(-c -do run.do)。
 // 写成"逐行 shell 命令"跑不通,而退出码判据也不成立:实测 $fatal 之后 vsim 退出码仍是 0,
 // 所以技能必须写明"看日志里的成功标记,不是看退出码"。
 check(
-  /-c -do/u.test(simSkillText) && /run -all/u.test(simSkillText),
-  "仿真技能给出 ModelSim 的一次调用形态(把 run -all/quit 放进 .do,再 -c -do 跑)"
+  /-c -do/u.test(verifSkillText) && /run -all/u.test(verifSkillText),
+  "验证技能给出 ModelSim 的一次调用形态(把 run -all/quit 放进 .do,再 -c -do 跑)"
 );
 check(
-  /vdel[\s\S]{0,80}(catch|判|先判|file exists)/u.test(simSkillText),
-  "仿真技能写明 vdel 要防住'没有 work 库时报错中止脚本'"
+  /vdel[\s\S]{0,80}(catch|判|先判|file exists)/u.test(verifSkillText),
+  "验证技能写明 vdel 要防住'没有 work 库时报错中止脚本'"
 );
 check(
-  /退出码[\s\S]{0,60}(仍是 0|不是 0|看日志)/u.test(simSkillText),
-  "仿真技能写明:$fatal 不改 vsim 退出码,判成败靠日志"
+  /退出码[\s\S]{0,60}(仍是 0|不是 0|看日志)/u.test(verifSkillText),
+  "验证技能写明:$fatal 不改 vsim 退出码,判成败靠日志"
 );
 
-// TB 落点是 `tb_<snake>`(stamp.mjs 的 defaultDestination 把驼峰转下划线,UartRx → tb_uart_rx,
+// TB 落点是 `verif/tb_<snake>`(stamp.mjs 的 defaultDestination 把驼峰转下划线,UartRx → tb_uart_rx,
 // check-fpga-tools 也在断言这一点)。技能里曾写成 `tb_<模块名>`,照着找会找错文件。
 check(
-  /tb_<snake>/u.test(simSkillText) && /--out/u.test(simSkillText),
-  "仿真技能写明 TB 落在 sim/tb_<snake>.sv(模块名转下划线),且可用 --out 另指定"
+  /verif\/tb_<snake>/u.test(verifSkillText) && /--out/u.test(verifSkillText),
+  "验证技能写明 TB 落在 verif/tb_<snake>.sv(模块名转下划线),且可用 --out 另指定"
+);
+check(
+  /verif-new\.mjs/u.test(verifSkillText),
+  "验证技能写明用 verif-new.mjs 起测试平台(命令名与环节名一致)"
 );
 
 check(
@@ -451,7 +475,7 @@ const verdictWords = (text) => [...text.matchAll(VERDICTS)].map((m) => m[0]);
 // 环节报告用 PASS/FAIL/BLOCKED/NOT_APPLICABLE/UNVERIFIED。审查正文里提到下游的 FAIL
 // (说某个环节挂 FAIL)不算它的判定词,所以按技能限定可用的词,而不是全文搜大写词。
 const MODULE_VERDICT_SETS = {
-  "fpga-module-sim": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-module-rtl": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-synth": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
@@ -490,11 +514,11 @@ check(
     /(整理|另写|自己写)[\s\S]{0,24}(一个)?(顶上|替代)/u.test(integrateText),
   "集成技能写明:模块来源先问用户,不在集成时自己另写一个顶上"
 );
-// sim 的"没有测试平台"必须记 UNVERIFIED/NOT_APPLICABLE 二选一里正确的那一个:
-// 用户口径是"要验证功能却没平台 = 未验证",只有本来就无可仿真行为的模块才算不适用。
+// 验证环节的"没有测试平台"必须记 UNVERIFIED/NOT_APPLICABLE 二选一里正确的那一个:
+// 用户口径是"要验证功能却没平台 = 未验证",只有本来就无可验证行为的模块才算不适用。
 check(
-  /没有测试平台[\s\S]{0,40}(UNVERIFIED|BLOCKED)/u.test(simSkillText),
-  "仿真技能写明:没有测试平台记 UNVERIFIED/BLOCKED,不是 NOT_APPLICABLE"
+  /没有测试平台[\s\S]{0,40}(UNVERIFIED|BLOCKED)/u.test(verifSkillText),
+  "验证技能写明:没有测试平台记 UNVERIFIED/BLOCKED,不是 NOT_APPLICABLE"
 );
 // 已删除的能力不许在文案里复活:stage-status 是用户明确去掉的(记录进度意义不大),
 // 但"自带的汇总命令"这类说法会留在技能与提示词里,读了会去找一个不存在的命令。

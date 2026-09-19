@@ -18,14 +18,18 @@ import { pathToFileURL } from "node:url";
 /**
  * 模块级的环节目录(放各环节的结论与证据:报告、日志、波形、输出数据)。
  *
- * 五个环节:**规格(讨论)→ RTL(编写)→ 仿真 → 验证(比对)→ 综合(门禁 + 综合后时序)**。
+ * 四个环节:**规格(讨论)→ RTL(编写)→ 验证(跑出数据 + 独立比对)→ 综合(门禁 + 综合后时序)**。
  * 模块级只到综合,布局布线与板级签核属工程级。
+ *
+ * 仿真与比对合成一个环节(用户口径:测试平台只负责把数据跑出来,判"对不对"要拿独立参照比 ——
+ * 两件事本来是一件事,劈成两半会让人以为"仿真跑绿了"就等于"对了")。所以这里只有 verif/,
+ * 测试平台、参考模型、比对脚本、日志与输出数据都放它下面。
  *
  * 两个刻意的例外:
  * · **机械检查报告跟 RTL 放一起**(`rtl/lint.md`)—— 所以这里没有 lint/ 目录
  * · **审查是按需能力,不占目录** —— 报告写 `<模块根>/review.md`,这里也没有 review/ 目录
  */
-export const MODULE_STAGES = ["spec", "rtl", "sim", "verif", "synth"];
+export const MODULE_STAGES = ["spec", "rtl", "verif", "synth"];
 
 /** 工程级的环节目录(位于 `<工作区根>/project/` 下)。 */
 export const PROJECT_STAGES = ["spec", "integrate", "constraints", "syssim", "impl", "timing", "board", "release"];

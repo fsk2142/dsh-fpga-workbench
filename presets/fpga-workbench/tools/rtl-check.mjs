@@ -12,7 +12,7 @@
 //
 // 用法:
 //   node rtl-check.mjs [<模块目录>] [--json]
-// 模块目录默认当前目录;扫 <模块>/rtl 下的 .v/.sv,并顺带检查 <模块>/sim/tb_*.sv。
+// 模块目录默认当前目录;扫 <模块>/rtl 下的 .v/.sv,并顺带检查 <模块>/verif/tb_*.sv。
 // 退出码:0 全部通过(可以只有警告) / 1 有 FAIL / 2 用法或环境错误。
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -235,19 +235,19 @@ function main() {
     return 2;
   }
 
-  // 测试平台与仿真脚本放 <模块根>/sim/(与仿真结果同目录,按文件名区分)。
+  // 测试平台与验证脚本放 <模块根>/verif/(与结果同目录,按文件名区分)。
   // 扩展名跟设置里选的仿真语言走:.sv / .v 都能认,.vhd 不认(见下面的提示)。
-  const simDir = join(moduleRoot, "sim");
-  const testbenches = existsSync(simDir)
-    ? readdirSync(simDir).filter((name) => TESTBENCH.test(name)).map((name) => join(simDir, name)).sort()
+  const verifDir = join(moduleRoot, "verif");
+  const testbenches = existsSync(verifDir)
+    ? readdirSync(verifDir).filter((name) => TESTBENCH.test(name)).map((name) => join(verifDir, name)).sort()
     : [];
 
   const targets = [...collectHdl(rtlDir).map((file) => [file, false]), ...testbenches.map((file) => [file, true])];
   if (targets.length === 0) {
     // 只有 VHDL 时不能说"没有源码"(那会让人以为目录是空的);说清本检查器不覆盖 VHDL
-    const vhdl = [...collectHdl(rtlDir, VHDL), ...collectHdl(simDir, VHDL)];
+    const vhdl = [...collectHdl(rtlDir, VHDL), ...collectHdl(verifDir, VHDL)];
     if (vhdl.length > 0) {
-      console.error(`本检查器只覆盖 SystemVerilog / Verilog;检测到 ${vhdl.length} 个 VHDL 文件(rtl/ 或 sim/),未做机械检查。`);
+      console.error(`本检查器只覆盖 SystemVerilog / Verilog;检测到 ${vhdl.length} 个 VHDL 文件(rtl/ 或 verif/),未做机械检查。`);
       console.error("VHDL 项目请把这一环节记为 NOT_APPLICABLE 并说明原因 —— 不要当成通过。");
       return 2;
     }
@@ -255,10 +255,10 @@ function main() {
     return 2;
   }
 
-  // 已经检查了 SV/Verilog,但 sim/ 里还有 VHDL 测试平台 → 如实点名未检查的部分(走 stdout:这不是错误)
-  const uncheckedTb = existsSync(simDir) ? readdirSync(simDir).filter((name) => VHDL.test(name)) : [];
+  // 已经检查了 SV/Verilog,但 verif/ 里还有 VHDL 测试平台 → 如实点名未检查的部分(走 stdout:这不是错误)
+  const uncheckedTb = existsSync(verifDir) ? readdirSync(verifDir).filter((name) => VHDL.test(name)) : [];
   if (uncheckedTb.length > 0) {
-    console.log(`注意:sim/ 下有 ${uncheckedTb.length} 个 VHDL 测试平台(${uncheckedTb.join("、")}),本检查器未检查。`);
+    console.log(`注意:verif/ 下有 ${uncheckedTb.length} 个 VHDL 测试平台(${uncheckedTb.join("、")}),本检查器未检查。`);
   }
 
   const report = targets.map(([file, isTb]) => ({

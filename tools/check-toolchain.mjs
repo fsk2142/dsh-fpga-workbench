@@ -474,7 +474,7 @@ check(!modeSource.includes("child_process") && !modeSource.includes("spawn("), "
 
 // 自带命令按环节分,名字带环节前缀(用户要求:一眼看出属于哪个环节,不要跨环节混用)。
 // 以前是 init-scaffold / new-file / check-rtl 这种通用名,看不出归属,也容易在错的环节被调用。
-const STAGE_PREFIX = { "规格环节": "spec-", "RTL 环节": "rtl-", "仿真环节": "sim-" };
+const STAGE_PREFIX = { "规格环节": "spec-", "RTL 环节": "rtl-", "验证环节": "verif-" };
 check(
   TOOLS.every((tool) => typeof tool.stage === "string" && tool.stage !== ""),
   "每个自带命令都标了属于哪个环节"
@@ -490,18 +490,19 @@ check(
 check(new Set(TOOLS.map((tool) => tool.file)).size === TOOLS.length, "同一命令不重复登记");
 check(
   !TOOLS.some((tool) => /new-file|stamp/u.test(tool.file)),
-  "起文件的命令按环节分开(rtl-new / sim-new),不是一个大而全的通用入口"
+  "起文件的命令按环节分开(rtl-new / verif-new),不是一个大而全的通用入口"
 );
 check(
   TOOLS.every((tool) => !tool.file.includes("/") && !tool.file.includes("\\")),
   "命令都在工具目录顶层(tools/lib 是内部模块,不算命令)"
 );
-// 命令的说明会原样进会话提示,所以落点必须跟代码一致:`sim-new` 走 defaultDestination,
-// 模块名会转下划线(UartRx → tb_uart_rx.sv)。这里曾写成 `sim/tb_<模块名>.sv`,照着找会找错文件。
-const simNew = TOOLS.find((tool) => tool.file === "sim-new.mjs");
+// 命令的说明会原样进会话提示,所以落点必须跟代码一致:`verif-new` 走 defaultDestination,
+// 模块名会转下划线(UartRx → tb_uart_rx.sv),且落在 verif/(仿真与比对是同一个环节)。
+// 这里曾写成 `sim/tb_<模块名>.sv`,照着找会找错文件。
+const verifNew = TOOLS.find((tool) => tool.file === "verif-new.mjs");
 check(
-  /tb_<(模块名下划线形式|snake)>|tb_uart_rx/u.test(String(simNew?.what ?? "")),
-  "sim-new 的说明写明 TB 落点会转下划线(不是裸的 tb_<模块名>.sv)"
+  /verif\/tb_<(模块名下划线形式|snake)>|verif\/tb_uart_rx/u.test(String(verifNew?.what ?? "")),
+  "verif-new 的说明写明落点:verif/ 下、模块名转下划线(不是 sim/tb_<模块名>.sv)"
 );
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");

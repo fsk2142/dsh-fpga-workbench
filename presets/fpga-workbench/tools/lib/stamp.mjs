@@ -1,6 +1,6 @@
 // 按模板起一个源文件:**复制**过去,只替换模块名,其余内容原样保留。
 //
-// **这是内部模块,不是命令**(各环节的入口见 `rtl-new.mjs` / `sim-new.mjs`)—— 一个环节一个入口,
+// **这是内部模块,不是命令**(各环节的入口见 `rtl-new.mjs` / `verif-new.mjs`)—— 一个环节一个入口,
 // 命令名一看就知道属于哪个环节,调用方也不用记 `--kind`。
 //
 // 为什么要有它:文件头、小节 banner、端口对齐这些模板里已经写好了,让模型逐字抄一遍既费 token
@@ -39,12 +39,12 @@ export function snakeCase(name) {
  * @param kind - `rtl` / `tb` / `xdc`。
  * @param name - 模块名。
  * @param template - 模板路径(扩展名跟着它走,用户模板是 `.vhd` 就出 `.vhd`)。
- * @returns 相对路径:`rtl/<模块名>.<ext>` / `sim/tb_<snake>.<ext>` / `synth/<模块名>.<ext>`。
+ * @returns 相对路径:`rtl/<模块名>.<ext>` / `verif/tb_<snake>.<ext>` / `synth/<模块名>.<ext>`。
  */
 export function defaultDestination(kind, name, template) {
   const ext = extname(template);
   if (kind === "rtl") return join("rtl", `${name}${ext}`);
-  if (kind === "tb") return join("sim", `tb_${snakeCase(name)}${ext}`);
+  if (kind === "tb") return join("verif", `tb_${snakeCase(name)}${ext}`);
   if (kind === "xdc") return join("synth", `${name}${ext}`);
   return undefined;
 }
@@ -88,7 +88,7 @@ function parseArgs(argv) {
  * 按模板起文件(打印用了哪份模板、替了什么、还有哪些要在编辑时改)。
  *
  * 这是内部模块,不直接当命令用 —— 各环节的入口给它固定的 kind:
- * `rtl-new.mjs`(RTL)、`sim-new.mjs`(测试平台)。这样命令一看就知道属于哪个环节,
+ * `rtl-new.mjs`(RTL)、`verif-new.mjs`(测试平台)。这样命令一看就知道属于哪个环节,
  * 也不需要调用方去记 `--kind`。
  * @param options - `{ root, name, template, kind, out, force, dryRun }`。
  * @returns 退出码:0 成功 / 1 目标已存在且未加 force / 2 参数或环境不对。

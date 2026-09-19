@@ -1,4 +1,4 @@
-// 自带工具脚本的功能自检(spec-scaffold / rtl-new / rtl-check / sim-new / synth-new)。
+// 自带工具脚本的功能自检(spec-scaffold / rtl-new / rtl-check / verif-new / synth-new)。
 //
 // 为什么必须机器验:这两个脚本是"确定性检查",价值全在判得准。误报一次,人就再也不信它了。
 // 所以这里用真文件跑,断言的是会真出错的性质:
@@ -173,7 +173,7 @@ check(
 const stamp = String(Date.now());
 const scaffoldMod = join(SANDBOX, `scaffold-mod-${stamp}`);
 const modulePlan = planScaffold(scaffoldMod, { kind: "module" });
-check(modulePlan.dirs.length === 6, `模块级骨架 6 个目录(5 个环节 + spec/explore;实际 ${modulePlan.dirs.length})`);
+check(modulePlan.dirs.length === 5, `模块级骨架 5 个目录(4 个环节 + spec/explore;实际 ${modulePlan.dirs.length})`);
 check(
   modulePlan.dirs.some((dir) => dir.endsWith("rtl")) && !modulePlan.dirs.some((dir) => dir.endsWith("lint")),
   "机械检查报告跟 RTL 同目录,所以不建 lint/ 目录"
@@ -181,6 +181,10 @@ check(
 check(
   modulePlan.dirs.some((dir) => dir.endsWith("verif")) && !modulePlan.dirs.some((dir) => dir.endsWith("comp")),
   "验证环节的目录是 verif/(不叫 comp)"
+);
+check(
+  !modulePlan.dirs.some((dir) => dir.endsWith("sim")),
+  "不建 sim/ 目录:仿真与比对合成 verif 环节,测试平台落在 verif/ 下"
 );
 check(
   !modulePlan.dirs.some((dir) => dir.endsWith("review")),
@@ -205,7 +209,7 @@ check(
   `落盘:${modulePlan.dirs.length} 个目录 + 1 个锚点(实际 ${applied.created.length})`
 );
 check(
-  existsSync(join(scaffoldMod, ".fpga-workbench.json")) && existsSync(join(scaffoldMod, "sim")),
+  existsSync(join(scaffoldMod, ".fpga-workbench.json")) && existsSync(join(scaffoldMod, "verif")),
   "锚点与环节文件夹都建出来了"
 );
 
@@ -228,11 +232,11 @@ check(
 );
 check(projectPlan.dirs.some((dir) => dir.endsWith(join("project", "board"))), "建了工程级的 board/");
 check(
-  projectPlan.dirs.some((dir) => dir.endsWith(join("uart", "sim"))) && projectPlan.dirs.some((dir) => dir.endsWith(join("ddr", "synth"))),
+  projectPlan.dirs.some((dir) => dir.endsWith(join("uart", "verif"))) && projectPlan.dirs.some((dir) => dir.endsWith(join("ddr", "synth"))),
   "每个模块各自一套模块级文件夹"
 );
 
-// ── 起文件(rtl-new / sim-new / synth-new:各环节一个入口,只替模块名) ──────
+// ── 起文件(rtl-new / verif-new / synth-new:各环节一个入口,只替模块名) ──────
 const bundledRtl = readFileSync(join(TEMPLATES, "rtl.sv"), "utf8");
 const rendered = renderTemplate(bundledRtl, "UartRx");
 check(rendered.replaced.join(",") === "ModuleName", `只替模块名(实际替了 ${rendered.replaced.join("、") || "无"})`);
@@ -262,10 +266,10 @@ check(plain.replaced.length === 0, "没有占位符时不谎报'替换了什么'
 // 落点与文件名
 check(defaultDestination("rtl", "UartRx", "C:/t/rtl.sv") === join("rtl", "UartRx.sv"), "RTL 落到 rtl/<模块名>.sv");
 check(
-  defaultDestination("tb", "UartRx", "C:/t/tb.sv") === join("sim", "tb_uart_rx.sv"),
-  "测试平台落到 sim/tb_<snake>.sv(驼峰转下划线)"
+  defaultDestination("tb", "UartRx", "C:/t/tb.sv") === join("verif", "tb_uart_rx.sv"),
+  "测试平台落到 verif/tb_<snake>.sv(驼峰转下划线;仿真与比对合成一个环节后落在 verif/)"
 );
-check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("sim", "tb_uart_rx.vhd"), "扩展名跟着模板走");
+check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("verif", "tb_uart_rx.vhd"), "扩展名跟着模板走");
 check(defaultDestination("xdc", "UartRx", "C:/t/c.xdc") === join("synth", "UartRx.xdc"), "约束文件落 synth/<模块名>.xdc");
 
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
@@ -273,11 +277,11 @@ const run = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), 
 
 // 语言边界:TB 扩展名跟设置里选的仿真语言走 —— 只认 .sv 的话,Verilog 的测试平台会被静默跳过
 mkdirSync(join(SANDBOX, "tb-v-mod", "rtl"), { recursive: true });
-mkdirSync(join(SANDBOX, "tb-v-mod", "sim"), { recursive: true });
-writeFileSync(join(SANDBOX, "tb-v-mod", "sim", "tb_only.v"), goodTb);
+mkdirSync(join(SANDBOX, "tb-v-mod", "verif"), { recursive: true });
+writeFileSync(join(SANDBOX, "tb-v-mod", "verif", "tb_only.v"), goodTb);
 check(
   run("rtl-check.mjs", [join(SANDBOX, "tb-v-mod")]) === 0,
-  "sim/ 下的 .v 测试平台会被检查(只认 .sv 的话这里会退 2)"
+  "verif/ 下的 .v 测试平台会被检查(只认 .sv 的话这里会退 2)"
 );
 mkdirSync(join(SANDBOX, "vhdl-mod", "rtl"), { recursive: true });
 writeFileSync(join(SANDBOX, "vhdl-mod", "rtl", "top.vhd"), "-- VHDL 源码\n");
@@ -300,9 +304,9 @@ check(
   "模板生成的文件直接过机械检查(骨架开箱合规)"
 );
 check(
-  run("sim-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "tb.sv")]) === 0
-    && existsSync(join(newFileRoot, "sim", "tb_uart_rx.sv")),
-  "sim-new 把测试平台落在 sim/tb_<模块名>.sv"
+  run("verif-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "tb.sv")]) === 0
+    && existsSync(join(newFileRoot, "verif", "tb_uart_rx.sv")),
+  "verif-new 把测试平台落在 verif/tb_<snake>.sv"
 );
 check(
   run("synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0

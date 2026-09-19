@@ -468,11 +468,26 @@ for (const [name, text] of shippedTexts) {
   const dead = ["stage-status", "汇总命令"].filter((word) => text.includes(word));
   check(dead.length === 0, `${name} 没有引用已删除的进度汇总命令(实际:${dead.join("、") || "无"})`);
 }
-// 节奏按用户的习惯:写完再统一检查(边写边跑效率低);只保留"排查具体报错时可单查"这个例外
+// 节奏按用户的习惯:写完再统一检查(边写边跑效率低);只保留"排查具体报错时可单查"这个例外。
+//
+// 断言不能只看"写完…检查"这几个字:那句话原先写在开头的引子里,读者(和人设)读到"一次跑全量"
+// 时还不知道**跑什么** —— 真正的命令在两步之后。用户指出过这一点,所以钉两件事:
+//   · 有一节专讲"跑哪些命令、什么时候跑";
+//   · 那一节里同时出现"写完之后"与两条命令(run 名),即命令在"跑什么"这一节里被点名。
 const lintText = readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8");
 check(
   /写完[\s\S]{0,16}检查/u.test(lintText) && !/随时可跑/u.test(lintText),
   "检查技能按用户节奏:写完再统一检查(不是'随时可跑'/'边写边跑')"
+);
+const runSection = /## 跑什么[^\n]*\n([\s\S]*?)(?=\n## )/u.exec(lintText)?.[1] ?? "";
+check(runSection !== "", "检查技能有一节专讲『跑什么、什么时候跑』(命令与时机写在一起)");
+check(
+  /写完之后|三步都写完之后/u.test(runSection) && /rtl-check\.mjs/u.test(runSection),
+  "那一节里同时写明时机(写完之后)与要跑的命令(rtl-check.mjs),不是只提'跑全量'"
+);
+check(
+  /--lint-only/u.test(runSection),
+  "那一节里也点名编译器那条命令(不是只说'跑检查')"
 );
 const checkRtlText = readFileSync(join(presetDir, "tools", "rtl-check.mjs"), "utf8");
 check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "rtl-check 认 .v 的 TB,并对 VHDL 有明确交代");

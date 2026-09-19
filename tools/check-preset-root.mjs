@@ -462,6 +462,11 @@ check(
   /verif-new\.mjs/u.test(verifSkillText),
   "验证技能写明用 verif-new.mjs 起测试平台(命令名与环节名一致)"
 );
+// 用户明确要求过:说"要看波形"时必须真有手段 —— 技能里得有这条命令与用法,不能只有批处理
+check(
+  /verif-wave\.mjs/u.test(verifSkillText) && /波形/u.test(verifSkillText),
+  "验证技能写明看波形的手段(verif-wave:开 GUI、加波形、不自动 run)"
+);
 
 check(
   /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),

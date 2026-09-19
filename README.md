@@ -66,6 +66,7 @@ tools/                        8 个自检 + install.mjs + 依赖安全/锁文件
 | RTL | `node presets/fpga-workbench/tools/rtl-new.mjs <模块根> <模块名> --template <RTL 模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起 RTL 文件:复制模板、**只替模块名**,其余内容原样保留;默认落 `rtl/<模块名>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 | RTL | `node presets/fpga-workbench/tools/rtl-check.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
 | 验证 | `node presets/fpga-workbench/tools/verif-new.mjs <模块根> <模块名> --template <测试平台模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起测试平台;默认落 `verif/tb_<模块名下划线形式>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
+| 验证 | `node presets/fpga-workbench/tools/verif-wave.mjs <模块根> [模块名] [--sim-path <仿真器>] [--tb <测试平台>] [--dry-run]` | **给人看波形**:编译 + 开 GUI + `log -r /*` + 加波形 + 停在 0 时刻(不自动 run);生成 `verif/wave.do` | 0 已打开/已生成 / 1 找不到平台或设计 / 2 参数或环境问题 |
 | 综合 | `node presets/fpga-workbench/tools/synth-new.mjs <模块根> <模块名> --template <约束模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起约束文件;默认落 `synth/<模块名>.xdc` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 
 另外两条规则与旧包一致,不要自行加严:

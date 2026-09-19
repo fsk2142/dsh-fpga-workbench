@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/rtl-check.mjs";
 import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/spec-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
+import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/verif-wave.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
@@ -88,11 +89,11 @@ const badRtl = [
   "    end", "", "    logic [7:0] 数据;", "", "endmodule", ""
 ].join("\n");
 
-for (const dir of ["good-mod/rtl", "good-mod/sim", "bad-mod/rtl", "bad-mod/ip", "status-demo/rtl", "status-demo/sim"]) {
+for (const dir of ["good-mod/rtl", "good-mod/verif", "bad-mod/rtl", "bad-mod/ip", "status-demo/rtl", "status-demo/verif"]) {
   mkdirSync(join(SANDBOX, dir), { recursive: true });
 }
 writeFileSync(join(SANDBOX, "good-mod", "rtl", "good.sv"), goodRtl);
-writeFileSync(join(SANDBOX, "good-mod", "sim", "tb_good.sv"), goodTb);
+writeFileSync(join(SANDBOX, "good-mod", "verif", "tb_good.sv"), goodTb);
 writeFileSync(join(SANDBOX, "bad-mod", "rtl", "bad.sv"), badRtl);
 writeFileSync(join(SANDBOX, "bad-mod", "ip", "vendor.sv"), badRtl); // ip/ 不该被扫
 writeFileSync(join(SANDBOX, ".fpga-workbench.json"), JSON.stringify({ kind: "module", spec: "spec/spec.md" }));
@@ -307,6 +308,48 @@ check(
   run("verif-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "tb.sv")]) === 0
     && existsSync(join(newFileRoot, "verif", "tb_uart_rx.sv")),
   "verif-new 把测试平台落在 verif/tb_<snake>.sv"
+);
+
+// ── verif-wave:看波形的手段(用户明确要求"要看波形时必须真有这条")────────────────
+// 只验生成物与判定,不真的开 GUI:开窗会卡住自检。生成的脚本语法另外用真 vsim 批处理跑过
+// (`vsim -gui` 换成 `vsim -c`),`log`/`add wave`/`cd` 这些命令都实测过。
+check(
+  run("verif-wave.mjs", [newFileRoot, "--sim-path", join(TEMPLATES, "..", "tools", "xsim-placeholder"), "--dry-run"]) === 0,
+  "verif-wave --dry-run 不落盘也能判定(退出码 0)"
+);
+check(
+  pickTestbench(join(newFileRoot, "verif"), undefined, newFileRoot)?.endsWith("tb_uart_rx.sv") === true,
+  "能自己认出 verif/ 下的测试平台"
+);
+const emptyVerif = join(SANDBOX, `wave-empty-${stamp}`);
+mkdirSync(emptyVerif, { recursive: true });
+check(
+  pickTestbench(emptyVerif, undefined, emptyVerif) === undefined,
+  "verif/ 下没有测试平台时返回 undefined(CLI 会如实退 1,不硬编一个名字)"
+);
+check(simulatorKind("C:/modeltech64_2020.4/win64/vsim.exe") === "modelsim", "按路径认出 ModelSim");
+check(simulatorKind("C:/Xilinx/Vivado/2025.2/bin") === "xsim", "按路径认出 XSim");
+check(simulatorKind("C:/some/other/sim.exe") === undefined, "认不出的仿真器返回 undefined(如实说明,不乱猜)");
+const waveScript = modelSimDo(["C:/proj/rtl/a.sv", "C:/proj/verif/tb_a.sv"], "tb_a");
+check(
+  waveScript.includes('vsim -gui -voptargs="+acc=rn" tb_a') && waveScript.includes("add wave -r /*"),
+  "生成的脚本:开 GUI 并把信号加进波形窗口"
+);
+check(
+  waveScript.includes("log -r /*"),
+  "生成的脚本有 log -r /*(实测:不加它 wlf 里只有时刻 0,波形是空的)"
+);
+check(
+  waveScript.includes('cd "verif"'),
+  "生成的脚本切到 verif/ 再建库(工作库与波形跟 run.do 的结果放一处)"
+);
+check(
+  !/\brun\b/u.test(waveScript.replace(/^#.*$/gmu, "")),
+  "生成的脚本不自动 run(GUI 停住等人操作,与批处理 run.do 互补)"
+);
+check(
+  !/[\u4e00-\u9fff]/u.test(waveScript),
+  "生成的脚本没有非 ASCII 字符(ModelSim 的 Tcl 不按 UTF-8 读 .do,中文注释会让它报 invalid command)"
 );
 check(
   run("synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0

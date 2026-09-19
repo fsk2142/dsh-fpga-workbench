@@ -16,7 +16,7 @@ description: 跑或排查 FPGA 模块的功能仿真时用:写或改测试平台
 3. **spec 里若做过 Python 原型**(`spec/explore/` 下,spec 的「参考资料」一节点名了它):
    其输入可作激励,其输出可作期望值 —— 拿它做自检远比人工填写期望值可靠。
    但**本次仿真的证据须自行跑出**:原型那次运行不计入本轮结果
-4. **建议**先看 `lint/lint.md` 是不是 PASS(先过 lint 可省下大量仿真排错时间)—— 但正在排查
+4. **建议**先看 `rtl/lint.md` 是不是 PASS(先过机械检查可省下大量仿真排错时间)—— 但正在排查
    仿真问题、或用户就是要先看仿真行为时,不必停下补 lint
 5. 测试平台模板路径看会话开头「本机 FPGA 工具链」的模板那节(`tb.sv`),照其格式写
 
@@ -25,13 +25,13 @@ description: 跑或排查 FPGA 模块的功能仿真时用:写或改测试平台
 
 ## 跑一次仿真(全程命令行,不弹图形界面)
 
-**先用设置里选定的仿真器** —— 看会话开头「本机 FPGA 工具链」的**语言与工具**一节,
-其中写明仿真器是 ModelSim / Vivado XSim / Verilator,以及对应的路径。**不得另行挑选一个。**
+**先用设置里选定的仿真器** —— 看会话开头「本机 FPGA 工具链」的**已就绪清单**:仿真器是
+ModelSim / Vivado XSim / Verilator、路径是什么,都写在那里。**不得另行挑选一个。**
 
 **ModelSim / Questa(默认)**
 
 ```
-cd <阶段根>/verif/sim
+cd <模块根>/sim
 vdel -lib work -all          # 有旧 work 库先删除,不在残留库中编译
 vlib work
 vcom -2008 <VHDL 文件...>    # 只有混语言模块才需要
@@ -44,7 +44,7 @@ quit -f
 **Vivado XSim**(选了它就用 Vivado bin 目录下的这三个命令)
 
 ```
-cd <阶段根>/verif/sim
+cd <模块根>/sim
 xvlog -sv <源码...> <tb_*.sv>
 xelab -debug typical tb_<模块名> -s tb_sim
 xsim tb_sim -runall
@@ -53,7 +53,7 @@ xsim tb_sim -runall
 **Verilator**(只适合 lint 与快速回归:**没有时序**,不能拿来代替功能仿真)
 
 ```
-"<verilatorPath>" --binary --timing -Wall --top-module tb_<模块名> <源码...> <tb_*.sv>
+"<仿真器路径>" --binary --timing -Wall --top-module tb_<模块名> <源码...> <tb_*.sv>
 ./obj_dir/Vtb_<模块名>
 ```
 
@@ -90,7 +90,7 @@ xsim tb_sim -runall
 - **PASS**:`err_cnt = 0`,日志里出现成功标记,进程退出码 0
 - **FAIL**:非零退出,或日志里出现 `$error` / `$fatal`,或超时 `TB TIMEOUT`
 - **BLOCKED**:vsim 没就绪(设置里标了「未就绪」)→ 如实说明并停下,不得假装跑过
-- **NOT_APPLICABLE**:`verif/sim/` 下还没有 `tb_*.sv`
+- **NOT_APPLICABLE**:`sim/` 下还没有 `tb_*.sv`
 
 挂死或超时时,先怀疑:时钟没起、复位没放、握手没接上、位宽对错。**不得第一反应就是调大看门狗。**
 
@@ -104,6 +104,7 @@ xsim tb_sim -runall
 - FAIL 时:错误列表 + 日志路径 + 判断的原因(以及改了什么)
 - 覆盖了哪些 AC、哪些没覆盖(没覆盖就写"未覆盖",不得写"应该没问题")
 
-日志、波形、输出数据都落 `sim/`,**不得留在 `verif/sim/`** —— 那里只放源码与脚本。
+测试平台源码(`tb_*.sv` 与脚本)与本次结果(日志、波形、输出数据)都放 `sim/`,按文件名区分;
+不要另建源码目录,也不要只把结果落在这里而把源码留在别处。
 
 本环节只能证明"逻辑符合测试平台"。时序与上板不在本环节范围内。

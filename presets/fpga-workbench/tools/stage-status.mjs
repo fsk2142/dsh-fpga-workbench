@@ -17,11 +17,25 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-/** 模块级的阶段文件夹。 */
-const MODULE_STAGES = ["spec", "lint", "sim", "comp", "synth", "timing", "review"];
+/**
+ * 模块级的环节(与 init-scaffold.mjs 的 MODULE_STAGES 必须一致)。
+ *
+ * `review` 也在名单里(汇总时能看到审没审),但它**不占目录** —— 见 {@link RESULT_TARGETS}。
+ */
+const MODULE_STAGES = ["spec", "rtl", "sim", "comp", "synth", "timing", "review"];
 
 /** 工程级的阶段文件夹(在工作区根的 project/ 下)。 */
 const PROJECT_STAGES = ["spec", "integrate", "constraints", "syssim", "impl", "timing", "board", "release", "audit"];
+
+/**
+ * 环节 → 结果文件位置的例外表。默认是 `<环节目录>/<环节>.md`;两处不同:
+ * · `rtl`:机械检查报告与 RTL 放一起 → `rtl/lint.md`
+ * · `review`:按需能力、不占目录 → 模块根的 `review.md`(且**没有目录**可回退,不做兜底)
+ */
+const RESULT_TARGETS = {
+  rtl: { dir: "rtl", named: "lint.md" },
+  review: { dir: ".", named: "review.md", optional: true }
+};
 
 /** 合法结论取值(与技能里写的口径一致)。 */
 const VERDICTS = ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE", "UNVERIFIED", "SKIPPED"];
@@ -55,11 +69,11 @@ function newestMarkdown(dir) {
   return files[0];
 }
 
-/** 优先 `<阶段>/<阶段>.md`,找不到就取该目录里最新的 md。 */
-function resultFile(stageDir, stage) {
-  const named = join(stageDir, `${stage}.md`);
+/** 优先指定的结果文件,找不到就在该目录里取最新的 md(按需环节不做这个兜底)。 */
+function resultFile(stageDir, namedName, fallback = true) {
+  const named = join(stageDir, namedName);
   if (existsSync(named)) return { file: named, mtime: statSync(named).mtimeMs };
-  return newestMarkdown(stageDir);
+  return fallback ? newestMarkdown(stageDir) : undefined;
 }
 
 /**
@@ -110,9 +124,17 @@ function allowedVerdicts(stage) {
  */
 export function collect(root, stages) {
   return stages.map((stage) => {
-    const stageDir = join(root, stage);
+    const target = RESULT_TARGETS[stage];
+    const stageDir = join(root, target?.dir ?? stage);
+    const namedName = target?.named ?? `${stage}.md`;
+    const named = join(stageDir, namedName);
+
+    // 按需环节(审查):没做过是正常的,不要报成"未开始"
+    if (target?.optional === true && !existsSync(named)) {
+      return { stage, state: "未做(按需)", file: undefined, mtime: undefined };
+    }
     if (!existsSync(stageDir)) return { stage, state: "未开始", file: undefined, mtime: undefined };
-    const found = resultFile(stageDir, stage);
+    const found = resultFile(stageDir, namedName, target?.optional !== true);
     if (found === undefined) return { stage, state: "有目录无结果文件", file: undefined, mtime: undefined };
     const verdict = readVerdict(found.file, stage);
     return {
@@ -137,8 +159,8 @@ function main() {
 
   const convention = findConvention(start);
   if (convention === undefined) {
-    console.error(`从 ${resolve(start)} 向上没找到 .fpga-workbench.json`);
-    console.error("这个文件是整套流程的锚点:它在哪,阶段文件夹就在哪。先跑 fpga-module-spec 那个技能把它建出来。");
+    console.error(`从 ${resolve(start)} 向上没有找到 .fpga-workbench.json`);
+    console.error("它是整套流程的锚点:其所在目录即环节目录所在目录。先跑 fpga-module-spec 那个技能把它建出来。");
     return 2;
   }
 

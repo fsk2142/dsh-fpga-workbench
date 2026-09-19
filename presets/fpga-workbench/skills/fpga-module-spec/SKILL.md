@@ -41,13 +41,17 @@ description: 在开始一个 FPGA 模块、或要改动它的行为时用:先确
 }
 ```
 
-该文件是整套流程的锚点:**其所在目录即阶段文件夹所在目录**。阶段文件夹固定为:
+该文件是整套流程的锚点:**其所在目录即环节目录所在目录**。模块根下固定这几个目录:
 
 ```
-spec/  lint/  sim/  comp/  synth/  timing/  review/
+spec/  rtl/  sim/  comp/  synth/  timing/
 ```
 
-其中 `spec/` 属于本环节:`spec.md` 放规格,`flow.md` 放实现思路流程图,`explore/` 放探索产物。
+- `spec/` 属于本环节:`spec.md` 放规格,`flow.md` 放实现思路流程图,`explore/` 放探索产物
+- `rtl/` 放写好的 RTL、用到的其他模块与 IP 核;机械检查报告也写在这里(`rtl/lint.md`),与代码同处
+- `sim/` 放测试平台、用到的模块 / IP 的仿真文件,以及这一环节的日志、波形、输出数据
+
+**审查没有目录**:它是按需能力,报告写 `<模块根>/review.md`。
 
 **注意**:路径推断是整套流程中最易出错、又最难发现的一环,必须询问并记录。
 
@@ -213,9 +217,9 @@ flowchart LR
 node "<自带工具目录>/init-scaffold.mjs" <模块根> --kind module
 ```
 
-它写锚点 `.fpga-workbench.json`(kind 与 spec 路径)并建好 `spec/ lint/ sim/ comp/ synth/ timing/
-review/` 与 `spec/explore/`。先加 `--dry-run` 看一遍要建什么;已有锚点不会被覆盖(要重建用
-`--force`)。**它只建目录,不生成空的 spec.md / flow.md** —— 报告由讨论产出。
+它写锚点 `.fpga-workbench.json`(kind 与 spec 路径),并建好 `spec/ rtl/ sim/ comp/ synth/ timing/`
+与 `spec/explore/`。先加 `--dry-run` 看一遍要建什么;已有锚点不会被覆盖(要重建用 `--force`)。
+**它只建目录,不生成空的 spec.md / flow.md / lint.md** —— 那些由讨论与各环节的真运行产出。
 
 **2. 写规格** `<阶段根>/spec/spec.md`(头部 `spec_state: draft`,用户确认后改 `confirmed`)。
 其中「实现思路」一节写明流程图的位置与关键参数(位宽 / 拍数 / 时钟)。

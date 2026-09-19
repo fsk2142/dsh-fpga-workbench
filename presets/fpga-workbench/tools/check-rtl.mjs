@@ -12,7 +12,7 @@
 //
 // 用法:
 //   node check-rtl.mjs [<模块目录>] [--json]
-// 模块目录默认当前目录;扫 <模块>/rtl 下的 .v/.sv,并顺带检查 <模块>/verif/sim/tb_*.sv。
+// 模块目录默认当前目录;扫 <模块>/rtl 下的 .v/.sv,并顺带检查 <模块>/sim/tb_*.sv。
 // 退出码:0 全部通过(可以只有警告) / 1 有 FAIL / 2 用法或环境错误。
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -25,9 +25,6 @@ const SKIP_DIRS = new Set([
   "synth_gate.gen", ".srcs", ".runs", ".hw", ".ip_user_files", ".sim", ".cache",
   ".nano", "rerun", "node_modules"
 ]);
-
-/** 缓存目录名(模块里的产物). */
-const STAGE_DIRS = ["spec", "lint", "sim", "comp", "synth", "timing", "review"];
 
 /** 这三条只警告,不阻塞(照抄 run_checks.py 的 WARN_CHECKS)。 */
 const WARN_ONLY = new Set(["Tab 字符", "代码行非英文", "行尾混用"]);
@@ -225,7 +222,8 @@ function main() {
     return 2;
   }
 
-  const simDir = join(moduleRoot, "verif", "sim");
+  // 测试平台与仿真脚本放 <模块根>/sim/(与仿真结果同目录,按文件名区分),这里只认 tb_*.sv
+  const simDir = join(moduleRoot, "sim");
   const testbenches = existsSync(simDir)
     ? readdirSync(simDir).filter((name) => /^tb_.*\.sv$/iu.test(name)).map((name) => join(simDir, name)).sort()
     : [];

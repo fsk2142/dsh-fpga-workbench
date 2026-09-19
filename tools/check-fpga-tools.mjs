@@ -11,7 +11,7 @@
 // 沙箱限制:node 不能开管道抓子进程输出,所以内容断言直接 import 函数;退出码单独用
 // spawnSync(stdio:"ignore") 验(不开管道,能拿到 status)。
 import { spawnSync } from "node:child_process";
-import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, copyFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -88,16 +88,17 @@ const badRtl = [
   "    end", "", "    logic [7:0] 数据;", "", "endmodule", ""
 ].join("\n");
 
-for (const dir of ["good-mod/rtl", "good-mod/verif/sim", "bad-mod/rtl", "bad-mod/ip", "status-demo/lint", "status-demo/sim"]) {
+for (const dir of ["good-mod/rtl", "good-mod/sim", "bad-mod/rtl", "bad-mod/ip", "status-demo/rtl", "status-demo/sim"]) {
   mkdirSync(join(SANDBOX, dir), { recursive: true });
 }
 writeFileSync(join(SANDBOX, "good-mod", "rtl", "good.sv"), goodRtl);
-writeFileSync(join(SANDBOX, "good-mod", "verif", "sim", "tb_good.sv"), goodTb);
+writeFileSync(join(SANDBOX, "good-mod", "sim", "tb_good.sv"), goodTb);
 writeFileSync(join(SANDBOX, "bad-mod", "rtl", "bad.sv"), badRtl);
 writeFileSync(join(SANDBOX, "bad-mod", "ip", "vendor.sv"), badRtl); // ip/ 不该被扫
 writeFileSync(join(SANDBOX, ".fpga-workbench.json"), JSON.stringify({ kind: "module", spec: "spec/spec.md" }));
-writeFileSync(join(SANDBOX, "status-demo", "lint", "lint.md"), "# lint\n\n- 结论:PASS\n");
-writeFileSync(join(SANDBOX, "status-demo", "sim", "sim.md"), "# sim\n\n跑了一遍,看着还行。\n");
+// 机械检查报告与 RTL 同目录;审查报告在模块根(按需,不占目录)
+writeFileSync(join(SANDBOX, "status-demo", "rtl", "lint.md"), "# lint\n\n- 结论:PASS\n");
+writeFileSync(join(SANDBOX, "status-demo", "sim", "sim.md"), "# sim\n\n跑了一遍,没有发现异常。\n");
 
 // ── check-rtl:合规与违规 ────────────────────────────────────────────────────
 const blocking = (file, isTb) => checkFile(file, isTb);
@@ -161,30 +162,36 @@ check(!scanned.some((file) => file.includes("/work/")), "跳过 work/ 这类生�
 
 // ── stage-status ───────────────────────────────────────────────────────────
 check(
-  findConvention(join(SANDBOX, "status-demo", "lint")) === join(SANDBOX, ".fpga-workbench.json"),
+  findConvention(join(SANDBOX, "status-demo", "rtl")) === join(SANDBOX, ".fpga-workbench.json"),
   "从子目录向上能找到约定文件"
 );
 check(findConvention(join(ROOT, "tools")) === undefined, "没有约定文件时返回 undefined(调用方要退 2)");
-check(readVerdict(join(SANDBOX, "status-demo", "lint", "lint.md"), "lint")?.verdict === "PASS", "读得出 `结论:PASS`");
+// 环节名是 rtl,但报告文件叫 lint.md(报告与 RTL 同目录)—— 两者都要对上
+check(readVerdict(join(SANDBOX, "status-demo", "rtl", "lint.md"), "rtl")?.verdict === "PASS", "读得出 `结论:PASS`");
 
 const fullWidth = join(SANDBOX, "status-demo", "sim", "full.md");
 writeFileSync(fullWidth, "# sim\n\n结论：FAIL\n");
 check(readVerdict(fullWidth, "sim")?.verdict === "FAIL", "全角冒号的结论也认");
 writeFileSync(join(SANDBOX, "status-demo", "spec.md"), "spec_state: confirmed\n");
-check(readVerdict(join(SANDBOX, "status-demo", "spec.md"), "spec")?.verdict === "CONFIRMED", "spec 阶段用 spec_state 兜底");
+check(readVerdict(join(SANDBOX, "status-demo", "spec.md"), "spec")?.verdict === "CONFIRMED", "spec 环节用 spec_state 兜底");
 
-const rows = collect(join(SANDBOX, "status-demo"), ["spec", "lint", "sim", "comp"]);
+// SANDBOX 不清理:上一次跑留下的 review.md 会让"未做(按需)"这条测不准,先清掉。
+// spec/spec.md 则一律重写,保证两条断言既确定又能反复跑。
+const reviewFile = join(SANDBOX, "status-demo", "review.md");
+if (existsSync(reviewFile)) unlinkSync(reviewFile);
+mkdirSync(join(SANDBOX, "status-demo", "spec"), { recursive: true });
+writeFileSync(join(SANDBOX, "status-demo", "spec", "spec.md"), "spec_state: confirmed\n");
+
+const rows = collect(join(SANDBOX, "status-demo"), ["spec", "rtl", "sim", "comp", "review"]);
 const byStage = new Map(rows.map((row) => [row.stage, row.state]));
-check(byStage.get("lint") === "PASS", `lint 读出 PASS(实际 ${String(byStage.get("lint"))})`);
+check(byStage.get("rtl") === "PASS", `rtl 读的是 rtl/lint.md(实际 ${String(byStage.get("rtl"))})`);
 check(byStage.get("sim") === "有产物但没写结论", `没写结论的文件被认出来(实际 ${String(byStage.get("sim"))})`);
-check(byStage.get("comp") === "未开始", `没有目录的阶段是"未开始"(实际 ${String(byStage.get("comp"))})`);
-check(byStage.get("spec") === "未开始", "spec 目录不存在时是未开始(不误报)");
+check(byStage.get("comp") === "未开始", `没有目录的环节是"未开始"(实际 ${String(byStage.get("comp"))})`);
+check(byStage.get("spec") === "CONFIRMED", `spec 读的是 spec/spec.md 里的 spec_state(实际 ${String(byStage.get("spec"))})`);
+check(byStage.get("review") === "未做(按需)", `审查没做过时是"未做(按需)",不误报成未开始(实际 ${String(byStage.get("review"))})`);
 
 // 审查的结论是 approved / changes requested / blocked —— 读不出来就等于审查白做
 // (认不出来只影响显示:这个脚本是汇总,不是门禁)
-const reviewDir = join(SANDBOX, "status-demo", "review");
-mkdirSync(reviewDir, { recursive: true });
-const reviewFile = join(reviewDir, "review.md");
 writeFileSync(reviewFile, "# review\n\n结论:APPROVED\n");
 check(readVerdict(reviewFile, "review")?.verdict === "APPROVED", "读得出 `结论:APPROVED`");
 const reviewRow = collect(join(SANDBOX, "status-demo"), ["review"]).at(0);
@@ -204,7 +211,15 @@ check(readVerdict(reviewFile, "review")?.verdict === "CHANGES", "写成两词也
 const stamp = String(Date.now());
 const scaffoldMod = join(SANDBOX, `scaffold-mod-${stamp}`);
 const modulePlan = planScaffold(scaffoldMod, { kind: "module" });
-check(modulePlan.dirs.length === 8, `模块级骨架 8 个目录(7 个环节 + spec/explore;实际 ${modulePlan.dirs.length})`);
+check(modulePlan.dirs.length === 7, `模块级骨架 7 个目录(6 个环节 + spec/explore;实际 ${modulePlan.dirs.length})`);
+check(
+  modulePlan.dirs.some((dir) => dir.endsWith("rtl")) && !modulePlan.dirs.some((dir) => dir.endsWith("lint")),
+  "机械检查报告跟 RTL 同目录,所以不建 lint/ 目录"
+);
+check(
+  !modulePlan.dirs.some((dir) => dir.endsWith("review")),
+  "审查是按需能力,不占目录(报告写 <模块根>/review.md)"
+);
 check(modulePlan.anchors.length === 1 && modulePlan.anchors[0].value.kind === "module", "模块级写一个 kind: module 的锚点");
 check(modulePlan.anchors[0].value.spec === "spec/spec.md", "锚点里的 spec 路径相对模块根");
 check(
@@ -247,7 +262,7 @@ check(
 );
 check(projectPlan.dirs.some((dir) => dir.endsWith(join("project", "board"))), "建了工程级的 board/");
 check(
-  projectPlan.dirs.some((dir) => dir.endsWith(join("uart", "sim"))) && projectPlan.dirs.some((dir) => dir.endsWith(join("ddr", "review"))),
+  projectPlan.dirs.some((dir) => dir.endsWith(join("uart", "sim"))) && projectPlan.dirs.some((dir) => dir.endsWith(join("ddr", "timing"))),
   "每个模块各自一套模块级文件夹"
 );
 
@@ -263,7 +278,7 @@ check(run("init-scaffold.mjs", []) === 2, "init-scaffold 不给根目录 → 退
 check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli"), "--kind", "bogus"]) === 2, "--kind 非法 → 退出码 2");
 check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "建模块骨架 → 退出码 0");
 check(
-  existsSync(join(SANDBOX, "scaffold-cli", "review")) && existsSync(join(SANDBOX, "scaffold-cli", ".fpga-workbench.json")),
+  existsSync(join(SANDBOX, "scaffold-cli", "rtl")) && existsSync(join(SANDBOX, "scaffold-cli", ".fpga-workbench.json")),
   "CLI 真的把骨架建出来了"
 );
 check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复建同一目录也返回 0(幂等)");

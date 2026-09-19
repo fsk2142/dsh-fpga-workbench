@@ -355,6 +355,41 @@ for (const downstream of ["fpga-module-sim", "fpga-module-comp"]) {
     `${downstream} 去到 spec 里的原型拿参考(不然这条参考链是断的)`
   );
 }
+
+// ── 环节目录契约(用户定过的形态) ──────────────────────────────────────────
+//
+// 两处容易漂移、而漂移了又不报错:
+// · init-scaffold 建的目录 vs stage-status 认的环节 —— 不一致就会出现"建了没人读"或"读一个
+//   不存在的目录"
+// · 报告位置:机械检查报告与 RTL 同目录(`rtl/lint.md`);审查是按需能力,不占目录
+const scaffoldSource = readFileSync(join(presetDir, "tools", "init-scaffold.mjs"), "utf8");
+const statusSource = readFileSync(join(presetDir, "tools", "stage-status.mjs"), "utf8");
+const scaffoldStages = JSON.parse(/MODULE_STAGES = (\[[^\]]*\])/u.exec(scaffoldSource)[1]);
+const statusStages = JSON.parse(/MODULE_STAGES = (\[[^\]]*\])/u.exec(statusSource)[1]);
+check(scaffoldStages.includes("rtl"), `骨架建 rtl/ 目录(实际 ${scaffoldStages.join("、")})`);
+check(!scaffoldStages.includes("lint"), "骨架不建 lint/ 目录(报告跟 RTL 放一起)");
+check(!scaffoldStages.includes("review"), "骨架不建 review/ 目录(审查按需)");
+check(
+  scaffoldStages.every((stage) => statusStages.includes(stage)),
+  `骨架建的每个目录,汇总工具都认(骨架 ${scaffoldStages.join("、")} / 汇总 ${statusStages.join("、")})`
+);
+check(
+  statusStages.filter((stage) => !scaffoldStages.includes(stage)).join(",") === "review",
+  `汇总里多出来的只有 review(它不占目录;实际多出 ${statusStages.filter((s) => !scaffoldStages.includes(s)).join("、")})`
+);
+check(
+  /rtl\/lint\.md/u.test(readFileSync(join(skillDir, "fpga-module-lint", "SKILL.md"), "utf8")),
+  "机械检查报告写在 rtl/lint.md"
+);
+check(
+  /<模块根>\/review\.md/u.test(readFileSync(join(skillDir, "fpga-module-review", "SKILL.md"), "utf8")),
+  "审查报告写在 <模块根>/review.md"
+);
+check(
+  !/verif/u.test(readFileSync(join(presetDir, "tools", "check-rtl.mjs"), "utf8")),
+  "check-rtl 里没有旧布局的 verif/ 残留(测试平台在 sim/ 下找)"
+);
+
 //
 // 这一条是那份《轻量化优化建议》的核心诉求:技能是按需取用的能力地图,不是必经流水线。
 // 口气很容易在以后改文案时长回来,所以钉两条:

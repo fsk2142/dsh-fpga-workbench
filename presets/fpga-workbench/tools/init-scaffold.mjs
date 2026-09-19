@@ -1,9 +1,9 @@
 // 一次性建立模块 / 工程的阶段文件夹骨架。
 //
-// 为什么要有它:阶段文件夹的**名字与个数是固定的**,但手工逐个建立容易漏(漏了后面的技能会去找
-// 不存在的目录),不同会话建出来的也不一致。这把"建骨架"变成一条命令:
-//   · 写锚点 `.fpga-workbench.json`(kind 与 spec 路径)—— 整套流程靠它定位阶段文件夹
-//   · 建该级别全部阶段文件夹,并给 spec/ 建 explore/(探索产物有地方放)
+// 为什么要有它:目录名与个数是固定的,但手工逐个建立容易漏(漏了后面的技能会去找不存在的目录),
+// 不同会话建出来的也不一致。这把"建骨架"变成一条命令:
+//   · 写锚点 `.fpga-workbench.json`(kind 与 spec 路径)—— 整套流程靠它定位
+//   · 建该级别全部环节目录,并给 spec/ 建 explore/(探索产物有地方放)
 //   · 幂等:已存在的目录不动;已有锚点不覆盖(除非 --force)
 //
 // 只建目录与锚点,**不生成空的 spec.md / flow.md** —— 报告要由讨论产出,不预置占位内容。
@@ -15,10 +15,16 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
-/** 模块级的阶段文件夹(与技能里写的一致)。 */
-export const MODULE_STAGES = ["spec", "lint", "sim", "comp", "synth", "timing", "review"];
+/**
+ * 模块级的环节目录(放各环节的结论与证据:报告、日志、波形、输出数据)。
+ *
+ * 两个刻意的例外(与 stage-status 的口径一致):
+ * · **机械检查报告跟 RTL 放一起**(`rtl/lint.md`)—— 所以这里没有 lint/ 目录
+ * · **审查是按需能力,不占目录** —— 报告写 `<模块根>/review.md`,这里也没有 review/ 目录
+ */
+export const MODULE_STAGES = ["spec", "rtl", "sim", "comp", "synth", "timing"];
 
-/** 工程级的阶段文件夹(位于 `<工作区根>/project/` 下)。 */
+/** 工程级的环节目录(位于 `<工作区根>/project/` 下)。 */
 export const PROJECT_STAGES = ["spec", "integrate", "constraints", "syssim", "impl", "timing", "board", "release"];
 
 /**

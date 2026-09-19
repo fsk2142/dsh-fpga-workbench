@@ -504,6 +504,20 @@ check(
   /rtl\/ip\//u.test(lintText) && /仿真用的文件|仿真模型/u.test(lintText),
   "rtl 技能写明 IP 的归位规则(实体与 .xci → rtl/ip/,仿真模型 → sim/)"
 );
+// 一个文件写不下就拆子模块(用户 2026-09-19 指出原来缺这条):要写明**什么时候拆**
+// (写不完整块逻辑就拆),以及要用现成的子模块时先问用户"你提供还是我写" —— 与 IP 那条同一套问法。
+// 只断言"拆"不够:曾经只有"拆了之后放哪",没有触发条件。
+const splitSection = /### 一个模块拆多个文件时([\s\S]*?)\n### /u.exec(lintText)?.[1] ?? "";
+check(splitSection !== "", "rtl 技能有「一个模块拆多个文件时」一节");
+check(
+  /什么时候拆/u.test(splitSection) && /写不完|塞不下|写不下/u.test(splitSection),
+  "那一节写明拆子模块的触发条件(一个文件写不完就得拆)"
+);
+check(
+  /子模块[\s\S]{0,80}先问用户|先问用户[\s\S]{0,80}子模块/u.test(splitSection) &&
+    /你提供|你来提供/u.test(splitSection),
+  "那一节写明:要用现成的子模块,先问用户是他提供还是由本环节写"
+);
 // 起文件靠复制模板,不靠手抄:脚本只替模块名,内容原样保留(用户定的口径)
 check(
   /rtl-new\.mjs/u.test(lintText) && /只替模块名/u.test(lintText),

@@ -450,6 +450,23 @@ for (const [skill, allowed] of Object.entries(MODULE_VERDICT_SETS)) {
   const extra = listed.filter((word) => !allowed.includes(word));
   check(extra.length === 0, `${skill} 的结论行只用自己的判定词(多出:${extra.join("、") || "无"})`);
 }
+// 工程级的集成环节同样有判定词,产物那行原来只写"结论 + …",词一个没列 —— 同样补齐。
+// (工程级其余八篇还没逐篇过,这里只钉这篇已改的,免得把还没审的也一起断言成现状。)
+const integrateText = readFileSync(join(skillDir, "fpga-project-integrate", "SKILL.md"), "utf8");
+const integrateListed = verdictWords(
+  [...integrateText.matchAll(/结论[^\n]*?(?:\(([^)]*)\)|:((?:[^`\n]*`[^`]+`[^\n]*)+))/gu)]
+    .map((m) => m[1] ?? m[2] ?? "")
+    .find((line) => verdictWords(line).length > 1) ?? ""
+);
+check(integrateListed.length > 0, `fpga-project-integrate 的结论行列出了判定词(实际:${integrateListed.join(" / ") || "无"})`);
+// 集成时"模块从哪来"也要先问用户(与 rtl 的现成子模块同一条口径):用户已有一律直接用,
+// 不要集成时自己另写一个顶上 —— 那样模块自己那边的结论就对不上了。
+check(
+  /模块从哪来|模块来源/u.test(integrateText) &&
+    /先问用户/u.test(integrateText) &&
+    /(整理|另写|自己写)[\s\S]{0,24}(一个)?(顶上|替代)/u.test(integrateText),
+  "集成技能写明:模块来源先问用户,不在集成时自己另写一个顶上"
+);
 // sim 的"没有测试平台"必须记 UNVERIFIED/NOT_APPLICABLE 二选一里正确的那一个:
 // 用户口径是"要验证功能却没平台 = 未验证",只有本来就无可仿真行为的模块才算不适用。
 check(
@@ -505,13 +522,18 @@ check(
   "rtl 技能写明 IP 的归位规则(实体与 .xci → rtl/ip/,仿真模型 → sim/)"
 );
 // 一个文件写不下就拆子模块(用户 2026-09-19 指出原来缺这条):要写明**什么时候拆**
-// (写不完整块逻辑就拆),以及要用现成的子模块时先问用户"你提供还是我写" —— 与 IP 那条同一套问法。
+// (一个文件写不完整块逻辑就拆),而且**判据是功能、不是代码行数**(用户当场点明),
+// 以及要用现成的子模块时先问用户"你提供还是我写" —— 与 IP 那条同一套问法。
 // 只断言"拆"不够:曾经只有"拆了之后放哪",没有触发条件。
 const splitSection = /### 一个模块拆多个文件时([\s\S]*?)\n### /u.exec(lintText)?.[1] ?? "";
 check(splitSection !== "", "rtl 技能有「一个模块拆多个文件时」一节");
 check(
-  /什么时候拆/u.test(splitSection) && /写不完|塞不下|写不下/u.test(splitSection),
-  "那一节写明拆子模块的触发条件(一个文件写不完就得拆)"
+  /什么时候拆/u.test(splitSection) && /写不完整块逻辑/u.test(splitSection),
+  "那一节写明拆子模块的触发条件(一个文件写不完整块逻辑就拆)"
+);
+check(
+  /按功能|依据是功能/u.test(splitSection) && !/行数[\s\S]{0,12}(就拆|作为判据)/u.test(splitSection),
+  "那一节的判据写在功能上,不是代码行数"
 );
 check(
   /子模块[\s\S]{0,80}先问用户|先问用户[\s\S]{0,80}子模块/u.test(splitSection) &&

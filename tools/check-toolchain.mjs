@@ -22,8 +22,10 @@ import {
   inspectTools,
   legacyMigrationPatch,
   listDirectory,
+  listFiles,
   probeFilesystem,
   resolveTemplates,
+  staleShippedFiles,
   statusOf
 } from "../lib/toolchain.js";
 
@@ -358,6 +360,27 @@ check(
   backupChangedFiles(backupSource, join(backupRoot, "不存在"), join(backupRoot, "never")) === undefined,
   "目标不存在时不做备份"
 );
+
+// 我们从包里删掉的文件,用户预设目录里那份要跟着删 —— 否则"删掉的技能"照样在被加载
+// (技能是从用户预设目录扫的;cpSync 只合并不删多余的)。
+const staleRoot = join(ROOT, ".tmp", `stale-check-${String(Date.now())}`);
+const staleSource = join(staleRoot, "source");
+const staleTarget = join(staleRoot, "user");
+mkdirSync(join(staleSource, "skills", "keep-me"), { recursive: true });
+writeFileSync(join(staleSource, "skills", "keep-me", "SKILL.md"), "还在提供的技能\n");
+mkdirSync(join(staleTarget, "skills", "keep-me"), { recursive: true });
+mkdirSync(join(staleTarget, "skills", "gone"), { recursive: true });
+writeFileSync(join(staleTarget, "skills", "keep-me", "SKILL.md"), "还在提供的技能\n");
+writeFileSync(join(staleTarget, "skills", "gone", "SKILL.md"), "我们已经删掉的旧技能\n");
+writeFileSync(join(staleTarget, "用户自己的笔记.md"), "用户加的\n");
+
+const shippedBefore = ["skills/keep-me/SKILL.md", "skills/gone/SKILL.md"];
+const stale = staleShippedFiles(staleSource, staleTarget, shippedBefore);
+check(stale.includes("skills/gone/SKILL.md"), "上次是我们写的、包里已删的文件会被清掉", JSON.stringify(stale));
+check(!stale.includes("skills/keep-me/SKILL.md"), "包里还提供的文件不动");
+check(!stale.includes("用户自己的笔记.md"), "用户自己加的文件不在清单里 → 不删");
+check(staleShippedFiles(staleSource, staleTarget, undefined).length === 0, "没有清单时什么都不删(首次升级宁可留着)");
+check(listFiles(staleSource).join(",") === "skills/keep-me/SKILL.md", "listFiles 给出相对路径且用 / 分隔");
 
 // ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
 //

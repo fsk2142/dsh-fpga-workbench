@@ -189,6 +189,30 @@ check(
   `技能目录就是预设自己的 skills/(实际 ${String(skillDir)})`
 );
 
+// ── 作用域:这些东西只在 FPGA 模式下生效,别的模式一点都别沾 ──────────────────
+//
+// 用户的原话:"一定是开发模式采用这些东西,不是开发模式不要用这些"。
+// 机制上靠**两层分工**:
+//   · profile 层(cordis.patch.yml,全局):只挂插件行(设置读写 + 状态/浏览路由)与预设名单;
+//   · 预设层(agent.cordis.yml,只被点名本预设的会话挂载):人设、工具链提示、16 个技能。
+// 这条分工很容易在以后挪一行时被破坏(把提示或技能目录挪到全局层),那时**所有会话**都会看到
+// FPGA 的东西。所以按"全局层不许出现什么"来断言,而不是只断言"预设层有这些"。
+const patchText = readFileSync(patchPath, "utf8");
+check(!/systemPrompt/u.test(patchText), "全局层(补丁)不注册任何会话提示 —— 提示只能来自预设层");
+check(!/customSkillDirs|skill-filesystem/u.test(patchText), "全局层不注册技能目录 —— 技能只在预设层可见");
+check(!/能力地图|实现思路/u.test(patchText), "全局层不含本模式的人设文字(那是预设 persona 的事)");
+check(
+  !/dsh-fpga-workbench\/mode/u.test(patchText),
+  "全局层不挂模式半侧(它必须待在内置预设里,否则每个会话都会加载那段工具链提示)"
+);
+// 反过来:预设层必须有这三样,缺一样本模式就残废
+check(rowById.get("persona") !== undefined, "预设层有 persona 行(能力地图随模式走)");
+check(/dsh-persona/u.test(String(rowById.get("persona")?.name ?? "")), "persona 行挂的是 dsh-persona");
+check(
+  rowById.get("skill-filesystem") !== undefined,
+  "预设层有 skill-filesystem 行(技能目录只在预设层声明)"
+);
+
 // 每个技能必须能被 dsh-skill-filesystem 认出来:目录名 = frontmatter 的 name,且是
 // kebab-case;name/description 缺任何一个,技能会被**静默忽略**(只留一条 warn)。
 const skillNames = existsSync(skillDir)

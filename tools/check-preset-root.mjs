@@ -416,6 +416,22 @@ check(
 // 而 VHDL 本检查器不覆盖 —— 必须说清"记 NOT_APPLICABLE",不能静默当通过
 const simSkillText = readFileSync(join(skillDir, "fpga-module-sim", "SKILL.md"), "utf8");
 check(/仿真语言/u.test(simSkillText) && /\.vhd/u.test(simSkillText), "仿真技能写明 TB 扩展名跟仿真语言走(含 .vhd)");
+// ModelSim 的跑法:run -all / quit -f 是仿真器命令,得放进 .do 再一次调用(-c -do run.do)。
+// 写成"逐行 shell 命令"跑不通,而退出码判据也不成立:实测 $fatal 之后 vsim 退出码仍是 0,
+// 所以技能必须写明"看日志里的成功标记,不是看退出码"。
+check(
+  /-c -do/u.test(simSkillText) && /run -all/u.test(simSkillText),
+  "仿真技能给出 ModelSim 的一次调用形态(把 run -all/quit 放进 .do,再 -c -do 跑)"
+);
+check(
+  /vdel[\s\S]{0,80}(catch|判|先判|file exists)/u.test(simSkillText),
+  "仿真技能写明 vdel 要防住'没有 work 库时报错中止脚本'"
+);
+check(
+  /退出码[\s\S]{0,60}(仍是 0|不是 0|看日志)/u.test(simSkillText),
+  "仿真技能写明:$fatal 不改 vsim 退出码,判成败靠日志"
+);
+
 // TB 落点是 `tb_<snake>`(stamp.mjs 的 defaultDestination 把驼峰转下划线,UartRx → tb_uart_rx,
 // check-fpga-tools 也在断言这一点)。技能里曾写成 `tb_<模块名>`,照着找会找错文件。
 check(

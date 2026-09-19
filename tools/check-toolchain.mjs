@@ -496,6 +496,13 @@ check(
   TOOLS.every((tool) => !tool.file.includes("/") && !tool.file.includes("\\")),
   "命令都在工具目录顶层(tools/lib 是内部模块,不算命令)"
 );
+// 命令的说明会原样进会话提示,所以落点必须跟代码一致:`sim-new` 走 defaultDestination,
+// 模块名会转下划线(UartRx → tb_uart_rx.sv)。这里曾写成 `sim/tb_<模块名>.sv`,照着找会找错文件。
+const simNew = TOOLS.find((tool) => tool.file === "sim-new.mjs");
+check(
+  /tb_<(模块名下划线形式|snake)>|tb_uart_rx/u.test(String(simNew?.what ?? "")),
+  "sim-new 的说明写明 TB 落点会转下划线(不是裸的 tb_<模块名>.sv)"
+);
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");
 if (failures.length > 0) process.exitCode = 1;

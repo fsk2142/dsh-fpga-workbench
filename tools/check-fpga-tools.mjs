@@ -240,6 +240,18 @@ check(!rendered.text.includes("<ModuleName>"), "模块名占位符替干净了")
 check(rendered.text.includes("<DATE>") && rendered.text.includes("<Author>"), "日期 / 作者不动(内容归模板自己管)");
 check(rendered.remaining.includes("DATE") && rendered.remaining.includes("Author"), "没替的占位符会被提示出来");
 
+// 自带 TB 模板的判定契约:两条判据字符串必须在,且模板里不能再写"err_cnt>0 会非零退出"——
+// ModelSim 批处理下 $fatal 不改退出码(2020.4 实测),照旧说法写会让人以为看退出码就能抓到失败。
+const bundledTb = readFileSync(join(TEMPLATES, "tb.sv"), "utf8");
+check(
+  bundledTb.includes("ALL TESTS PASSED (err_cnt=0)") && bundledTb.includes("TB FAILED: err_cnt="),
+  "自带 TB 模板里两条判据字符串都在(成功标记 + 失败标记),脚本靠它们判成败"
+);
+check(
+  /does NOT make vsim exit non-zero/u.test(bundledTb) && !/must exit non-zero/u.test(bundledTb),
+  "自带 TB 模板写明 $fatal 不改 vsim 退出码(不是'必须非零退出'那种说法)"
+);
+
 // 用户自己的模板(没有任何占位符)→ 必须与模板逐字节一致
 const plainTemplate = join(SANDBOX, "plain-tb.vhd");
 writeFileSync(plainTemplate, "-- 我自己的模板\nentity tb_x is end entity;\n");

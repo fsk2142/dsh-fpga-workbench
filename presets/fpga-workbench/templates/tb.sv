@@ -64,7 +64,10 @@ module tb_<module_snake>;
     // TODO: stimulus + checks (on mismatch: $error(...); err_cnt = err_cnt + 1;)
     $display("[TB] test done");
 
-    // ---- final verdict (contract: err_cnt>0 must exit non-zero) ----
+    // ---- final verdict ----
+    // ModelSim batch note: $fatal does NOT make vsim exit non-zero (measured 2020.4),
+    // so the FAILURE MARKER + this success line are the evidence, not $?/%LASTEXITCODE.
+    // Keep both strings exactly as written below: the run scripts grep for them.
     if (err_cnt == 0)
       $display("ALL TESTS PASSED (err_cnt=0)");
     else

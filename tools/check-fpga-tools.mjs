@@ -274,6 +274,26 @@ check(
 );
 check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("verif", "tb_uart_rx.vhd"), "扩展名跟着模板走");
 check(defaultDestination("xdc", "UartRx", "C:/t/c.xdc") === join("synth", "UartRx.xdc"), "约束文件落 synth/<模块名>.xdc");
+// 模块级约束**只要时钟**(用户 2026-09-19 确认:模块没有管脚,管脚/电平/IO 延迟都是工程级的事)。
+// 自带 XDC 模板要说清这条,而且不许再引用旧包的 `device_config.tcl / TIMING_CLOCKS` ——
+// 那是旧结构,我们现在只有 spec/spec.md 这一处时钟参考。
+const bundledXdc = readFileSync(join(TEMPLATES, "constraints.xdc"), "utf8");
+check(
+  /CLOCKS ONLY|clock constraint only/iu.test(bundledXdc),
+  "自带 XDC 模板写明:模块级只要时钟约束"
+);
+check(
+  !/device_config|TIMING_CLOCKS/u.test(bundledXdc),
+  "自带 XDC 模板不再引用旧包的 device_config.tcl / TIMING_CLOCKS"
+);
+check(
+  /spec\/spec\.md/u.test(bundledXdc),
+  "自带 XDC 模板指向 spec/spec.md 作为器件与时钟参考的那一处"
+);
+check(
+  /set_clock_groups -asynchronous|create_generated_clock/u.test(bundledXdc),
+  "自带 XDC 模板提到多时钟域要加 generated clock 或异步时钟组(否则会报未约束/跨域)"
+);
 
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
 // spec-scaffold 是两级共用(在 tools/ 顶层);其余被调用的都是模块级命令(在 tools/module/)

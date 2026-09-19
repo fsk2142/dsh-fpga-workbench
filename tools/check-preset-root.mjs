@@ -661,6 +661,13 @@ check(
   levelProblems.length === 0,
   `技能里的命令路径都带对级别目录(问题:${levelProblems.join("、") || "无"})`
 );
+// 三个"跑命令"的模块级环节(rtl / verif / synth)结构一致:都要有「前置」与
+// 「本环节要跑的命令」两节 —— 用命令的人该在同一处找得到,而不是满篇翻。
+for (const skill of ["fpga-module-rtl", "fpga-module-verif", "fpga-module-synth"]) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  check(/^## 前置$/mu.test(text), `${skill} 有「前置」一节`);
+  check(/^## 本环节要跑的命令$/mu.test(text), `${skill} 把要跑的命令集中成一节`);
+}
 // 第一步必须是"用模板生成文件再编写"(用户要求):先落模板骨架,再填逻辑
 check(
   /第一步:用模板生成文件/u.test(lintText) && /第二步:编译器检查/u.test(lintText) && /第三步:逐条核对规范/u.test(lintText),

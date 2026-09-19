@@ -25,6 +25,7 @@ import {
   listDirectory,
   listFiles,
   probeFilesystem,
+  pruneEmptySkillDirs,
   resolveTemplates,
   staleShippedFiles,
   statusOf,
@@ -394,6 +395,17 @@ writeFileSync(join(staleTarget, "旧模板.sv"), "包里已经没有的模板\n"
 const withManifest = staleShippedFiles(staleSource, staleTarget, [...shippedBefore, "旧模板.sv"]);
 check(withManifest.includes("旧模板.sv"), "清单里记过、位于 skills/ 之外的文件按清单删");
 check(!staleShippedFiles(staleSource, staleTarget, undefined).includes("旧模板.sv"), "没有清单时不动 skills/ 之外的文件");
+
+// 删完文件还要收掉空目录:只 unlink 会在用户预设里留下一串空壳技能目录(实测遇到过 9 个),
+// 列表里看着像"技能还在"。只删 skills/ 下的空目录,用户自己建的东西不碰。
+const pruneRoot = join(ROOT, ".tmp", `prune-skills-${String(Date.now())}`);
+mkdirSync(join(pruneRoot, "旧技能"), { recursive: true });
+mkdirSync(join(pruneRoot, "有内容的技能"), { recursive: true });
+writeFileSync(join(pruneRoot, "有内容的技能", "SKILL.md"), "还在用\n");
+const removedDirs = pruneEmptySkillDirs(pruneRoot);
+check(removedDirs === 1 && !existsSync(join(pruneRoot, "旧技能")), `空技能目录被删掉(实际删了 ${removedDirs} 个)`);
+check(existsSync(join(pruneRoot, "有内容的技能", "SKILL.md")), "有内容的技能目录不动");
+check(pruneEmptySkillDirs(join(ROOT, ".tmp", "根本没有这个目录")) === 0, "目录不存在时返回 0(不抛)");
 
 // ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
 //

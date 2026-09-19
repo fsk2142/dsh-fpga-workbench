@@ -431,7 +431,7 @@ check(
 // 旧布局的残留:sim/ 已并入 verif/,检查器与技能里都不该再从 sim/ 找测试平台
 check(
   !/(^|[^a-z])sim\//u.test(readFileSync(join(presetDir, "tools", "module", "module-rtl-check.mjs"), "utf8")),
-  "rtl-check 里没有 sim/ 残留(测试平台现在在 verif/ 下找)"
+  "module-rtl-check 里没有 sim/ 残留(测试平台现在在 verif/ 下找)"
 );
 // 文件名跟着设置里选的语言走:TB 的扩展名不能写死 .sv(选 VHDL 就是 .vhd),
 // 而 VHDL 本检查器不覆盖 —— 必须说清"记 NOT_APPLICABLE",不能静默当通过
@@ -464,8 +464,8 @@ check(
 );
 // 用户明确要求过:说"要看波形"时必须真有手段 —— 技能里得有这条命令与用法,不能只有批处理
 check(
-  /verif-wave\.mjs/u.test(verifSkillText) && /波形/u.test(verifSkillText),
-  "验证技能写明看波形的手段(verif-wave:开 GUI、加波形、不自动 run)"
+  /module-verif-wave\.mjs/u.test(verifSkillText) && /波形/u.test(verifSkillText),
+  "验证技能写明看波形的手段(module-verif-wave:开 GUI、加波形、不自动 run)"
 );
 // 比对口径上确实拿不准时(读不出样本 / 容差 / golden 来路)要**回去问用户**,
 // 不许自己改比对口径把结论凑过去 —— 判据一松,后面所有结论都不作数。
@@ -578,17 +578,17 @@ check(
 const runSection = /## 本环节要跑的命令([\s\S]*?)(?=\n## )/u.exec(lintText)?.[1] ?? "";
 check(runSection !== "", "检查技能有一节专讲『本环节要跑的命令』(命令与时机写在一起)");
 check(
-  /写完之后|三步都写完之后/u.test(runSection) && /rtl-check\.mjs/u.test(runSection),
-  "那一节里同时写明时机(写完之后)与要跑的命令(module-rtl-check.mjs),不是只提'跑全量'"
+  /写完之后|三步都写完之后/u.test(runSection) && /module-rtl-check\.mjs/u.test(runSection),
+  "那一节里同时写明时机(写完之后)与要跑的命令(`module-rtl-check.mjs`),不是只提'跑全量'"
 );
 check(
   /--lint-only/u.test(runSection),
   "那一节里也点名编译器那条命令(不是只说'跑检查')"
 );
 const checkRtlText = readFileSync(join(presetDir, "tools", "module", "module-rtl-check.mjs"), "utf8");
-check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "rtl-check 认 .v 的 TB,并对 VHDL 有明确交代");
+check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "module-rtl-check 认 .v 的 TB,并对 VHDL 有明确交代");
 // 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点
-check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "rtl-check 跳过 ip/ 目录(外来代码不按本规范查)");
+check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "module-rtl-check 跳过 ip/ 目录(外来代码不按本规范查)");
 check(/rtl\/ip\//u.test(lintText), "检查技能写明外来代码放 rtl/ip/,检查会跳过");
 // IP 流程(用户要求):用到 IP 先问用户"自建还是他提供";生成/拿到后按用途归位 ——
 // 仿真文件 → verif/,RTL 与综合用的部分(含 .xci)→ rtl/ip/
@@ -622,7 +622,7 @@ check(
 );
 // 起文件靠复制模板,不靠手抄:脚本只替模块名,内容原样保留(用户定的口径)
 check(
-  /rtl-new\.mjs/u.test(lintText) && /只替模块名/u.test(lintText),
+  /module-rtl-new\.mjs/u.test(lintText) && /只替模块名/u.test(lintText),
   "rtl 技能写明用 module-rtl-new.mjs 复制模板,且只替模块名"
 );
 // 路径口径统一:IP 实体写 rtl/ip/、仿真模型写 verif/ —— 不许再出现裸的 `ip/` 路径

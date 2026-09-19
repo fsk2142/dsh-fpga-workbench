@@ -1,4 +1,4 @@
-// 自带工具脚本的功能自检(setup-scaffold / module-rtl-new / module-rtl-check / module-verif-new / synth-new)。
+// 自带工具脚本的功能自检(setup-scaffold / module-rtl-new / module-rtl-check / module-verif-new / module-synth-new)。
 //
 // 为什么必须机器验:这两个脚本是"确定性检查",价值全在判得准。误报一次,人就再也不信它了。
 // 所以这里用真文件跑,断言的是会真出错的性质:
@@ -324,7 +324,7 @@ check(run("setup-scaffold.mjs", []) === 2, "setup-scaffold 不给根目录 → �
 const newFileRoot = join(SANDBOX, `new-file-${stamp}`);
 check(
   run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 0,
-  "rtl-new 按模板起文件 → 退出码 0"
+  "module-rtl-new 按模板起文件 → 退出码 0"
 );
 check(existsSync(join(newFileRoot, "rtl", "uart_rx.sv")), "RTL 落在 rtl/ 下");
 check(
@@ -337,12 +337,12 @@ check(
   "verif-new 把测试平台落在 verif/tb_<snake>.sv"
 );
 
-// ── verif-wave:看波形的手段(用户明确要求"要看波形时必须真有这条")────────────────
+// ── module-verif-wave:看波形的手段(用户明确要求"要看波形时必须真有这条")────────────────
 // 只验生成物与判定,不真的开 GUI:开窗会卡住自检。生成的脚本语法另外用真 vsim 批处理跑过
 // (`vsim -gui` 换成 `vsim -c`),`log`/`add wave`/`cd` 这些命令都实测过。
 check(
   run("module-verif-wave.mjs", [newFileRoot, "--sim-path", join(TEMPLATES, "..", "tools", "xsim-placeholder"), "--dry-run"]) === 0,
-  "verif-wave --dry-run 不落盘也能判定(退出码 0)"
+  "module-verif-wave --dry-run 不落盘也能判定(退出码 0)"
 );
 check(
   pickTestbench(join(newFileRoot, "verif"), undefined, newFileRoot)?.endsWith("tb_uart_rx.sv") === true,
@@ -381,7 +381,7 @@ check(
 check(
   run("module-synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0
     && existsSync(join(newFileRoot, "synth", "uart_rx.xdc")),
-  "synth-new 把约束落在 synth/<模块名>.xdc"
+  "module-synth-new 把约束落在 synth/<模块名>.xdc"
 );
 check(
   run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 1,

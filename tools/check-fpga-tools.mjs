@@ -19,6 +19,7 @@ import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/mo
 import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
 import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/module/module-verif-wave.mjs";
+import { sweepTempEntries } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
@@ -26,6 +27,8 @@ const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
 const MODULE_TOOLS = join(TOOLS, "module");
 const TEMPLATES = join(ROOT, "presets", "fpga-workbench", "templates");
 const SANDBOX = join(ROOT, ".tmp", "fpga-tools-check");
+// 自检自己收尾:这个沙箱每次跑都重建(内容用时间戳区分),跑完整个删掉 —— 否则它会一直涨
+sweepTempEntries(join(ROOT, ".tmp"), ["fpga-tools-check"]);
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -104,7 +107,8 @@ writeFileSync(join(SANDBOX, ".fpga-workbench.json"), JSON.stringify({ kind: "mod
 const blocking = (file, isTb) => checkFile(file, isTb);
 const goodIssues = blocking(join(SANDBOX, "good-mod", "rtl", "good.sv"), false);
 check(goodIssues.length === 0, "合规模块零问题", goodIssues.map((i) => i.message).join("; "));
-const tbIssues = blocking(join(SANDBOX, "good-mod", "verif", "sim", "tb_good.sv"), true);
+// 测试平台与 RTL 同处一套骨架,但它在 verif/ 下(仿真与比对是同一个环节,没有 sim/ 这一层)
+const tbIssues = blocking(join(SANDBOX, "good-mod", "verif", "tb_good.sv"), true);
 check(tbIssues.length === 0, "合规测试平台零问题(不要求九个小节块与断言)", tbIssues.map((i) => i.message).join("; "));
 
 const badIssues = blocking(join(SANDBOX, "bad-mod", "rtl", "bad.sv"), false);
@@ -405,3 +409,9 @@ check(run("setup-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复�
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;
+
+// 收尾:把沙箱整个删掉(下次跑会重建)。残留会让"这次到底跑没跑"看不出来。
+if (sweepTempEntries(join(ROOT, ".tmp"), ["fpga-tools-check"]) === 0 && existsSync(SANDBOX)) {
+  console.log("FAIL: 收尾没清掉沙箱");
+  process.exitCode = 1;
+}

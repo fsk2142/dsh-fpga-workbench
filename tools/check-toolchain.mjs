@@ -29,11 +29,18 @@ import {
   resolveTemplates,
   staleShippedFiles,
   statusOf,
+  sweepTempEntries,
   toolLevelPrefix,
   toolPath
 } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// 自检自己收尾:这些前缀是本次跑出来的 fixture(含列目录用的 browse-fixture),
+// 跑到最后要把它们扫干净 —— 开头也扫一次,清掉上次异常退出留下的残留。
+const TMP_ROOT = join(ROOT, ".tmp");
+const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture"];
+sweepTempEntries(TMP_ROOT, FIXTURE_PREFIXES);
+
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -607,3 +614,14 @@ check(
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");
 if (failures.length > 0) process.exitCode = 1;
+
+// 收尾:把本次的 fixture 目录扫掉,并且**必须扫干净** —— 只提示不删就等于没做,
+// 下次跑还会看到一堆残留(这个自检的临时目录以前就是这么攒到上百个的)。
+sweepTempEntries(TMP_ROOT, FIXTURE_PREFIXES);
+const leftOver = readdirSync(TMP_ROOT, { withFileTypes: true })
+  .filter((entry) => FIXTURE_PREFIXES.some((prefix) => entry.name.startsWith(prefix)))
+  .map((entry) => entry.name);
+if (leftOver.length > 0) {
+  console.log(`FAIL: 收尾没清干净,还剩 ${leftOver.length} 项:${leftOver.join("、")}`);
+  process.exitCode = 1;
+}

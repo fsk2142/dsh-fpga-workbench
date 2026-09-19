@@ -24,9 +24,10 @@ description: 跑或排查 FPGA 模块的功能仿真时用:写或改测试平台
    node "<自带命令目录>\sim-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"
    ```
 
-   默认落 `sim/tb_<模块名>.<模板扩展名>`。文件名与扩展名跟着模板走,所以先在设置里选对
-   **仿真语言**(SystemVerilog → `.sv` / Verilog → `.v` / VHDL → `.vhd`);自带模板是
-   SystemVerilog 的,要写别的语言得自己准备对应语言的模板。起完文件再按模板结构填逻辑。
+   默认落 `sim/tb_<snake>.sv`(`<snake>` 是模块名的下划线形式:`UartRx` → `tb_uart_rx`;
+   脚本只替模块名,与 `fpga-module-rtl` 同一条,要另换位置用 `--out`)。扩展名跟着模板走,
+   所以先在设置里选对**仿真语言**(SystemVerilog → `.sv` / Verilog → `.v` / VHDL → `.vhd`);
+   自带模板是 SystemVerilog 的,要写别的语言得自己准备对应语言的模板。起完文件再按模板结构填逻辑。
 
 **没有测试平台 ≠ 仿真"不适用"**:若当前目标就是验证功能,则属 `UNVERIFIED` 或
 `BLOCKED`(缺工具/缺平台),不是 `NOT_APPLICABLE`。通常答案是把测试平台写出来。
@@ -102,8 +103,7 @@ xsim tb_sim -runall
 - **PASS**:`err_cnt = 0`,日志里出现成功标记,进程退出码 0
 - **FAIL**:非零退出,或日志里出现 `$error` / `$fatal`,或超时 `TB TIMEOUT`
 - **BLOCKED**:vsim 没就绪(设置里标了「未就绪」)→ 如实说明并停下,不得假装跑过
-- **UNVERIFIED**:`sim/` 下还没有测试平台(`tb_*`,扩展名按仿真语言)、本次目标就是验证功能。
-  这**不是** `NOT_APPLICABLE` —— 通常答案是把测试平台写出来(见上面「没有测试平台 ≠ 仿真不适用」)
+- **UNVERIFIED**:`sim/` 下还没有测试平台(`tb_*`)—— 见上面「没有测试平台 ≠ 仿真不适用」
 - **NOT_APPLICABLE**:只有这个模块**本来就没有可仿真的行为**(例如纯约束 / 纯管脚类改动),
   已说明理由才算
 

@@ -416,6 +416,13 @@ check(
 // 而 VHDL 本检查器不覆盖 —— 必须说清"记 NOT_APPLICABLE",不能静默当通过
 const simSkillText = readFileSync(join(skillDir, "fpga-module-sim", "SKILL.md"), "utf8");
 check(/仿真语言/u.test(simSkillText) && /\.vhd/u.test(simSkillText), "仿真技能写明 TB 扩展名跟仿真语言走(含 .vhd)");
+// TB 落点是 `tb_<snake>`(stamp.mjs 的 defaultDestination 把驼峰转下划线,UartRx → tb_uart_rx,
+// check-fpga-tools 也在断言这一点)。技能里曾写成 `tb_<模块名>`,照着找会找错文件。
+check(
+  /tb_<snake>/u.test(simSkillText) && /--out/u.test(simSkillText),
+  "仿真技能写明 TB 落在 sim/tb_<snake>.sv(模块名转下划线),且可用 --out 另指定"
+);
+
 check(
   /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
   "检查技能写明 VHDL 源码不覆盖(记 NOT_APPLICABLE)"

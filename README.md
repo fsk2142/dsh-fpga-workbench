@@ -284,7 +284,7 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
   | `fpga-project-impl` | 布局布线 + DRC + bitstream | `project/impl/` |
   | `fpga-project-timing` | **post-route** 时序(与模块级 post-synth 不同) | `project/timing/` |
   | `fpga-project-board` | 上板:下载(-verify)、ILA/VIO、回读数据比对、固化 Flash | `project/board/` |
-  | `fpga-project-release` | 发布归档:判据是"照着归档能重建同样的 bit" | `project/release/` |
+  | `fpga-project-release` | 发布归档:判据是"照着归档能重建同一版设计"(不是 bit 逐字节相同) | `project/release/` |
 
   工程级阶段文件夹统一在 `project/` 下——模块级与工程级都有 `spec`/`timing`,平铺会撞名。
 - ✅ 模板:自带 `rtl.sv` / `tb.sv` / `constraints.xdc`,设置里可换成自己的

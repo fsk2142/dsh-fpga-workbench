@@ -560,13 +560,19 @@ const VERDICT_SETS = {
 };
 for (const [skill, allowed] of Object.entries(VERDICT_SETS)) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
-  // 取的是"把判定词一次列全"的那一处:大多数写成 `结论(PASS / FAIL / …)`,
-  // rtl/review 写成 `- **结论**:`PASS` / `FAIL` / …`。同一文件里前面可能还有别的 `结论:` 提法
-  // (synth 就有一句),所以扫全部匹配、挑出真的带判定词的那一处。
+  // 取的是"把判定词列得最全"的那一处:大多数写成 `结论(PASS / FAIL / …)`,
+  // rtl/review 写成 `- **结论**:`PASS` / `FAIL` / …`。
+  // **不能取"第一个含 ≥2 个词的候选"** —— 正文里解释某两个词的句子(PASS/BLOCKED、UNVERIFIED
+  // 之类)会排在产物行前面,一取就取错(实测踩过:integrate 新加一句解释后守卫误报)。
+  // 所以扫全部匹配、取词数最多的那一段;并列时取靠后的(产物节在后面)。
   const candidates = [...text.matchAll(/结论[^\n]*?(?:\(([^)]*)\)|:((?:[^`\n]*`[^`]+`[^\n]*)+))/gu)].map(
     (m) => m[1] ?? m[2] ?? ""
   );
-  const listed = verdictWords(candidates.find((line) => verdictWords(line).length > 1) ?? "");
+  let listed = [];
+  for (const line of candidates) {
+    const words = verdictWords(line);
+    if (words.length >= listed.length && words.length > 1) listed = words;
+  }
   check(listed.length > 0, `${skill} 的结论行列出了判定词(实际:${listed.join(" / ") || "无"})`);
   const used = allowed.filter((word) => text.includes(word));
   const missing = used.filter((word) => !listed.includes(word));

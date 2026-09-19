@@ -160,6 +160,21 @@ function parseArgs(argv) {
   return { root, kind, modules, force: argv.includes("--force"), dryRun: argv.includes("--dry-run") };
 }
 
+/**
+ * 读一个已有锚点的 `kind`。
+ * @param file - 锚点文件路径。
+ * @returns `{ kind }` 或 `{ error }`;文件在但解析不了时给 error —— 由调用方决定怎么办
+ *   (这里的策略是**绝不覆盖**读不懂的文件)。
+ */
+function readAnchorKind(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    return { kind: typeof parsed?.kind === "string" ? parsed.kind : "(没有 kind 字段)" };
+  } catch (error) {
+    return { error: String(error.message ?? error) };
+  }
+}
+
 /** 入口。 */
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -174,6 +189,29 @@ function main() {
 
   const root = args.root;
   const plan = planScaffold(root, { kind: args.kind, modules: args.modules });
+
+  // 一个根只能有一个锚点,而它的 `kind` 决定整套流程怎么找环节目录。
+  // 拿 module 的根去建工程(或反过来)、又不给 --force 的话,脚本只会"锚点已存在,未覆盖"
+  // 地把目录建一半:project/ 有了、锚点还是 kind: module —— 工程级技能照样找不到工程。
+  // 真事:实跑集成场景时这么踩过。所以这里明说冲突、给出办法,而不是留个半吊子状态。
+  const rootAnchor = plan.anchors[0]?.file;
+  if (rootAnchor !== undefined && existsSync(rootAnchor)) {
+    const existing = readAnchorKind(rootAnchor);
+    if (existing.error !== undefined) {
+      console.error(`根目录已有锚点,但读不出它的内容:${rootAnchor}`);
+      console.error(`${existing.error} —— 不覆盖用户的文件;确认或修好它再跑,或者用 --force 重建。`);
+      return 1;
+    }
+    if (existing.kind !== args.kind) {
+      console.error(`根锚点的类型与本次不一致:${rootAnchor}`);
+      console.error(`  锚点写的是 kind: ${existing.kind},本次要建 kind: ${args.kind}`);
+      console.error("  一个根只能属于一种:模块根放模块自己的 spec/rtl/verif/synth,工程根放 project/ 与各模块子目录。");
+      console.error(`  要建工程:先把现有模块目录(含它自己的锚点)整体移进 <根>/${args.modules[0] ?? "<模块名>"}/,根上只留工程级的,再跑一次本命令 —— 不要用 --force 覆盖,那会丢掉锚点里已有的内容。`);
+      console.error("  要重建:确认不需要旧锚点内容后再加 --force。");
+      return 1;
+    }
+  }
+
   const { created, skipped } = applyScaffold(plan, { dryRun: args.dryRun, force: args.force });
 
   const label = args.dryRun ? "[dry-run] 将要建立" : "已建立";

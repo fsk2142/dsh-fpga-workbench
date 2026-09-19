@@ -53,7 +53,6 @@
       | 多模块联仿、接口与背压 | fpga-project-syssim |
       | 实现、下载与回读、固化 | fpga-project-impl / fpga-project-board |
       | 版次、归档、可复现步骤 | fpga-project-release |
-      | 工程体检 | fpga-project-audit(任何时候都能跑) |
 
       几条硬要求:
 

@@ -16,6 +16,13 @@ description: 在给 FPGA 工程写或核对约束与管脚时用:时钟约束、
 - **真正要上板之前**,对着原理图与器件规格把受影响的管脚、电压、IO 标准再核一遍(见
   `fpga-project-board`)。
 
+## 前置
+
+1. 工程骨架在(`.fpga-workbench.json` 的 `kind` 为 `project`),见 `fpga-project-spec`
+2. 器件与封装已定(`project/spec/spec.md`)—— 器件没定,IO 标准与可用管脚都无从谈起
+3. 拿到原理图或管脚表(拿不到就是 `BLOCKED`,不得凭接口名猜管脚)
+4. 要上板时先看 `project/timing/timing.md` 是不是 PASS —— 时序没过,管脚核了也不该上板
+
 ## 做什么
 
 1. **时钟约束**:每个时钟一个 `create_clock`,周期取设计真实目标(不是随手填的整数)

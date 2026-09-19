@@ -280,7 +280,14 @@ check(
   `每个技能都能看出属于哪一级(没前缀的:${skillNames.filter((name) => !/^fpga-(module|project)-/u.test(name)).join("、") || "无"})`
 );
 check(moduleSkills.length === 5, `模块级 5 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
-check(projectSkills.length === 9, `工程级 9 个(实际 ${projectSkills.length}:${projectSkills.join("、")})`);
+check(projectSkills.length === 8, `工程级 8 个(实际 ${projectSkills.length}:${projectSkills.join("、")})`);
+// 工程级八篇都要有「前置」与「产物」两节(2026-09-19 与模块级对齐):前置条件不该散在正文里,
+// 产物是这一环节的交付物。审计那一篇按用户口径删掉了(验证已经覆盖它),所以不在这里。
+for (const skill of projectSkills) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  check(/^## 前置/mu.test(text), `${skill} 有「前置」一节`);
+  check(/^## 产物/mu.test(text), `${skill} 有「产物」一节`);
+}
 
 // ── fpga-module-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
 //
@@ -531,8 +538,7 @@ const VERDICT_SETS = {
   "fpga-module-synth": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-module-review": ["APPROVED", "CHANGES_REQUESTED", "BLOCKED"],
-  // 工程级九篇(2026-09-19 与模块级对齐时补齐):环节报告都用同一套五个词;
-  // 审计有自己的三档(PASS / WARN / FAIL),不套环节报告那套 —— 见 fpga-project-audit
+  // 工程级八篇(2026-09-19 与模块级对齐时补齐):环节报告都用同一套五个词
   "fpga-project-spec": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-project-integrate": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-project-constraints": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
@@ -558,17 +564,11 @@ for (const [skill, allowed] of Object.entries(VERDICT_SETS)) {
   const extra = listed.filter((word) => !allowed.includes(word));
   check(extra.length === 0, `${skill} 的结论行只用自己的判定词(多出:${extra.join("、") || "无"})`);
 }
-// 工程级九篇**每篇都要有自己的判定词清单**。审计是例外:它的结论是三档 PASS / WARN / FAIL
-// (见该篇「输出格式」),所以在清单之外单独断言它把这三档写清了。
-for (const skill of skillNames.filter((name) => name.startsWith("fpga-project-") && name !== "fpga-project-audit")) {
+// 工程级**每篇都要有自己的判定词清单**(审计那一篇 2026-09-19 按用户口径删掉了:验证已经覆盖它)
+for (const skill of skillNames.filter((name) => name.startsWith("fpga-project-"))) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
   check(/结论\(`PASS`/u.test(text), `${skill} 的产物写明了结论取值`);
 }
-const auditText = readFileSync(join(skillDir, "fpga-project-audit", "SKILL.md"), "utf8");
-check(
-  /PASS[\s\S]{0,40}WARN[\s\S]{0,40}FAIL/u.test(auditText),
-  "审计写明自己的三档结论(PASS / WARN / FAIL)"
-);
 // 集成时"模块从哪来"也要先问用户(与 rtl 的现成子模块同一条口径):用户已有一律直接用,
 // 不要集成时自己另写一个顶上 —— 那样模块自己那边的结论就对不上了。
 const integrateText = readFileSync(join(skillDir, "fpga-project-integrate", "SKILL.md"), "utf8");

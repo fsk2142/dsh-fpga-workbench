@@ -5,6 +5,13 @@ description: 把多个模块接起来之后做系统级仿真时用:写顶层测
 
 # project-syssim:系统级仿真
 
+## 前置
+
+1. 工程骨架在(`.fpga-workbench.json` 的 `kind` 为 `project`),见 `fpga-project-spec`
+2. 顶层已集成、能 elaborate(`project/integrate/`)—— 连不起来就还没到联仿这一步
+3. 各模块自己的验证有结论(`<模块根>/verif/verif.md`);结论缺的如实标出来,别在这里替它下结论
+4. 激励数据与对照数据有来源(工程里已有的数据文件,或 spec 里定的生成方式)
+
 ## 做与不做的判断
 
 **按风险判断,不按模块个数**。值得做的信号:模块之间有握手或背压、跨时钟域的数据流、接口协议

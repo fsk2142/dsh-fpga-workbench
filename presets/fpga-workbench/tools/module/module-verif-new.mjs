@@ -1,7 +1,7 @@
 // 验证环节:按模板起一个测试平台文件(**复制**模板、只替模块名)。
 //
 // 用法:
-//   node verif-new.mjs <模块根> <模块名> --template <测试平台模板路径>
+//   node module-verif-new.mjs <模块根> <模块名> --template <测试平台模板路径>
 //                     [--out <相对路径>] [--force] [--dry-run]
 // 默认落到 `verif/tb_<snake>.sv`(`<snake>` 是模块名的下划线形式;扩展名跟着模板走)。
 // 模板路径看会话开头「本机 FPGA 工具链」的模板一节。

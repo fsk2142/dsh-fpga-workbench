@@ -27,7 +27,7 @@ description: 要确认这个模块的改动是不是真的做对了时用:写测
 ## 第一步:写测试平台(起文件靠命令,不手抄)
 
 ```
-node "<自带命令目录>\module\verif-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"
+node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"
 ```
 
 默认落 `verif/tb_<snake>.sv`(`<snake>` 是模块名的下划线形式:`UartRx` → `tb_uart_rx`;脚本只替
@@ -111,7 +111,7 @@ xsim tb_sim -runall
 批处理只留日志与数据文件,人工排查需要波形窗口。用自带命令打开:
 
 ```
-node "<自带命令目录>\module\verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"
+node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"
 ```
 
 编译 → 开 GUI → 把信号加进波形窗口 → **停在 0 时刻**(不自动 run)。生成 `verif/wave.do`;
@@ -221,8 +221,8 @@ node "<自带命令目录>\module\verif-wave.mjs" <模块根> --sim-path "<仿�
 
 | 干什么 | 命令 | 在哪一节 |
 |---|---|---|
-| 起测试平台 | `node "<自带命令目录>\module\verif-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"` | 第一步 |
+| 起测试平台 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"` | 第一步 |
 | 跑出来 | `& "<仿真器路径>" -c -do run.do`(在 `verif/` 下;`run.do` 的写法见第二步) | 第二步 |
-| 看波形 | `node "<自带命令目录>\module\verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"` | 第三步 |
+| 看波形 | `node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"` | 第三步 |
 
 比对脚本按 spec 约定的格式自己写或复用参考模型,不是一条固定命令 —— 判法见第四步。

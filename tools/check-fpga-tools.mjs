@@ -1,4 +1,4 @@
-// 自带工具脚本的功能自检(spec-scaffold / rtl-new / rtl-check / verif-new / synth-new)。
+// 自带工具脚本的功能自检(setup-scaffold / module-rtl-new / module-rtl-check / module-verif-new / synth-new)。
 //
 // 为什么必须机器验:这两个脚本是"确定性检查",价值全在判得准。误报一次,人就再也不信它了。
 // 所以这里用真文件跑,断言的是会真出错的性质:
@@ -15,10 +15,10 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/rtl-check.mjs";
-import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/spec-scaffold.mjs";
+import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
+import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
-import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/module/verif-wave.mjs";
+import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/module/module-verif-wave.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
@@ -239,7 +239,7 @@ check(
   "每个模块各自一套模块级文件夹"
 );
 
-// ── 起文件(rtl-new / verif-new / synth-new:各环节一个入口,只替模块名) ──────
+// ── 起文件(module-rtl-new / module-verif-new / module-synth-new:各环节一个入口,只替模块名) ──
 const bundledRtl = readFileSync(join(TEMPLATES, "rtl.sv"), "utf8");
 const rendered = renderTemplate(bundledRtl, "UartRx");
 check(rendered.replaced.join(",") === "ModuleName", `只替模块名(实际替了 ${rendered.replaced.join("、") || "无"})`);
@@ -296,7 +296,7 @@ check(
 );
 
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
-// spec-scaffold 是两级共用(在 tools/ 顶层);其余被调用的都是模块级命令(在 tools/module/)
+// setup-scaffold 是两级共用(在 tools/ 顶层、名字不带级别前缀);其余被调用的都是模块级命令
 const run = (script, args) => {
   const path = existsSync(join(TOOLS, script)) ? join(TOOLS, script) : join(MODULE_TOOLS, script);
   return spawnSync(process.execPath, [path, ...args], { stdio: "ignore" }).status;
@@ -308,31 +308,31 @@ mkdirSync(join(SANDBOX, "tb-v-mod", "rtl"), { recursive: true });
 mkdirSync(join(SANDBOX, "tb-v-mod", "verif"), { recursive: true });
 writeFileSync(join(SANDBOX, "tb-v-mod", "verif", "tb_only.v"), goodTb);
 check(
-  run("rtl-check.mjs", [join(SANDBOX, "tb-v-mod")]) === 0,
+  run("module-rtl-check.mjs", [join(SANDBOX, "tb-v-mod")]) === 0,
   "verif/ 下的 .v 测试平台会被检查(只认 .sv 的话这里会退 2)"
 );
 mkdirSync(join(SANDBOX, "vhdl-mod", "rtl"), { recursive: true });
 writeFileSync(join(SANDBOX, "vhdl-mod", "rtl", "top.vhd"), "-- VHDL 源码\n");
-check(run("rtl-check.mjs", [join(SANDBOX, "vhdl-mod")]) === 2, "纯 VHDL 项目:如实退 2(本检查器不覆盖,不得当通过)");
+check(run("module-rtl-check.mjs", [join(SANDBOX, "vhdl-mod")]) === 2, "纯 VHDL 项目:如实退 2(本检查器不覆盖,不得当通过)");
 
-check(run("rtl-check.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");
-check(run("rtl-check.mjs", [join(SANDBOX, "bad-mod")]) === 1, "check-rtl 违规 → 退出码 1");
-check(run("rtl-check.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有警告 → 退出码 0(警告不拦门禁)");
-check(run("rtl-check.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
-check(run("spec-scaffold.mjs", []) === 2, "spec-scaffold 不给根目录 → 退出码 2");
+check(run("module-rtl-check.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");
+check(run("module-rtl-check.mjs", [join(SANDBOX, "bad-mod")]) === 1, "check-rtl 违规 → 退出码 1");
+check(run("module-rtl-check.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有警告 → 退出码 0(警告不拦门禁)");
+check(run("module-rtl-check.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
+check(run("setup-scaffold.mjs", []) === 2, "setup-scaffold 不给根目录 → 退出码 2");
 // 起文件:不覆盖已有文件、模板不存在要报错
 const newFileRoot = join(SANDBOX, `new-file-${stamp}`);
 check(
-  run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 0,
+  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 0,
   "rtl-new 按模板起文件 → 退出码 0"
 );
 check(existsSync(join(newFileRoot, "rtl", "uart_rx.sv")), "RTL 落在 rtl/ 下");
 check(
-  run("rtl-check.mjs", [newFileRoot]) === 0,
+  run("module-rtl-check.mjs", [newFileRoot]) === 0,
   "模板生成的文件直接过机械检查(骨架开箱合规)"
 );
 check(
-  run("verif-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "tb.sv")]) === 0
+  run("module-verif-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "tb.sv")]) === 0
     && existsSync(join(newFileRoot, "verif", "tb_uart_rx.sv")),
   "verif-new 把测试平台落在 verif/tb_<snake>.sv"
 );
@@ -341,7 +341,7 @@ check(
 // 只验生成物与判定,不真的开 GUI:开窗会卡住自检。生成的脚本语法另外用真 vsim 批处理跑过
 // (`vsim -gui` 换成 `vsim -c`),`log`/`add wave`/`cd` 这些命令都实测过。
 check(
-  run("verif-wave.mjs", [newFileRoot, "--sim-path", join(TEMPLATES, "..", "tools", "xsim-placeholder"), "--dry-run"]) === 0,
+  run("module-verif-wave.mjs", [newFileRoot, "--sim-path", join(TEMPLATES, "..", "tools", "xsim-placeholder"), "--dry-run"]) === 0,
   "verif-wave --dry-run 不落盘也能判定(退出码 0)"
 );
 check(
@@ -379,29 +379,29 @@ check(
   "生成的脚本没有非 ASCII 字符(ModelSim 的 Tcl 不按 UTF-8 读 .do,中文注释会让它报 invalid command)"
 );
 check(
-  run("synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0
+  run("module-synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0
     && existsSync(join(newFileRoot, "synth", "uart_rx.xdc")),
   "synth-new 把约束落在 synth/<模块名>.xdc"
 );
 check(
-  run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 1,
+  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 1,
   "已存在的文件不覆盖 → 退出码 1"
 );
 check(
-  run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--force"]) === 0,
+  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--force"]) === 0,
   "--force 才覆盖"
 );
 check(
-  run("rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "no-such.sv")]) === 2,
+  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "no-such.sv")]) === 2,
   "模板不存在 → 退出码 2(不猜模板)"
 );
-check(run("rtl-new.mjs", [newFileRoot, "uart_rx"]) === 2, "不给 --template → 退出码 2");check(run("spec-scaffold.mjs", [join(SANDBOX, "scaffold-cli"), "--kind", "bogus"]) === 2, "--kind 非法 → 退出码 2");
-check(run("spec-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "建模块骨架 → 退出码 0");
+check(run("module-rtl-new.mjs", [newFileRoot, "uart_rx"]) === 2, "不给 --template → 退出码 2");check(run("setup-scaffold.mjs", [join(SANDBOX, "scaffold-cli"), "--kind", "bogus"]) === 2, "--kind 非法 → 退出码 2");
+check(run("setup-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "建模块骨架 → 退出码 0");
 check(
   existsSync(join(SANDBOX, "scaffold-cli", "rtl")) && existsSync(join(SANDBOX, "scaffold-cli", ".fpga-workbench.json")),
   "CLI 真的把骨架建出来了"
 );
-check(run("spec-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复建同一目录也返回 0(幂等)");
+check(run("setup-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复建同一目录也返回 0(幂等)");
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;

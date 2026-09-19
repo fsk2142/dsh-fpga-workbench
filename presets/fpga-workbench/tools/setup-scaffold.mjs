@@ -9,7 +9,7 @@
 // 只建目录与锚点,**不生成空的 spec.md / flow.md** —— 报告要由讨论产出,不预置占位内容。
 //
 // 用法:
-//   node spec-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
+//   node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
 // 退出码:0 成功 / 1 出错 / 2 参数不对
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -117,7 +117,7 @@ function parseArgs(argv) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.root === undefined) {
-    console.error("用法:node spec-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]");
+    console.error("用法:node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]");
     return 2;
   }
   if (args.kind !== "module" && args.kind !== "project") {

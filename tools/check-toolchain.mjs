@@ -28,6 +28,7 @@ import {
   resolveTemplates,
   staleShippedFiles,
   statusOf,
+  toolLevelPrefix,
   toolPath
 } from "../lib/toolchain.js";
 
@@ -501,7 +502,10 @@ check(
 );
 const prefixViolations = TOOLS.filter((tool) => {
   const prefix = STAGE_PREFIX[tool.stage];
-  return prefix !== undefined && !tool.file.startsWith(prefix);
+  // 两级共用的命令不带级别前缀,也就不参与"级别+环节"的拼接检查
+  if (prefix === undefined || tool.level === "shared") return false;
+  // 命令名形如 module-rtl-new / module-verif-wave:级别前缀之后紧跟环节前缀
+  return !tool.file.startsWith(`${toolLevelPrefix(tool)}${prefix}`);
 });
 check(
   prefixViolations.length === 0,
@@ -510,11 +514,11 @@ check(
 check(new Set(TOOLS.map((tool) => tool.file)).size === TOOLS.length, "同一命令不重复登记");
 check(
   !TOOLS.some((tool) => /new-file|stamp/u.test(tool.file)),
-  "起文件的命令按环节分开(rtl-new / verif-new),不是一个大而全的通用入口"
+  "起文件的命令按环节分开(module-rtl-new / module-verif-new),不是一个大而全的通用入口"
 );
 check(
   TOOLS.every((tool) => !tool.file.includes("/") && !tool.file.includes("\\")),
-  "命令名本身不带路径(级别由 tools/<级别>/ 目录表示,不塞进文件名)"
+  "命令名本身不带路径(级别靠名字前缀与 tools/<级别>/ 目录两处表示)"
 );
 // 级别要落到真实目录上:module 的必须在 tools/module/、project 的在 tools/project/、
 // shared 的在 tools/ 顶层 —— 这样"拿错级别的命令"在文件系统上就不存在。
@@ -530,17 +534,36 @@ check(
   TOOLS.every((tool) => existsSync(toolPath(tool))),
   "每个登记的命令文件都在(路径按级别拼得出来)"
 );
+// 命令名**自带级别前缀**(module- / project-),两级共用的不加 —— 用户口径:靠名字防误用,
+// 而不是靠路径。这条与"级别目录"是两件事,都要守:名字写错照样会把模块级命令用进工程流程。
+const prefixWrong = TOOLS.filter((tool) => !tool.file.startsWith(toolLevelPrefix(tool)));
+check(
+  prefixWrong.length === 0,
+  `命令名带级别前缀(不合规:${prefixWrong.map((tool) => `${tool.file}(${tool.level})`).join("、") || "无"})`
+);
+check(
+  TOOLS.filter((tool) => tool.level === "shared").every((tool) => !/^(module|project)-/u.test(tool.file)),
+  "两级共用的命令不加级别前缀(加了反而误导)"
+);
 // 文档与技能里写的路径必须**带级别**:`tools/<环节>.mjs` 这种旧写法会让调用方少一层目录,
-// 而且看不出这条命令属于哪一级(用户就是为这个提出来的)。
+// 而且看不出这条命令属于哪一级。
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const documented = [
   ["README.md", readFileSync(join(rootDir, "README.md"), "utf8")],
   ...TOOLS.map((tool) => [`${tool.file} 的说明`, String(tool.what ?? "")])
 ];
-const levelMissing = documented.filter(([, text]) => /tools\/(rtl|verif|synth)-[a-z]+\.mjs/u.test(text));
+const levelMissing = documented.filter(([, text]) => {
+  // 只看"tools/<级别>/<级别>-*.mjs"这种路径形态:目录或文件名漏了级别都算
+  for (const match of text.matchAll(/tools\/((?:module|project)\/)?((?:module|project)-)?[a-z-]*\.mjs/gu)) {
+    const [, dir, prefix] = match;
+    if (dir === undefined && prefix === undefined) continue; // 两级共用的,不看
+    if (dir === undefined || prefix === undefined) return true;
+  }
+  return false;
+});
 check(
   levelMissing.length === 0,
-  `文档里的命令路径都带级别目录(漏:${levelMissing.map(([name]) => name).join("、") || "无"})`
+  `文档里的命令路径都带级别目录与级别前缀(漏:${levelMissing.map(([name]) => name).join("、") || "无"})`
 );
 // 反向:README 里写的路径要真按级别解析得到,而且解析出的文件名与登记一致 —— 这条能抓住
 // "路径写错一层"或"文件搬了忘了改文档"。
@@ -564,7 +587,7 @@ check(
 // 命令的说明会原样进会话提示,所以落点必须跟代码一致:`verif-new` 走 defaultDestination,
 // 模块名会转下划线(UartRx → tb_uart_rx.sv),且落在 verif/(仿真与比对是同一个环节)。
 // 这里曾写成 `sim/tb_<模块名>.sv`,照着找会找错文件。
-const verifNew = TOOLS.find((tool) => tool.file === "verif-new.mjs");
+const verifNew = TOOLS.find((tool) => tool.file === "module-verif-new.mjs");
 check(
   /verif\/tb_<(模块名下划线形式|snake)>|verif\/tb_uart_rx/u.test(String(verifNew?.what ?? "")),
   "verif-new 的说明写明落点:verif/ 下、模块名转下划线(不是 sim/tb_<模块名>.sv)"

@@ -30,10 +30,10 @@ description: 写或改 FPGA 模块的 RTL 时用:按依据编写(接口照 `spec
 
 ## 第一步:用模板生成文件,再编写逻辑
 
-**不要从空文件写起,也不要手抄模板。** 用自带命令把模板复制成目标文件(命令名就是环节:`rtl-new`):
+**不要从空文件写起,也不要手抄模板。** 用自带命令把模板复制成目标文件(命令名就是环节:`module-rtl-new`):
 
 ```powershell
-node "<自带命令目录>\module\rtl-new.mjs" <模块根> <模块名> --template "<RTL 模板路径>"
+node "<自带命令目录>\module\module-rtl-new.mjs" <模块根> <模块名> --template "<RTL 模板路径>"
 ```
 
 - 模板路径取设置里配好的那份(见会话开头「本机 FPGA 工具链」的模板一节;留空即插件自带那套)
@@ -122,7 +122,7 @@ node "<自带命令目录>\module\rtl-new.mjs" <模块根> <模块名> --templat
 **机械部分先跑自带命令**(路径见会话开头「本模式自带的命令」):
 
 ```powershell
-node "<自带命令目录>\module\rtl-check.mjs" <模块目录>
+node "<自带命令目录>\module\module-rtl-check.mjs" <模块目录>
 ```
 
 覆盖文件头、九个小节块、端口类型、复位极性、always_ff、end/else、断言、制表符、行尾、代码行非英文、
@@ -146,9 +146,9 @@ node "<自带命令目录>\module\rtl-check.mjs" <模块目录>
 | 对应 | 命令 | 看什么 |
 |---|---|---|
 | 第二步 | `& "<编译器路径>" --lint-only -Wall --top-module <顶层模块名> <文件...>` | error / warning,判法见第二步 |
-| 第三步 | `node "<自带命令目录>\module\rtl-check.mjs" <模块目录>` | 退出码与带行号的条目,判法见第三步 |
+| 第三步 | `node "<自带命令目录>\module\module-rtl-check.mjs" <模块目录>` | 退出码与带行号的条目,判法见第三步 |
 
-- `rtl-check` 会顺带查一眼 `verif/tb_*` —— 所以"这一轮全绿"包含测试平台的机械规范,
+- `module-rtl-check` 会顺带查一眼 `verif/tb_*` —— 所以"这一轮全绿"包含测试平台的机械规范,
   **第一次跑仿真前那部分也该是干净的**
 - 退出码 0 = 无阻塞项 / 1 = 有阻塞项 / 2 = 用法或环境问题(如 `rtl/` 下没有源码、纯 VHDL 不在
   检查范围内)。**2 不是通过**:按前置第 3 条如实记 `BLOCKED` 或 `NOT_APPLICABLE` 并说明原因
@@ -175,8 +175,8 @@ node "<自带命令目录>\module\rtl-check.mjs" <模块目录>
 四条都满足才算本环节结束,否则如实标出缺哪条(不要写成"应该没问题"):
 
 1. 与依据一致:端口照 `spec/spec.md`、路径照 `spec/flow.md`、参数照「参考资料」
-2. `rtl-check` 跑过,且 `rtl/lint.md` 里的 `结论:` 不是 FAIL
+2. `module-rtl-check` 跑过,且 `rtl/lint.md` 里的 `结论:` 不是 FAIL
 3. 编译告警清零,或每条都有就地豁免的理由
 4. 没做完的地方明确留在代码里(如某个子模块先留 `TODO`),并在结论里点出来
 
-达标后把结论写进 `rtl/lint.md`,下一步交给验证环节(测试平台用 `verif-new.mjs` 起)。
+达标后把结论写进 `rtl/lint.md`,下一步交给验证环节(测试平台用 `module-verif-new.mjs` 起)。

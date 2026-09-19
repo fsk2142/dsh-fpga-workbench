@@ -5,7 +5,7 @@
 // 这里照同一条路:编好 → 开 GUI → 把信号加进 wave 窗口 → 停住等人操作。
 //
 // 用法:
-//   node verif-wave.mjs <模块根> [模块名] [--sim-path <仿真器>] [--tb <测试平台>]
+//   node module-verif-wave.mjs <模块根> [模块名] [--sim-path <仿真器>] [--tb <测试平台>]
 //                       [--out <脚本相对路径>] [--dry-run]
 // 退出码:0 已打开 / 已生成;1 找不到测试平台或设计文件;2 参数或环境不对
 //
@@ -174,7 +174,7 @@ function simulatorKind(simPath) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.root === undefined) {
-    console.error("用法:node verif-wave.mjs <模块根> [模块名] [--sim-path <仿真器>] [--tb <测试平台>] [--out <脚本相对路径>] [--dry-run]");
+    console.error("用法:node module-verif-wave.mjs <模块根> [模块名] [--sim-path <仿真器>] [--tb <测试平台>] [--out <脚本相对路径>] [--dry-run]");
     return 2;
   }
   const moduleRoot = args.root;

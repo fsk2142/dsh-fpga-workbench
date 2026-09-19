@@ -23,7 +23,7 @@ description: 综合 FPGA 模块并判定"综合门禁 + 综合后时序"能否�
 
 1. 找约定文件 `.fpga-workbench.json`(模块根),见 `fpga-module-spec`
 2. `spec/spec.md`:目标器件与封装(**未定即不得开综合**)、时钟与参考周期(来自指标)
-3. 约束文件按模板写,放 `<模块根>/synth/<模块名>.xdc`(用 `synth-new.mjs` 起文件,见「本环节要跑的命令」)
+3. 约束文件按模板写,放 `<模块根>/synth/<模块名>.xdc`(用 `module-synth-new.mjs` 起文件,见「本环节要跑的命令」)
 4. **建议**机械检查(`rtl/lint.md`)与 `verif` 都已 PASS —— 没验证就综合,问题容易拖到时序才暴露;
    但正在定位综合报错、或用户只想要一次资源评估时,不必先回去补前面的环节
 
@@ -57,7 +57,7 @@ description: 综合 FPGA 模块并判定"综合门禁 + 综合后时序"能否�
 **先起约束文件**(按模板复制,只替模块名):
 
 ```
-node "<自带命令目录>\module\synth-new.mjs" <模块根> <模块名> --template "<约束模板路径>"
+node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> --template "<约束模板路径>"
 ```
 
 **再跑综合**(全程批处理,不弹界面):

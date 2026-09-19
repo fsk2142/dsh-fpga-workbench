@@ -28,7 +28,7 @@ description: 把多个模块接起来之后做系统级仿真时用:写顶层测
 3. 检查:数据比对 + 握手断言 —— 判"数据对不对"照模块级那套走(`fpga-module-verif`):
    拿独立参照比,比对脚本直接**复用模块级的参考模型**,不要另写一套(独立模型写两遍必然分叉)
 4. 跑法同模块级:命令写进 `project/syssim/run.do`,`vsim -c -do run.do` 一次调用;全程命令行,
-   不弹界面。要人工看波形时用 `tools/module/verif-wave.mjs` 打开 GUI
+   不弹界面。要人工看波形时用 `tools/module/module-verif-wave.mjs` 打开 GUI
 
 ## 判据
 

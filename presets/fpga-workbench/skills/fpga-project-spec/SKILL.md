@@ -86,7 +86,7 @@ flowchart LR
 方案确认后一次建好骨架 —— **不要手工逐个建目录**(这条命令两级共用,所以在 `tools/` 顶层):
 
 ```
-node "<自带命令目录>\spec-scaffold.mjs" <工作区根> --kind project --modules <模块名,逗号分隔>
+node "<自带命令目录>\setup-scaffold.mjs" <工作区根> --kind project --modules <模块名,逗号分隔>
 ```
 
 它写工作区根的 `.fpga-workbench.json`(`kind: project`)、建好 `project/` 下全部工程级环节目录,

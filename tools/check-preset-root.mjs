@@ -358,16 +358,16 @@ for (const reader of ["fpga-module-rtl", "fpga-module-verif"]) {
 
 // 收尾(用户要求):产物除 spec.md 外,流程图要单独成文;骨架用自带脚本一次建好,不手工建目录
 check(/flow\.md/u.test(specSkill), "模块级写明流程图单独存成 spec/flow.md(不只塞在 spec.md 里)");
-check(/spec-scaffold\.mjs/u.test(specSkill), "模块级写明用自带脚本一次性建骨架");
+check(/setup-scaffold\.mjs/u.test(specSkill), "模块级写明用自带脚本一次性建骨架");
 check(/--dry-run/u.test(specSkill), "模块级提示先 --dry-run 看一眼");
 const projectSpec = readFileSync(join(skillDir, "fpga-project-spec", "SKILL.md"), "utf8");
 check(/flow\.md/u.test(projectSpec), "工程级写明框图单独存成 project/spec/flow.md");
-check(/spec-scaffold\.mjs/u.test(projectSpec), "工程级写明用自带脚本建骨架");
+check(/setup-scaffold\.mjs/u.test(projectSpec), "工程级写明用自带脚本建骨架");
 check(
   /--kind project/u.test(projectSpec) && /--modules/u.test(projectSpec),
   "工程级调用脚本时带上 --kind project 与 --modules(给每个模块建一套)"
 );
-check(existsSync(join(presetDir, "tools", "spec-scaffold.mjs")), "自带 spec-scaffold.mjs 确实在包里");
+check(existsSync(join(presetDir, "tools", "setup-scaffold.mjs")), "自带 setup-scaffold.mjs 确实在包里");
 
 // 原型是 RTL 与验证共同的参考(用户明确要求):写 RTL 照它,验证拿它当 golden 来源与参考模型。
 // 仿真与比对合成 verif 之后,这两处落点没变,只是"测试平台"与"比对"归了同一篇。
@@ -390,7 +390,7 @@ for (const downstream of ["fpga-module-verif"]) {
 // 仿真与比对合成一个环节(用户口径 2026-09-19):测试平台只负责把数据跑出来,判"对不对"要拿独立
 // 参照比 —— 劈成两半会让人以为"仿真跑绿了"就等于"对了"。骨架里因此没有 sim/。
 // 这里钉死名字与顺序,防止以后漂回 lint/comp/timing 那套旧名,或又冒出一个"审核环节"。
-const scaffoldSource = readFileSync(join(presetDir, "tools", "spec-scaffold.mjs"), "utf8");
+const scaffoldSource = readFileSync(join(presetDir, "tools", "setup-scaffold.mjs"), "utf8");
 const scaffoldStages = JSON.parse(/MODULE_STAGES = (\[[^\]]*\])/u.exec(scaffoldSource)[1]);
 check(
   scaffoldStages.join(",") === "spec,rtl,verif,synth",
@@ -430,7 +430,7 @@ check(
 );
 // 旧布局的残留:sim/ 已并入 verif/,检查器与技能里都不该再从 sim/ 找测试平台
 check(
-  !/(^|[^a-z])sim\//u.test(readFileSync(join(presetDir, "tools", "module", "rtl-check.mjs"), "utf8")),
+  !/(^|[^a-z])sim\//u.test(readFileSync(join(presetDir, "tools", "module", "module-rtl-check.mjs"), "utf8")),
   "rtl-check 里没有 sim/ 残留(测试平台现在在 verif/ 下找)"
 );
 // 文件名跟着设置里选的语言走:TB 的扩展名不能写死 .sv(选 VHDL 就是 .vhd),
@@ -460,7 +460,7 @@ check(
 );
 check(
   /verif-new\.mjs/u.test(verifSkillText),
-  "验证技能写明用 verif-new.mjs 起测试平台(命令名与环节名一致)"
+  "验证技能写明用 module-verif-new.mjs 起测试平台(命令名与环节名一致)"
 );
 // 用户明确要求过:说"要看波形"时必须真有手段 —— 技能里得有这条命令与用法,不能只有批处理
 check(
@@ -579,13 +579,13 @@ const runSection = /## 本环节要跑的命令([\s\S]*?)(?=\n## )/u.exec(lintTe
 check(runSection !== "", "检查技能有一节专讲『本环节要跑的命令』(命令与时机写在一起)");
 check(
   /写完之后|三步都写完之后/u.test(runSection) && /rtl-check\.mjs/u.test(runSection),
-  "那一节里同时写明时机(写完之后)与要跑的命令(rtl-check.mjs),不是只提'跑全量'"
+  "那一节里同时写明时机(写完之后)与要跑的命令(module-rtl-check.mjs),不是只提'跑全量'"
 );
 check(
   /--lint-only/u.test(runSection),
   "那一节里也点名编译器那条命令(不是只说'跑检查')"
 );
-const checkRtlText = readFileSync(join(presetDir, "tools", "module", "rtl-check.mjs"), "utf8");
+const checkRtlText = readFileSync(join(presetDir, "tools", "module", "module-rtl-check.mjs"), "utf8");
 check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "rtl-check 认 .v 的 TB,并对 VHDL 有明确交代");
 // 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点
 check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "rtl-check 跳过 ip/ 目录(外来代码不按本规范查)");
@@ -623,43 +623,42 @@ check(
 // 起文件靠复制模板,不靠手抄:脚本只替模块名,内容原样保留(用户定的口径)
 check(
   /rtl-new\.mjs/u.test(lintText) && /只替模块名/u.test(lintText),
-  "rtl 技能写明用 rtl-new.mjs 复制模板,且只替模块名"
+  "rtl 技能写明用 module-rtl-new.mjs 复制模板,且只替模块名"
 );
 // 路径口径统一:IP 实体写 rtl/ip/、仿真模型写 verif/ —— 不许再出现裸的 `ip/` 路径
 const bareIp = skillNames.filter((skill) => /`ip\//u.test(readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")));
 check(bareIp.length === 0, `技能里没有裸的 \`ip/\` 路径(应写 rtl/ip/ 或 verif/;实际 ${bareIp.join("、") || "无"})`);
-// 技能里写的命令路径必须带**级别目录**(module/ 或 project/),两级共用的在顶层 ——
-// 用户就是为"分不清命令属于哪一级"提的这条;写错一层或漏一层都要报红。
-const toolFiles = new Map(
-  readdirSync(join(presetDir, "tools", "module"), { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
-    .map((entry) => [entry.name, "module"])
-);
-toolFiles.set("spec-scaffold.mjs", "");
+// 技能里写的命令**名字必须自带级别前缀**(module- / project-),两级共用的不加 ——
+// 用户口径:靠名字防误用,而不是靠路径(只抄命令、没抄路径时也抄不错)。
+const moduleTools = readdirSync(join(presetDir, "tools", "module"), { withFileTypes: true })
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
+  .map((entry) => entry.name);
+const knownTools = new Set([...moduleTools, "setup-scaffold.mjs"]);
 const levelProblems = [];
 for (const skill of skillNames) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
   for (const match of text.matchAll(/自带命令目录>\\(?:(module|project)\\)?([a-z-]+\.mjs)/gu)) {
     const [, dir, file] = match;
-    const expected = toolFiles.get(file);
-    if (expected === undefined) {
+    if (!knownTools.has(file)) {
       levelProblems.push(`${skill}:${file}(未登记)`);
       continue;
     }
-    if ((dir ?? "") !== expected) {
-      levelProblems.push(`${skill}:${file}(写在 ${dir ?? "顶层"},应在 ${expected || "顶层"})`);
+    const isShared = file === "setup-scaffold.mjs";
+    if (isShared && dir !== undefined) {
+      levelProblems.push(`${skill}:${file}(两级共用的不该放进级别目录)`);
+      continue;
     }
-  }
-  // 也拦一手"完全没写级别目录"的旧写法 —— 但两级共用的那几条本来就该在顶层,不算问题
-  for (const match of text.matchAll(/自带命令目录>\\([a-z-]+\.mjs)/gu)) {
-    if (toolFiles.get(match[1]) !== undefined && toolFiles.get(match[1]) !== "") {
-      levelProblems.push(`${skill}:${match[1]}(没带级别目录)`);
+    if (!isShared) {
+      // 名字带级别前缀 ⇔ 目录也是那一级:两处都要对
+      const level = file.split("-")[0];
+      if (dir !== level) levelProblems.push(`${skill}:${file}(写在 ${dir ?? "顶层"},应在 ${level}/)`);
+      if (!/^(module|project)-/u.test(file)) levelProblems.push(`${skill}:${file}(名字没带级别前缀)`);
     }
   }
 }
 check(
   levelProblems.length === 0,
-  `技能里的命令路径都带对级别目录(问题:${levelProblems.join("、") || "无"})`
+  `技能里的命令都带对级别前缀与目录(问题:${levelProblems.join("、") || "无"})`
 );
 // 三个"跑命令"的模块级环节(rtl / verif / synth)结构一致:都要有「前置」与
 // 「本环节要跑的命令」两节 —— 用命令的人该在同一处找得到,而不是满篇翻。

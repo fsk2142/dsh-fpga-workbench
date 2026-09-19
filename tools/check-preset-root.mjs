@@ -208,6 +208,16 @@ check(
 // 反过来:预设层必须有这三样,缺一样本模式就残废
 check(rowById.get("persona") !== undefined, "预设层有 persona 行(能力地图随模式走)");
 check(/dsh-persona/u.test(String(rowById.get("persona")?.name ?? "")), "persona 行挂的是 dsh-persona");
+// 工作区指令:本模式要有一份**自己的**指令文件,排在最前(用户口径 2026-09-19)。
+// 候选名给了就以给的为准 —— 漏掉 AGENTS.md 会静默不再加载它,所以两条都要断言。
+const instructionsRow = rowById.get("agent-instructions");
+const candidates = instructionsRow?.config?.instructionFileCandidates;
+check(Array.isArray(candidates), "agent-instructions 行声明了 instructionFileCandidates");
+check(candidates?.[0] === "AGENTS.fpga.md", `本模式自有的指令文件排在最前(实际 ${String(candidates?.[0])})`);
+check(
+  candidates?.includes("AGENTS.md") && candidates?.includes("CLAUDE.md"),
+  "候选名里保留 AGENTS.md / CLAUDE.md(给了候选就按给的算,漏了就不再加载)"
+);
 check(
   rowById.get("skill-filesystem") !== undefined,
   "预设层有 skill-filesystem 行(技能目录只在预设层声明)"
@@ -368,6 +378,15 @@ check(
   "工程级调用脚本时带上 --kind project 与 --modules(给每个模块建一套)"
 );
 check(existsSync(join(presetDir, "tools", "setup-scaffold.mjs")), "自带 setup-scaffold.mjs 确实在包里");
+// 模式规则的**唯一真相源**是包根 README 里标记的那一段:骨架(建模块/工程时)从那里抽出来落成
+// `<根>/AGENTS.fpga.md`。标记没了或正文空了,落盘出来就是空的 —— 必须在这里拦住。
+const readmeText = readFileSync(join(ROOT, "README.md"), "utf8");
+const rulesFrom = readmeText.indexOf("<!-- fpga-mode-rules:start -->");
+const rulesTo = readmeText.indexOf("<!-- fpga-mode-rules:end -->");
+check(rulesFrom >= 0 && rulesTo > rulesFrom, "README 里有模式规则区块(骨架抽取的来源)");
+const rulesBody = rulesTo > rulesFrom ? readmeText.slice(rulesFrom, rulesTo) : "";
+check(rulesBody.includes("FPGA 开发模式的工作区规则"), "规则区块里有正文(不是空壳)");
+check(rulesBody.split("\n").length >= 10, `规则区块够实(${rulesBody.split("\n").length} 行)`);
 
 // 原型是 RTL 与验证共同的参考(用户明确要求):写 RTL 照它,验证拿它当 golden 来源与参考模型。
 // 仿真与比对合成 verif 之后,这两处落点没变,只是"测试平台"与"比对"归了同一篇。

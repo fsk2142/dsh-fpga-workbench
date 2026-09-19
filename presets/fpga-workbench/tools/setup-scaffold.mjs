@@ -11,9 +11,44 @@
 // 用法:
 //   node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
 // 退出码:0 成功 / 1 出错 / 2 参数不对
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+/**
+ * 本模式的工作区指令文件名。
+ *
+ * 为什么是这个名字:宿主的 `dsh-agent-instructions` 按候选名发现指令文件并注入,本模式把
+ * `AGENTS.fpga.md` 排在 `AGENTS.md` 之前(见 `agent.cordis.yml`)。所以项目里可以放一份
+ * **本模式专用**的工作区规则,不必挤进用户的 `AGENTS.md`。
+ */
+export const INSTRUCTION_FILE = "AGENTS.fpga.md";
+
+/**
+ * 规则正文的唯一来源:包根 README 里标记的那一段。
+ *
+ * 为什么不另存一份模板文件:那段规则会随用户口径变,多一份就要跟着改、迟早对不上。
+ * 放 README 里既能直接在仓库里读到,又能被这条命令抽出来落盘 —— **一处真相**。
+ * 相对的路径从本文件算(`presets/fpga-workbench/tools/` 往上三层 = 包根),不依赖工作目录。
+ */
+const RULES_SOURCE = fileURLToPath(new URL("../../../README.md", import.meta.url));
+const RULES_START = "<!-- fpga-mode-rules:start -->";
+const RULES_END = "<!-- fpga-mode-rules:end -->";
+
+/**
+ * 从 README 抽出模式规则区块。
+ * @returns 正文(不含标记行),末尾带一个换行。
+ * @throws 读不到文件或找不到标记时抛出 —— 宁可让建骨架失败,也不要落一份空规则。
+ */
+export function readModeRules() {
+  const text = readFileSync(RULES_SOURCE, "utf8");
+  const from = text.indexOf(RULES_START);
+  const to = text.indexOf(RULES_END);
+  if (from < 0 || to < 0 || to < from) {
+    throw new Error(`README 里找不到模式规则区块(${RULES_START} … ${RULES_END}):${RULES_SOURCE}`);
+  }
+  return `${text.slice(from + RULES_START.length, to).trim()}\n`;
+}
 
 /**
  * 模块级的环节目录(放各环节的结论与证据:报告、日志、波形、输出数据)。
@@ -39,7 +74,8 @@ export const PROJECT_STAGES = ["spec", "integrate", "constraints", "syssim", "im
  * @param root - 根目录:模块根,或工程的工作区根。
  * @param options - `{ kind, modules }`。`kind` 为 `module` 或 `project`;工程级可给 `modules`
  *   (每个模块建一套模块级骨架,模块目录取根目录下的同名子目录)。
- * @returns `{ dirs, anchors }`;`anchors` 每项 `{ file, value }`。
+ * @returns `{ dirs, anchors, instruction }`;`anchors` 每项 `{ file, value }`;
+ *   `instruction` 是工作区指令文件的绝对路径(两级都落一份,模块根或工程根)。
  */
 export function planScaffold(root, options = {}) {
   const kind = options.kind ?? "module";
@@ -68,7 +104,7 @@ export function planScaffold(root, options = {}) {
     moduleAt(root);
   }
 
-  return { dirs, anchors };
+  return { dirs, anchors, instruction: join(root, INSTRUCTION_FILE) };
 }
 
 /**
@@ -98,6 +134,17 @@ export function applyScaffold(plan, options = {}) {
     }
     if (!dryRun) writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
     created.push(file);
+  }
+
+  // 工作区指令:两级各落一份(模块根 / 工程根),同样"已存在就跳过" —— 用户按项目改过的那份
+  // 不能被我们覆盖掉。`--force` 才重写。
+  if (plan.instruction !== undefined) {
+    if (existsSync(plan.instruction) && options.force !== true) {
+      skipped.push(plan.instruction);
+    } else {
+      if (!dryRun) writeFileSync(plan.instruction, readModeRules());
+      created.push(plan.instruction);
+    }
   }
 
   return { created, skipped };
@@ -135,6 +182,12 @@ function main() {
   const anchor = plan.anchors[0]?.file;
   if (anchor !== undefined && !created.includes(anchor)) {
     console.log(`锚点已存在,未覆盖:${anchor}(要重建用 --force)`);
+  }
+  if (plan.instruction !== undefined && !created.includes(plan.instruction)) {
+    console.log(`${INSTRUCTION_FILE} 已存在,未覆盖(按项目改过的那份不会被我们覆盖;要重写用 --force)`);
+  }
+  if (plan.instruction !== undefined && created.includes(plan.instruction)) {
+    console.log(`${INSTRUCTION_FILE} 是本模式的工作区规则,按项目改这一份即可 —— 正文来源是包内 README 的规则区块。`);
   }
   if (created.length === 0) console.log("骨架已完整,无需改动。");
   return 0;

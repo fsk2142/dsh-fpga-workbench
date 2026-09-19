@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
-import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
+import { applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
 import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/module/module-verif-wave.mjs";
 import { sweepTempEntries } from "../lib/toolchain.js";
@@ -206,19 +206,32 @@ check(
 
 const dryRun = applyScaffold(modulePlan, { dryRun: true });
 check(
-  dryRun.created.length === modulePlan.dirs.length + 1 && !existsSync(scaffoldMod),
+  dryRun.created.length === modulePlan.dirs.length + 2 && !existsSync(scaffoldMod),
   "--dry-run 只报告不落盘(根目录都没建出来)"
 );
 
 const applied = applyScaffold(modulePlan, {});
 check(
-  applied.created.length === modulePlan.dirs.length + 1,
-  `落盘:${modulePlan.dirs.length} 个目录 + 1 个锚点(实际 ${applied.created.length})`
+  applied.created.length === modulePlan.dirs.length + 2,
+  `落盘:${modulePlan.dirs.length} 个目录 + 锚点 + 工作区指令(实际 ${applied.created.length})`
 );
 check(
   existsSync(join(scaffoldMod, ".fpga-workbench.json")) && existsSync(join(scaffoldMod, "verif")),
   "锚点与环节文件夹都建出来了"
 );
+
+// 工作区指令(用户口径 2026-09-19):骨架顺带落一份 AGENTS.fpga.md,正文从 README 的规则区块抽
+const instructionPath = join(scaffoldMod, "AGENTS.fpga.md");
+check(modulePlan.instruction === instructionPath, `plan 里给的是 <根>/AGENTS.fpga.md(实际 ${String(modulePlan.instruction)})`);
+const rulesText = readModeRules();
+check(
+  rulesText.includes("FPGA 开发模式的工作区规则") && rulesText.split("\n").length >= 8,
+  `规则正文抽出来了(${rulesText.split("\n").length} 行)`
+);
+check(!rulesText.includes("<!--"), "抽出来的正文不含 HTML 标记(落盘给人读的)");
+const written = readFileSync(instructionPath, "utf8");
+check(written === rulesText, "落盘的正文与抽取结果逐字节一致");
+check(!written.startsWith("\uFEFF"), "落盘的指令文件不带 BOM");
 
 // 幂等 + 不覆盖已有锚点(用户可能在锚点里加了字段)
 const anchorFile = join(scaffoldMod, ".fpga-workbench.json");
@@ -226,8 +239,14 @@ writeFileSync(anchorFile, '{"kind":"module","spec":"spec/spec.md","用户加的�
 const secondRun = applyScaffold(modulePlan, {});
 check(secondRun.created.length === 0, "幂等:第二次不新建任何东西");
 check(readFileSync(anchorFile, "utf8").includes("用户加的字段"), "已有锚点不被覆盖");
+// 用户按项目改过的工作区指令更不能被覆盖 —— 这是我们写进他仓库的文件,覆盖等于改他的东西
+const customInstruction = "# 我按项目改过了\n";
+writeFileSync(instructionPath, customInstruction);
+applyScaffold(modulePlan, {});
+check(readFileSync(instructionPath, "utf8") === customInstruction, "已有的 AGENTS.fpga.md 不被覆盖(用户改过的那份留着)");
 applyScaffold(modulePlan, { force: true });
-check(!readFileSync(anchorFile, "utf8").includes("用户加的字段"), "--force 才重建锚点");
+check(readFileSync(anchorFile, "utf8").includes("用户加的字段") === false, "--force 才重建锚点");
+check(readFileSync(instructionPath, "utf8") === rulesText, "--force 才重写工作区指令");
 
 // 工程级 + 每个模块一套
 const scaffoldPrj = join(SANDBOX, `scaffold-prj-${stamp}`);

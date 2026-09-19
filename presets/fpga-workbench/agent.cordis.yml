@@ -81,10 +81,20 @@
         `结论:PASS`(或 FAIL / BLOCKED / NOT_APPLICABLE / UNVERIFIED)那一行,接手时长任务的人
         读这一行就知道上个环节停在哪;短任务不必。
 
+# 工作区指令:宿主按候选名发现 AGENTS.md 一类文件并注入。
+#
+# 本模式把 `AGENTS.fpga.md` 排在最前(用户口径,2026-09-19):它是**本模式自有**的工作区指令,
+# 只在本模式下被加载 —— 这样项目里那份"按项目改的模式规则"不用挤进用户的 AGENTS.md。
+# 候选名给全(不合并默认值,给了就以给的为准),否则 AGENTS.md / CLAUDE.md 会**不再被加载**。
+# `.local.md` 叠加层没动,仍走默认。
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'
   config:
     maxBytes: 65536
+    instructionFileCandidates:
+      - AGENTS.fpga.md
+      - AGENTS.md
+      - CLAUDE.md
 
 # ── 本机工具链(仅本模式) ───────────────────────────────────────────────────
 

@@ -193,12 +193,19 @@ node tools/check-toolchain.mjs      # 字段/存在性/警告措辞/两侧契约
 node tools/check-load-contract.mjs  # 加载契约:语法/lib 内部 import/bundle 契约/半侧分工(重启前必跑)
 node tools/check-fpga-tools.mjs     # 自带命令的判定正确性 + 自带模板自洽 + CLI 退出码
 node tools/check-preset-root.mjs    # 预设路径求值 + 组装结构 + 模式行 + 自带技能
-node tools/check-preset-sync.mjs   # 预设底座与官方 standard 的漂移(行 id / 包名)
-node tools/check-patch-file.mjs    # 补丁字节合法 + 形状
-node tools/check-installed.mjs     # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)
-node tools/smoke-installed.mjs     # 已装副本在真实解析环境里能否加载(装完/重启前跑)
-node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件安全(较慢)
+node tools/check-preset-sync.mjs    # 预设底座与官方 standard 的漂移(行 id / 包名)
+node tools/check-patch-file.mjs     # 补丁字节合法 + 形状
+node tools/check-installed.mjs      # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)
+node tools/smoke-installed.mjs      # 已装副本在真实解析环境里能否加载(装完/重启前跑)
+node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不动既有依赖(较慢,要跑两次 pnpm)
 ```
+
+上面七项 `check-*` / `smoke-*` 是每轮改动都要跑的那一套；`sync-installed.mjs`(装/同步已装副本,
+改名删文件时加 `--prune`)、`install.mjs`(装完自动跑 `smoke-installed`)与 `check-install-safety.mjs`
+按需跑。`tools/shipped.mjs` 是内部模块,不是命令。
+
+**自检自己收尾**:会建 fixture 的几项(`check-toolchain` / `check-fpga-tools`)跑完把 `.tmp/` 下的
+临时目录清掉,跑完那一区是空的 —— 以前它只建不删,攒过上百个时间戳目录。
 
 `smoke-installed` 与 `check-installed` 的关系:后者比字节,前者**真的加载一遍** ——
 在 profile 的解析环境里 import 宿主半侧、执行客户端 bundle 的工厂函数、用真实设置跑一遍

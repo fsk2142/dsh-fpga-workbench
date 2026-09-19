@@ -210,7 +210,7 @@ node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件�
   | 技能 | 干什么 | 结果落在哪 |
   |---|---|---|
   | `fpga-module-spec` | 讨论与规格:定方向(模块/工程)→ 定器件 → 方案(参考模型)→ 实现思路流程图(用户确认)→ 测试平台与数据 → 比对与对照数据;收尾用脚本一次建骨架 | `spec/spec.md` + `spec/flow.md` |
-  | `fpga-module-lint` | 写完 RTL 统一检查:编译器 + 规范逐条对 | `rtl/lint.md`(与 RTL 同目录) |
+  | `fpga-module-rtl` | 写 RTL(用设置里的模板起文件)+ 编译器检查 + 规范逐条对 | `rtl/`(报告 `rtl/lint.md`) |
   | `fpga-module-sim` | 功能仿真:命令行 vsim,测试平台自检 + 看门狗 | `sim/sim.md` |
   | `fpga-module-comp` | 与参考模型 / golden 比对,差异归属 | `comp/comp.md` |
   | `fpga-module-synth` | Vivado 批处理综合(频率是观察值,不是门禁) | `synth/synth.md` |

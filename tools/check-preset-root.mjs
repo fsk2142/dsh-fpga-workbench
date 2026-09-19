@@ -378,7 +378,7 @@ check(
   `汇总里多出来的只有 review(它不占目录;实际多出 ${statusStages.filter((s) => !scaffoldStages.includes(s)).join("、")})`
 );
 check(
-  /rtl\/lint\.md/u.test(readFileSync(join(skillDir, "fpga-module-lint", "SKILL.md"), "utf8")),
+  /rtl\/lint\.md/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
   "机械检查报告写在 rtl/lint.md"
 );
 check(
@@ -394,22 +394,30 @@ check(
 const simSkillText = readFileSync(join(skillDir, "fpga-module-sim", "SKILL.md"), "utf8");
 check(/仿真语言/u.test(simSkillText) && /\.vhd/u.test(simSkillText), "仿真技能写明 TB 扩展名跟仿真语言走(含 .vhd)");
 check(
-  /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-lint", "SKILL.md"), "utf8")),
+  /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
   "检查技能写明 VHDL 源码不覆盖(记 NOT_APPLICABLE)"
 );
 // 节奏按用户的习惯:写完再统一检查(边写边跑效率低);只保留"排查具体报错时可单查"这个例外
-const lintText = readFileSync(join(skillDir, "fpga-module-lint", "SKILL.md"), "utf8");
+const lintText = readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8");
 check(
   /写完[\s\S]{0,16}检查/u.test(lintText) && !/随时可跑/u.test(lintText),
   "检查技能按用户节奏:写完再统一检查(不是'随时可跑'/'边写边跑')"
 );
 const checkRtlText = readFileSync(join(presetDir, "tools", "check-rtl.mjs"), "utf8");
 check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "check-rtl 认 .v 的 TB,并对 VHDL 有明确交代");
+// 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点
+check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "check-rtl 跳过 ip/ 目录(外来代码不按本规范查)");
+check(/rtl\/ip\//u.test(lintText), "检查技能写明外来代码放 rtl/ip/,检查会跳过");
+// 第一步必须是"用模板生成文件再编写"(用户要求):先落模板骨架,再填逻辑
+check(
+  /第一步:用模板生成文件/u.test(lintText) && /第二步:编译器检查/u.test(lintText) && /第三步:逐条核对规范/u.test(lintText),
+  "检查技能的三步顺序:用模板编写 → 编译器检查 → 逐条核对规范"
+);
 
 //
 // 这一条是那份《轻量化优化建议》的核心诉求:技能是按需取用的能力地图,不是必经流水线。
 // 口气很容易在以后改文案时长回来,所以钉两条:
-// - 提示词里不许出现阶段箭头链(曾经是 `fpga-module-spec → fpga-module-lint → …`)
+// - 提示词里不许出现阶段箭头链(曾经是 `fpga-module-spec → fpga-module-rtl → …`)
 // - 提示词必须写明"能力地图 / 不是必经流水线"
 const persona = /prefix: \|-([\s\S]*?)\n\n- id: /u.exec(readFileSync(join(presetDir, "agent.cordis.yml"), "utf8"))?.[1] ?? "";
 check(persona !== "", "读得到 persona 的 prefix");

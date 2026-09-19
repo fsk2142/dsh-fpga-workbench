@@ -19,11 +19,17 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-/** 与旧包一致的跳过目录:生成物、仿真库、版本控制等。 */
+/**
+ * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
+ *
+ * `ip` 是刻意加的:外来代码(厂商 IP、他人提供的模块)放在 `rtl/ip/` 下,它们不按本模块的格式
+ * 规范书写(文件头、九个小节块、断言都不是厂商的写法)。不跳过就会成片误报,而"为让检查过就
+ * 重排厂商代码"是绝对不能做的事。检查器只管**本模块自有代码**。
+ */
 const SKIP_DIRS = new Set([
   "history", ".xil", ".git", "__pycache__", "work", "_synth_gate", "_ip_gen",
   "synth_gate.gen", ".srcs", ".runs", ".hw", ".ip_user_files", ".sim", ".cache",
-  ".nano", "rerun", "node_modules"
+  ".nano", "rerun", "node_modules", "ip"
 ]);
 
 /** 这三条只警告,不阻塞(照抄 run_checks.py 的 WARN_CHECKS)。 */

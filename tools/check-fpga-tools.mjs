@@ -205,6 +205,16 @@ check(
 writeFileSync(reviewFile, "# review\n\n结论:changes requested\n");
 check(readVerdict(reviewFile, "review")?.verdict === "CHANGES", "写成两词也至少读得出前半(不 gag)");
 
+// 外来代码(厂商 IP / 他人模块)放 rtl/ip/ —— 它不按本模块的格式规范检查,不跳过就会成片误报
+mkdirSync(join(SANDBOX, "ip-skip-mod", "rtl", "ip"), { recursive: true });
+writeFileSync(join(SANDBOX, "ip-skip-mod", "rtl", "good.sv"), goodRtl);
+writeFileSync(join(SANDBOX, "ip-skip-mod", "rtl", "ip", "vendor_bad.sv"), badRtl);
+const ipSkipped = collectHdl(join(SANDBOX, "ip-skip-mod", "rtl"));
+check(
+  ipSkipped.length === 1 && ipSkipped[0].endsWith("good.sv"),
+  `rtl/ip/ 下的外来代码被跳过(实际扫到 ${ipSkipped.length} 个文件)`
+);
+
 // ── init-scaffold:一次建好模块 / 工程的骨架 ────────────────────────────────
 // 目录名带时间戳:这个自检会反复跑,而 SANDBOX 不清理 —— 用固定名字的话第二次跑就"全都已存在",
 // created 数为 0,断言会误报(fixture 得每次都是新的)。

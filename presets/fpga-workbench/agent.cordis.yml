@@ -43,7 +43,7 @@
       | 用户要什么 | 加载哪个 |
       |---|---|
       | 谈需求、定方案、画实现思路流程图 | fpga-module-spec / fpga-project-spec |
-      | 写或改 RTL、查规范、定位编译与 lint 报错 | fpga-module-lint |
+      | 写或改 RTL、查规范、定位编译与 lint 报错 | fpga-module-rtl |
       | 写测试平台、跑仿真、查仿真为什么失败或卡死 | fpga-module-sim |
       | 建参考模型、比对 DUT 输出、查不一致 | fpga-module-comp |
       | 跑综合、解释综合报错、看资源与估时 | fpga-module-synth |

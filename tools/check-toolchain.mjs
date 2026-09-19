@@ -449,7 +449,7 @@ check(langText.includes(".sv"), "提示里给出文件扩展名(写代码时要�
 
 const xsimText = describeEnv({ ...prepared, simulator: "xsim" }, () => true);
 check(
-  // 断言 XSim 自己的三个命令 —— 别用"同目录"这种词:Verilator 那句里也有,会假通过
+  // 断言 XSim 自己的三个命令 —— 别用"同目录"这种词:编译器那句 usage 里也有,会假通过
   xsimText.includes("xvlog") && xsimText.includes("xelab") && xsimText.includes("-runall"),
   "选 XSim 时提示里换成 xvlog / xelab / xsim 三步"
 );
@@ -462,6 +462,19 @@ const quartusText = describeEnv({ ...prepared, synthesizer: "quartus" }, () => t
 check(quartusText.includes("quartus_sh"), "换综合器后提示里换成对应工具的命令");
 const iverilogText = describeEnv({ ...prepared, compiler: "iverilog" }, () => true);
 check(iverilogText.includes("-g2012"), "换编译器后提示里换成对应工具的命令");
+// 仿真器下拉没有 Verilator(用户口径:仿真不用它)。它是**编译器**下拉里的选项(RTL lint 用它),
+// 所以这条按字段分开断言 —— 只看"提示里有 Verilator"会把两件事混在一起。
+const simField = FIELDS.find((field) => field.key === "simulator");
+const simValues = (simField?.options ?? []).map((option) => option.value);
+check(
+  !simValues.includes("verilator") && simValues.includes("modelsim") && simValues.includes("xsim"),
+  `仿真器下拉只有 ModelSim / XSim(实际:${simValues.join("、") || "无"})`
+);
+const compilerField = FIELDS.find((field) => field.key === "compiler");
+check(
+  (compilerField?.options ?? []).some((option) => option.value === "verilator"),
+  "编译器下拉里保留 Verilator(RTL 环节的 lint 用它)"
+);
 const vhdlText = describeEnv({ ...prepared, rtlLangStd: "vhdl-2008" }, () => true);
 check(vhdlText.includes("VHDL-2008") && vhdlText.includes(".vhd"), "换语言后扩展名跟着变");
 

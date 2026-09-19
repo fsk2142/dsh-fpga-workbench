@@ -328,6 +328,19 @@ check(/样本/u.test(compStep), "第六步明确样本规模(0 样本不得判 P
 // 器件必须先于流程图:器件会影响流程图里的原语/资源选择
 check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
 
+// 收尾(用户要求):产物除 spec.md 外,流程图要单独成文;骨架用自带脚本一次建好,不手工建目录
+check(/flow\.md/u.test(specSkill), "模块级写明流程图单独存成 spec/flow.md(不只塞在 spec.md 里)");
+check(/init-scaffold\.mjs/u.test(specSkill), "模块级写明用自带脚本一次性建骨架");
+check(/--dry-run/u.test(specSkill), "模块级提示先 --dry-run 看一眼");
+const projectSpec = readFileSync(join(skillDir, "fpga-project-spec", "SKILL.md"), "utf8");
+check(/flow\.md/u.test(projectSpec), "工程级写明框图单独存成 project/spec/flow.md");
+check(/init-scaffold\.mjs/u.test(projectSpec), "工程级写明用自带脚本建骨架");
+check(
+  /--kind project/u.test(projectSpec) && /--modules/u.test(projectSpec),
+  "工程级调用脚本时带上 --kind project 与 --modules(给每个模块建一套)"
+);
+check(existsSync(join(presetDir, "tools", "init-scaffold.mjs")), "自带 init-scaffold.mjs 确实在包里");
+
 // 原型是三个环节共同的参考(用户明确要求):写 RTL 照它、测试平台拿它的输出当期望、
 // 比对拿它当 golden 来源 —— 曾经只写了"comp 的参考模型来源",漏了另外两处。
 const prototypeText = stepText(2);

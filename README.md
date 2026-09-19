@@ -49,7 +49,7 @@ presets/fpga-workbench/
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
     templates/                自带模板:rtl.sv / tb.sv / constraints.xdc(写法规范的载体)
-    tools/                    自带命令:check-rtl.mjs(规范检查)/ stage-status.mjs(阶段汇总)
+    tools/                    自带命令:init-scaffold.mjs(一次建骨架)/ check-rtl.mjs(规范检查)/ stage-status.mjs(阶段汇总)
 tools/                        8 个自检 + install.mjs + 依赖安全/锁文件比对
 ```
 
@@ -60,16 +60,17 @@ tools/                        8 个自检 + install.mjs + 依赖安全/锁文件
 
 | 命令 | 干什么 | 退出码 |
 |---|---|---|
+| `node presets/fpga-workbench/tools/init-scaffold.mjs <根目录> [--kind module\|project] [--modules A,B] [--force] [--dry-run]` | 一次性建好阶段文件夹骨架 + 锚点 `.fpga-workbench.json`(幂等;只建目录,不生成空报告) | 0 成功 / 1 出错 / 2 参数不对 |
 | `node presets/fpga-workbench/tools/check-rtl.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
 | `node presets/fpga-workbench/tools/stage-status.mjs <目录>` | 阶段状态汇总:读各阶段结果里的 `结论:...`,一眼看出做到哪了 | 0 正常 / 2 找不到 `.fpga-workbench.json` |
 
-两条规则与旧包一致,别自己加严:
+另外两条规则与旧包一致,不要自行加严:
 
 - **Tab / 代码行非英文 / 行尾混用 只算警告**,不阻塞门禁
 - **纯格式检查要宽容**:文件头只要求"顶部有分隔条 + 前 15 行字段齐全";九个小节块只要求名字作为
   banner 存在(宽度容忍 84–86),不校验列宽与顺序
 
-会话提示里会列出这两个命令的**绝对路径**,AI 照用即可。`tools/check-fpga-tools.mjs` 断言
+会话提示里会列出这几个命令的**绝对路径**,AI 照用即可。`tools/check-fpga-tools.mjs` 断言
 **插件自带的模板必须过自己的检查器** —— 模板与检查器不能互相矛盾。
 
 ## 写法规范放在模板里,不放在技能正文里
@@ -208,7 +209,7 @@ node tools/check-install-safety.mjs / compare-locks.mjs   # 依赖与锁文件�
 
   | 技能 | 干什么 | 结果落在哪 |
   |---|---|---|
-  | `fpga-module-spec` | 讨论与规格:谈功能 → 建参考(翻资料 / Python 原型)→ 落规格 | `spec/spec.md` |
+  | `fpga-module-spec` | 讨论与规格:定方向(模块/工程)→ 定器件 → 方案(参考模型)→ 实现思路流程图(用户确认)→ 测试平台与数据 → 比对与对照数据;收尾用脚本一次建骨架 | `spec/spec.md` + `spec/flow.md` |
   | `fpga-module-lint` | 写完 RTL 统一检查:Verilator + 规范逐条对 | `lint/lint.md` |
   | `fpga-module-sim` | 功能仿真:命令行 vsim,测试平台自检 + 看门狗 | `sim/sim.md` |
   | `fpga-module-comp` | 与参考模型 / golden 比对,差异归属 | `comp/comp.md` |

@@ -11,11 +11,12 @@
 // 沙箱限制:node 不能开管道抓子进程输出,所以内容断言直接 import 函数;退出码单独用
 // spawnSync(stdio:"ignore") 验(不开管道,能拿到 status)。
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/check-rtl.mjs";
+import { applyScaffold, planScaffold } from "../presets/fpga-workbench/tools/init-scaffold.mjs";
 import { collect, findConvention, readVerdict } from "../presets/fpga-workbench/tools/stage-status.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -197,6 +198,59 @@ check(
 writeFileSync(reviewFile, "# review\n\n结论:changes requested\n");
 check(readVerdict(reviewFile, "review")?.verdict === "CHANGES", "写成两词也至少读得出前半(不 gag)");
 
+// ── init-scaffold:一次建好模块 / 工程的骨架 ────────────────────────────────
+// 目录名带时间戳:这个自检会反复跑,而 SANDBOX 不清理 —— 用固定名字的话第二次跑就"全都已存在",
+// created 数为 0,断言会误报(fixture 得每次都是新的)。
+const stamp = String(Date.now());
+const scaffoldMod = join(SANDBOX, `scaffold-mod-${stamp}`);
+const modulePlan = planScaffold(scaffoldMod, { kind: "module" });
+check(modulePlan.dirs.length === 8, `模块级骨架 8 个目录(7 个环节 + spec/explore;实际 ${modulePlan.dirs.length})`);
+check(modulePlan.anchors.length === 1 && modulePlan.anchors[0].value.kind === "module", "模块级写一个 kind: module 的锚点");
+check(modulePlan.anchors[0].value.spec === "spec/spec.md", "锚点里的 spec 路径相对模块根");
+check(
+  modulePlan.dirs.some((dir) => dir.endsWith(join("spec", "explore"))),
+  "给 spec 建 explore(探索产物有地方放)"
+);
+
+const dryRun = applyScaffold(modulePlan, { dryRun: true });
+check(
+  dryRun.created.length === modulePlan.dirs.length + 1 && !existsSync(scaffoldMod),
+  "--dry-run 只报告不落盘(根目录都没建出来)"
+);
+
+const applied = applyScaffold(modulePlan, {});
+check(
+  applied.created.length === modulePlan.dirs.length + 1,
+  `落盘:${modulePlan.dirs.length} 个目录 + 1 个锚点(实际 ${applied.created.length})`
+);
+check(
+  existsSync(join(scaffoldMod, ".fpga-workbench.json")) && existsSync(join(scaffoldMod, "sim")),
+  "锚点与环节文件夹都建出来了"
+);
+
+// 幂等 + 不覆盖已有锚点(用户可能在锚点里加了字段)
+const anchorFile = join(scaffoldMod, ".fpga-workbench.json");
+writeFileSync(anchorFile, '{"kind":"module","spec":"spec/spec.md","用户加的字段":1}\n');
+const secondRun = applyScaffold(modulePlan, {});
+check(secondRun.created.length === 0, "幂等:第二次不新建任何东西");
+check(readFileSync(anchorFile, "utf8").includes("用户加的字段"), "已有锚点不被覆盖");
+applyScaffold(modulePlan, { force: true });
+check(!readFileSync(anchorFile, "utf8").includes("用户加的字段"), "--force 才重建锚点");
+
+// 工程级 + 每个模块一套
+const scaffoldPrj = join(SANDBOX, `scaffold-prj-${stamp}`);
+const projectPlan = planScaffold(scaffoldPrj, { kind: "project", modules: ["uart", "ddr"] });
+check(projectPlan.anchors.length === 3, `工程 + 2 模块 → 3 个锚点(实际 ${projectPlan.anchors.length})`);
+check(
+  projectPlan.anchors[0].value.kind === "project" && projectPlan.anchors[0].value.spec === "project/spec/spec.md",
+  "工程锚点写 kind: project 且指向 project/spec/spec.md"
+);
+check(projectPlan.dirs.some((dir) => dir.endsWith(join("project", "board"))), "建了工程级的 board/");
+check(
+  projectPlan.dirs.some((dir) => dir.endsWith(join("uart", "sim"))) && projectPlan.dirs.some((dir) => dir.endsWith(join("ddr", "review"))),
+  "每个模块各自一套模块级文件夹"
+);
+
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
 const run = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: "ignore" }).status;
 check(run("check-rtl.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");
@@ -205,6 +259,14 @@ check(run("check-rtl.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有
 check(run("check-rtl.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
 check(run("stage-status.mjs", [join(SANDBOX, "status-demo")]) === 0, "stage-status 有约定文件 → 0");
 check(run("stage-status.mjs", [join(ROOT, "tools")]) === 2, "stage-status 没约定文件 → 2");
+check(run("init-scaffold.mjs", []) === 2, "init-scaffold 不给根目录 → 退出码 2");
+check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli"), "--kind", "bogus"]) === 2, "--kind 非法 → 退出码 2");
+check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "建模块骨架 → 退出码 0");
+check(
+  existsSync(join(SANDBOX, "scaffold-cli", "review")) && existsSync(join(SANDBOX, "scaffold-cli", ".fpga-workbench.json")),
+  "CLI 真的把骨架建出来了"
+);
+check(run("init-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复建同一目录也返回 0(幂等)");
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;

@@ -100,7 +100,7 @@ spec/  rtl/  sim/  comp/  synth/  timing/
   不得照抄 RTL 逻辑)
 
 三种用法连同脚本路径一并写入 spec 的「参考资料」一节,供后续环节读取;脚本与中间数据放
-`<阶段根>/spec/explore/`,文件名前缀 `explore_`。
+`<模块根>/spec/explore/`,文件名前缀 `explore_`。
 
 **注意**:
 
@@ -126,7 +126,7 @@ spec/  rtl/  sim/  comp/  synth/  timing/
 
 绘制要求:
 
-- 用 **Mermaid**(` ```mermaid ` 围栏)写入 `<阶段根>/spec/flow.md`(流程图单独成文,见"产物与
+- 用 **Mermaid**(` ```mermaid ` 围栏)写入 `<模块根>/spec/flow.md`(流程图单独成文,见"产物与
   收尾"),并在对话中一并贴出
 - 单图 **5~15 个节点**;超出时拆分:主流程一张,关键子流程一张
 - 节点标注**中文与信号名**,不使用 A / B / 步骤1 等占位词
@@ -221,10 +221,10 @@ node "<自带命令目录>\spec-scaffold.mjs" <模块根> --kind module
 与 `spec/explore/`。先加 `--dry-run` 看一遍要建什么;已有锚点不会被覆盖(要重建用 `--force`)。
 **它只建目录,不生成空的 spec.md / flow.md / lint.md** —— 那些由讨论与各环节的真运行产出。
 
-**2. 写规格** `<阶段根>/spec/spec.md`(头部 `spec_state: draft`,用户确认后改 `confirmed`)。
+**2. 写规格** `<模块根>/spec/spec.md`(头部 `spec_state: draft`,用户确认后改 `confirmed`)。
 其中「实现思路」一节写明流程图的位置与关键参数(位宽 / 拍数 / 时钟)。
 
-**3. 单独保留流程图** `<阶段根>/spec/flow.md`:Mermaid 流程图本体(节点、边标签、关键参数)。
+**3. 单独保留流程图** `<模块根>/spec/flow.md`:Mermaid 流程图本体(节点、边标签、关键参数)。
 图是方案的一部分,后续实现与审查都要对着它看,**单独成文,不要只塞在 spec.md 里**;
 spec.md 那一节指向它即可,避免两处各存一份而走样。
 

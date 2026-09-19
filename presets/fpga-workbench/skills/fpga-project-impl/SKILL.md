@@ -11,7 +11,7 @@ description: 跑 FPGA 工程的实现与出 bitstream 时用:布局布线(implem
 ## 前置(正式出 bitstream 时)
 
 - 集成完成(`project/integrate/`),约束已经核过(`project/constraints/`)
-- 模块级的 `lint` / `sim` 都过了 —— 实现一次要几十分钟,不得拿它当验证手段
+- 模块级的 `rtl`(机械检查)与 `sim` 都过了 —— 实现一次要几十分钟,不得拿它当验证手段
 
 ## 怎么跑
 

@@ -15,7 +15,7 @@ description: 综合 FPGA 模块时用:建模块工程、跑综合、判断综合
 
 1. 找约定文件 `.fpga-workbench.json`(模块根),见 `fpga-module-spec`
 2. `spec/spec.md` 里要有**目标器件与封装** —— 未定即不得开综合
-3. **建议** `lint` 已 PASS、`sim` 已 PASS(没仿真就综合,问题容易拖到时序环节才暴露)——
+3. **建议**机械检查(`rtl/lint.md`)已 PASS、`sim` 已 PASS(没仿真就综合,问题容易拖到时序环节才暴露)——
    但正在定位综合报错、或用户只想要一次资源评估时,不必先回去补前面的环节
 4. 约束文件按模板写(约束模板路径看会话开头「本机 FPGA 工具链」的模板那节)
 
@@ -65,7 +65,7 @@ default → AreaOptimized_high → AlternateRoutability → PerformanceOptimized
 
 ## 产物
 
-写 `<阶段根>/synth/synth.md`:
+写 `<模块根>/synth/synth.md`:
 
 - 结论 + 跑过的**命令原文**
 - 器件型号、用的策略与轮数

@@ -108,7 +108,7 @@ xsim tb_sim -runall
 
 ## 产物
 
-写 `<阶段根>/sim/sim.md`:
+写 `<模块根>/sim/sim.md`:
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `NOT_APPLICABLE`)
 - 跑过的**命令原文**(或该 `run.do` 的路径),可直接复制复现

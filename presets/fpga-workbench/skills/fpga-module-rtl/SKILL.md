@@ -130,16 +130,13 @@ node "<自带命令目录>\rtl-check.mjs" <模块目录>
 **结构类(须读代码判定)**
 
 **模板已经定好的(别另立一套)**:文件头字段、开头/结尾那些指令、端口声明与对齐、
-`end else begin` 同行 —— 起文件时就是复制模板,这些照模板即可。上面第三步的机械检查会查它们
-(所以不是"不用管",而是"不用在这里再抄一遍");换了模板以模板为准。
+`end else begin` 同行、九个小节 banner 及其排法 —— 起文件时就是复制模板,这些照模板即可。
+上面第三步的机械检查会查它们(所以不是"不用管",而是"不用在这里再抄一遍");换了模板以模板为准。
 
 **写代码时自己把住**
 
 - 复位高有效 —— 模板里 `if (rst)` 是对的,别写成 `rst_n`、`!rst` 或 `negedge rst`
 - `always_ff` 仅用 `posedge`
-- 九个小节块齐全且顺序不变(**顺序是本节的规则,检查器只认 banner 在不在**,所以只能靠写的时候
-  按模板的排法来):Local Parameters / Types / Registers / Combinational Logic / Sequential Logic /
-  Functions Module / Task Module / Module Instantiation / Assertions
 - 每个 RTL 须有设计断言,并写明 Purpose / Trigger / Failure
 - **一个 always 块内不混放不相关信号** —— 除非共用同一套控制逻辑(同一状态机、同一事务生命周期、
   同一寄存器组)。无法说明其共同控制关系时拆分

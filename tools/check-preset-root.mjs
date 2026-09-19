@@ -328,6 +328,26 @@ check(/样本/u.test(compStep), "第六步明确样本规模(0 样本不得判 P
 // 器件必须先于流程图:器件会影响流程图里的原语/资源选择
 check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
 
+// 编写要有依据:接口照 spec、路径照 flow.md 的图、参数照参考资料 —— 少哪一条,写出来的东西
+// 就没人能对着图复核(用户指出过:原来这一环根本没写"照着什么写")
+const rtlText = readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8");
+check(/flow\.md/u.test(rtlText), "rtl 技能写明实现路径照 spec/flow.md(不是凭想象写)");
+check(/参考资料/u.test(rtlText), "rtl 技能写明参数与算法照 spec 的「参考资料」");
+check(
+  /接口[^。]{0,24}spec\/spec\.md|spec\/spec\.md[^。]{0,24}接口/u.test(rtlText),
+  "rtl 技能写明接口照 spec/spec.md 抄准"
+);
+check(
+  /走不通|不可行/u.test(rtlText) && /改[^。]{0,8}(图|spec)/u.test(rtlText),
+  "rtl 技能写明:图走不通要回去改图/规格并重新确认,不得默默换路径"
+);
+for (const reader of ["fpga-module-rtl", "fpga-module-sim", "fpga-module-comp"]) {
+  check(
+    /参考资料/u.test(readFileSync(join(skillDir, reader, "SKILL.md"), "utf8")),
+    `${reader} 会去 spec 的「参考资料」取参照(参考链不能断)`
+  );
+}
+
 // 收尾(用户要求):产物除 spec.md 外,流程图要单独成文;骨架用自带脚本一次建好,不手工建目录
 check(/flow\.md/u.test(specSkill), "模块级写明流程图单独存成 spec/flow.md(不只塞在 spec.md 里)");
 check(/spec-scaffold\.mjs/u.test(specSkill), "模块级写明用自带脚本一次性建骨架");

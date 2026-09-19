@@ -424,19 +424,31 @@ check(
 // sim 曾经自相矛盾:正文说"没有测试平台 ≠ 不适用",判据那行却写着 NOT_APPLICABLE。
 const VERDICTS = /PASS|FAIL|BLOCKED|NOT_APPLICABLE|UNVERIFIED|APPROVED|CHANGES_REQUESTED/gu;
 const verdictWords = (text) => [...text.matchAll(VERDICTS)].map((m) => m[0]);
-for (const skill of ["fpga-module-sim", "fpga-module-rtl", "fpga-module-synth"]) {
+// 每个技能的判定词集合是**自己的**口径:审查用 approved/changes requested/blocked,
+// 环节报告用 PASS/FAIL/BLOCKED/NOT_APPLICABLE/UNVERIFIED。审查正文里提到下游的 FAIL
+// (说某个环节挂 FAIL)不算它的判定词,所以按技能限定可用的词,而不是全文搜大写词。
+const MODULE_VERDICT_SETS = {
+  "fpga-module-sim": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-module-rtl": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
+  "fpga-module-synth": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
+  "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-module-review": ["APPROVED", "CHANGES_REQUESTED", "BLOCKED"],
+};
+for (const [skill, allowed] of Object.entries(MODULE_VERDICT_SETS)) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
-  // 取的是"把判定词一次列全"的那一处:sim/synth 写成 `结论(PASS / FAIL / …)`,
-  // rtl 写成 `- **结论**:`PASS` / `FAIL` / …`。同一文件里前面可能还有别的 `结论:` 提法
+  // 取的是"把判定词一次列全"的那一处:sim/synth/verif 写成 `结论(PASS / FAIL / …)`,
+  // rtl/review 写成 `- **结论**:`PASS` / `FAIL` / …`。同一文件里前面可能还有别的 `结论:` 提法
   // (synth 就有一句),所以扫全部匹配、挑出真的带判定词的那一处。
   const candidates = [...text.matchAll(/结论[^\n]*?(?:\(([^)]*)\)|:((?:[^`\n]*`[^`]+`[^\n]*)+))/gu)].map(
     (m) => m[1] ?? m[2] ?? ""
   );
   const listed = verdictWords(candidates.find((line) => verdictWords(line).length > 1) ?? "");
   check(listed.length > 0, `${skill} 的结论行列出了判定词(实际:${listed.join(" / ") || "无"})`);
-  const used = [...new Set(verdictWords(text))];
+  const used = allowed.filter((word) => text.includes(word));
   const missing = used.filter((word) => !listed.includes(word));
   check(missing.length === 0, `${skill} 的结论行没有漏掉它用到的判定词(漏:${missing.join("、") || "无"})`);
+  const extra = listed.filter((word) => !allowed.includes(word));
+  check(extra.length === 0, `${skill} 的结论行只用自己的判定词(多出:${extra.join("、") || "无"})`);
 }
 // sim 的"没有测试平台"必须记 UNVERIFIED/NOT_APPLICABLE 二选一里正确的那一个:
 // 用户口径是"要验证功能却没平台 = 未验证",只有本来就无可仿真行为的模块才算不适用。

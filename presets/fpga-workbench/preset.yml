@@ -6,5 +6,5 @@
 # name 必须与 lib/client.js 里的 LABEL 一致(同一个产品的名字,设置页也用那个);
 # tools/check-preset-root.mjs 会断言两者相同,防止改名只改了一半。
 name: FPGA 开发模式
-description: FPGA 模块与工程开发会话:规格、RTL、验证、综合、集成、实现、时序、上板与证据归档。
+description: FPGA 模块与工程开发会话:规格、RTL、验证、综合、集成、实现、时序、上板与证据归档。能力按需使用、可反复回跳,不自动推进流程。
 order: 50

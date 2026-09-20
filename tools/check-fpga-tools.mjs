@@ -19,16 +19,18 @@ import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/mo
 import { applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
 import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/module/module-verif-wave.mjs";
-import { sweepTempEntries } from "../lib/toolchain.js";
+import { SWEEP_GRACE_MS, sweepTempEntries } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
 // 级别落到目录上:模块级命令在 tools/module/(工程级的以后放 tools/project/)
 const MODULE_TOOLS = join(TOOLS, "module");
 const TEMPLATES = join(ROOT, "presets", "fpga-workbench", "templates");
-const SANDBOX = join(ROOT, ".tmp", "fpga-tools-check");
-// 自检自己收尾:这个沙箱每次跑都重建(内容用时间戳区分),跑完整个删掉 —— 否则它会一直涨
-sweepTempEntries(join(ROOT, ".tmp"), ["fpga-tools-check"]);
+const SANDBOX = join(ROOT, ".tmp", `fpga-tools-check-${String(process.pid)}`);
+// 自检自己收尾:这个沙箱每次跑都重建(内容用时间戳区分),跑完整个删掉 —— 否则它会一直涨。
+// 沙箱名带进程号、开头这次清理带宽限期:两个自检(`npm test` 与 `npm run test:installed`)
+// 并行跑同一批检查时,别把对方正在用的沙箱删掉。
+sweepTempEntries(join(ROOT, ".tmp"), ["fpga-tools-check"], SWEEP_GRACE_MS);
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -448,8 +450,8 @@ check(run("setup-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复�
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;
 
-// 收尾:把沙箱整个删掉(下次跑会重建)。残留会让"这次到底跑没跑"看不出来。
-if (sweepTempEntries(join(ROOT, ".tmp"), ["fpga-tools-check"]) === 0 && existsSync(SANDBOX)) {
+// 收尾:只删自己这个沙箱(名字带进程号,别把并行那次的删了)。残留会让"这次到底跑没跑"看不出来。
+if (sweepTempEntries(join(ROOT, ".tmp"), [`fpga-tools-check-${String(process.pid)}`]) === 0 && existsSync(SANDBOX)) {
   console.log("FAIL: 收尾没清掉沙箱");
   process.exitCode = 1;
 }

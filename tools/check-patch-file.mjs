@@ -52,7 +52,7 @@ if (rows !== null) {
   check(Array.isArray(rows), "顶层是数组");
   check(rows.length === 2, `有 2 个顶层条目(实际 ${rows.length})`);
 
-  // 一:宿主插件行 —— 没有它,「设置 → FPGA 工作台」没有可绑定的命名空间。
+  // 一:宿主插件行 —— 没有它,「设置 → FPGA 开发模式」没有可绑定的命名空间。
   const inserted = rows.flatMap((row) => row.insert ?? []);
   check(inserted.length === 1, `有 1 条 insert 插件行(实际 ${inserted.length})`);
   check(inserted[0]?.id === "fpga-workbench", `insert 行 id 正确(实际 ${String(inserted[0]?.id)})`);

@@ -122,7 +122,9 @@ check(/USER_PRESET_DIR/u.test(codeOnly) && codeOnly.includes('".agent-presets"')
 check(/process\.env\.DSH_HOME \?\? join\(homedir\(\), "\.dsh"\)/u.test(codeOnly),
   "harness home 取 DSH_HOME,退回 ~/.dsh");
 check(/cpSync\(source, destination/u.test(codeOnly), "复制预设(而不是只登记路径)");
-check(/sameTree\(source, destination\)/u.test(codeOnly), "内容一致就跳过(幂等,不每次重写)");
+// 只比较"我们在维护的那部分"(包内文件 + 该清的旧文件):用户自己在预设目录里加的普通文件
+// 不该让两棵树永远不一致 —— 那会导致每次启动都重同步、重备份一遍。
+check(/presetSyncNeeded\(source, destination, manifest\)/u.test(codeOnly), "内容一致就跳过(幂等,不每次重写)");
 // 曾经写过 settings.yaml 的 agent-presets.roots —— 实测那层根本不参与 roots 解析,是无用写入,
 // 还污染了用户配置。断言的是**别去写别人的设置**,而不是禁用 settings.update:
 // 本插件自己的字段迁移(改名的旧键 → 新键)要用它,而且 `register()` 返回的句柄已经绑定了

@@ -45,7 +45,7 @@ if (!existsSync(INSTALLED)) {
   //
   // pnpm 装 file: 依赖时按 files 打包,白名单外的东西**不会被拷进 profile**。
   // 踩过的坑:presets/ 没写进 files → 安装副本缺预设目录 → 补丁里的 agent-presets
-  // roots 指向空目录 → 预设列表里永远看不到「FPGA 工作台」,而且没有任何报错。
+  // roots 指向空目录 → 预设列表里永远看不到「FPGA 开发模式」,而且没有任何报错。
   const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   check((manifest.files ?? []).includes("presets"), "files 白名单包含 presets(否则预设不会被装进去)");
   check((manifest.files ?? []).includes("lib"), "files 白名单包含 lib(否则两半代码不会被装进去)");

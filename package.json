@@ -1,7 +1,7 @@
 {
   "name": "dsh-fpga-workbench",
   "version": "0.4.0",
-  "description": "FPGA 开发模式 + 工具链设置:一个 DSH agent 预设(人设/工具/技能 + 本机工具链提示),外加「设置 → FPGA 开发模式」里配置 Vivado / ModelSim / Verilator / 库目录 / 缓存目录。",
+  "description": "FPGA 开发模式 + 工具链设置:一个 DSH agent 预设(人设/工具/技能 + 本机工具链提示),外加「设置 → FPGA 开发模式」里配置 Vivado / ModelSim / Verilator / 缓存目录与 modelsim.ini 库映射文件。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

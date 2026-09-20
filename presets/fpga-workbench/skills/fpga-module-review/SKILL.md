@@ -1,6 +1,6 @@
 ---
 name: fpga-module-review
-description: 审 FPGA 代码、方案或验收结论时用:审查 RTL 结构与命名、时钟复位与跨时钟域处理、接口握手、设计断言、验收判据覆盖、参考模型独立性、时序约束。支持局部审查与早期风险审查;正式结论给 approved / changes requested / blocked。
+description: 审 FPGA 代码、方案或一套结论时用:审查 RTL 结构与命名、时钟复位与跨时钟域处理、接口握手、设计断言、验收判据覆盖、参考模型独立性、时序约束。支持局部审查、早期风险审查与整体审查(按需,可有可无,不强制);结论给 approved / changes requested / blocked。
 ---
 
 # module-review:代码审查
@@ -10,7 +10,8 @@ description: 审 FPGA 代码、方案或验收结论时用:审查 RTL 结构与�
 - **局部审查**:只看一个文件、一个 always 块、一处 CDC —— 改到哪审到哪,随时可做。
 - **早期风险审查**:模块还没做完也能审。看不出结论的地方就写"未完成 / 未验证",并指出
   最可能出问题之处 —— 此时的价值在于尽早发现方向问题。
-- **验收审查**(`approved` / `changes requested` / `blocked`):**只有这一种**要求证据齐备 ——
+- **整体审查**(`approved` / `changes requested` / `blocked`):通盘看一遍 —— 东西齐不齐、
+  对不对。**只有这一种**要求证据齐备 ——
   `rtl`(机械检查)、`verif`(测试平台 + 独立比对)、(要综合的)`synth` 都得有结论。
 
 前两种不要求前置齐备;缺的环节如实标出即可。第三种里若有环节挂着 `BLOCKED` 或完全没有结论,

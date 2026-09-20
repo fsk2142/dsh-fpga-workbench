@@ -17,13 +17,18 @@ import { fileURLToPath } from "node:url";
 import {
   FIELDS,
   NS,
+  SWEEP_GRACE_MS,
+  DETECT_TARGETS,
   TOOLS,
   backupChangedFiles,
   describeEnv,
+  detectTools,
   inspectTools,
+  isMissing,
   legacyMigrationPatch,
   listDirectory,
   listFiles,
+  presetSyncNeeded,
   probeFilesystem,
   pruneEmptySkillDirs,
   resolveTemplates,
@@ -35,11 +40,15 @@ import {
 } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// fixture 名带进程号:`npm test` 与 `npm run test:installed` 跑的是**同一批检查**,并行执行时
+// 同名目录会互相踩(一个正在写、另一个开头把它扫掉)—— 现象是随机假失败。
+const RUN_ID = String(process.pid);
 // 自检自己收尾:这些前缀是本次跑出来的 fixture(含列目录用的 browse-fixture),
-// 跑到最后要把它们扫干净 —— 开头也扫一次,清掉上次异常退出留下的残留。
+// 跑到最后要把它们扫干净 —— 开头也扫一次,清掉上次异常退出留下的残留;
+// 开头那次带宽限期,免得删掉并行那次正在用的目录。
 const TMP_ROOT = join(ROOT, ".tmp");
-const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture"];
-sweepTempEntries(TMP_ROOT, FIXTURE_PREFIXES);
+const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture", "preset-sync-"];
+sweepTempEntries(TMP_ROOT, FIXTURE_PREFIXES, SWEEP_GRACE_MS);
 
 
 const failures = [];
@@ -51,8 +60,15 @@ const check = (ok, label, detail) => {
 /** 桩探测:只有名单里的路径算存在。 */
 const probeWith = (present) => (path) => present.includes(path);
 
-/** 缺失判定(与 lib/index.js 的 statusOf 同规则:只看必需项)。 */
-const missingKeys = (tools) => tools.filter((tool) => tool.required === true && !tool.present).map((tool) => tool.key);
+/** 类型敏感的桩:目录只在 kind === "directory" 时算存在,文件只在 kind === "file" 时算存在。 */
+const probeTyped = (dirs, files) => (path, kind) =>
+  kind === "directory" ? dirs.includes(path) : files.includes(path);
+
+/**
+ * 缺失判定:用**生产函数**的那一条规则(`isMissing`),不自己复制一份 ——
+ * 复制的话改 statusOf 的规则这里照样绿,断言就白写了(审计抓到过)。
+ */
+const missingKeys = (tools) => tools.filter(isMissing).map((tool) => tool.key);
 
 // ── 字段定义 ────────────────────────────────────────────────────────────────
 //
@@ -63,42 +79,50 @@ const REQUIRED_FIELDS = FIELDS.filter((field) => field.required === true);
 const CHOICE_FIELDS = VISIBLE.filter((field) => field.control === "select");
 const OPTIONAL_FIELDS = FIELDS.filter((field) => field.required !== true);
 const HIDDEN_FIELDS = FIELDS.filter((field) => field.control === "hidden");
-check(KEYS.length === 16, `字段共 16 个:13 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
-check(VISIBLE.length === 13, `可见字段 13 个(实际 ${VISIBLE.length})`);
+check(KEYS.length === 20, `字段共 20 个:17 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
+check(VISIBLE.length === 17, `可见字段 17 个(实际 ${VISIBLE.length})`);
 check(
   HIDDEN_FIELDS.map((field) => field.key).join(",") === "verilatorPath,modelsimPath,vivadoPath",
   "三个改名前的旧键作为隐藏字段保留(迁移用)"
 );
 check(KEYS.includes("cachePath"), "含缓存目录字段");
 check(
-  REQUIRED_FIELDS.length === 5,
-  `五个路径必填:编译器 / 仿真器 / 综合器 / 库 / 缓存(实际 ${REQUIRED_FIELDS.length})`
+  REQUIRED_FIELDS.length === 4,
+  `四个路径必填:编译器 / 仿真器 / 综合器 / 缓存(实际 ${REQUIRED_FIELDS.length})`
 );
 check(
-  REQUIRED_FIELDS.map((field) => field.key).join(",") === "compilerPath,simulatorPath,synthesizerPath,libraryPath,cachePath",
-  "必填的就是那五个路径",
+  REQUIRED_FIELDS.map((field) => field.key).join(",") === "compilerPath,simulatorPath,synthesizerPath,cachePath",
+  "必填的就是那四个路径",
   REQUIRED_FIELDS.map((field) => field.key).join(",")
 );
 check(
   REQUIRED_FIELDS.every((field) => field.skips.length > 0),
-  "每个必填项都写清了没就绪会跳过哪些步骤(否则界面上会出现空的跳过清单)"
+  "每个必填项都写清了没就绪会让哪些能力当前不可执行(否则界面上会出现空的清单)"
+);
+// 库映射文件必须是**文件**类型:写成目录,设置页就会给它弹文件夹选择框
+// (用户实际踩到过:选完 .ini,框里填的是那个文件夹)。
+const libraryField = FIELDS.find((field) => field.key === "modelsimIniPath");
+check(libraryField?.kind === "file", "库映射文件按文件类型探/选(否则设置页弹的是文件夹框)");
+check(
+  libraryField?.required === false && (libraryField?.skips ?? []).length === 0,
+  "库映射文件不挡路:缺了用安装目录那份,不报成「当前不可执行」"
 );
 check(
   OPTIONAL_FIELDS.every((field) => field.skips.length === 0),
   "可选字段不报'会跳过什么'(它缺了并不跳过任何环节)"
 );
 const GROUPS = [...new Set(VISIBLE.map((field) => field.group))];
-check(GROUPS.length === 5, `可见的分组恰好五个(实际 ${GROUPS.join("、")})`);
+check(GROUPS.length === 7, `可见的分组恰好七个(实际 ${GROUPS.join("、")})`);
 check(
-  GROUPS.join(",") === "编译器,仿真器,综合器,库与缓存,模板",
-  `分组顺序:编译器 → 仿真器 → 综合器 → 库与缓存 → 模板(实际 ${GROUPS.join(" → ")})`
+  GROUPS.join(",") === "终端工具,脚本工具,编译工具,仿真工具,综合工具,库与缓存,模板",
+  `分组按重要性排:终端 → 脚本 → 编译 → 仿真 → 综合 → 库与缓存 → 模板(实际 ${GROUPS.join(" → ")})`
 );
 // 每个工具组里:先"用哪个",紧跟它的路径 —— 这是用户要的排列
 const ORDER = VISIBLE.map((field) => field.key);
 for (const [choice, path] of [["compiler", "compilerPath"], ["simulator", "simulatorPath"], ["synthesizer", "synthesizerPath"]]) {
   check(ORDER.indexOf(path) === ORDER.indexOf(choice) + 1, `${choice} 后面紧跟 ${path}`);
 }
-check(CHOICE_FIELDS.length === 5, `五个下拉:三类工具 + RTL 语言 + 仿真语言(实际 ${CHOICE_FIELDS.length})`);
+check(CHOICE_FIELDS.length === 7, `七个下拉:三类工具 + 终端 + 脚本 + RTL 语言 + 仿真语言(实际 ${CHOICE_FIELDS.length})`);
 check(
   CHOICE_FIELDS.every((field) => {
     const options = field.options ?? [];
@@ -141,7 +165,7 @@ check(
 
 // ── 存在性判定 ──────────────────────────────────────────────────────────────
 const empty = inspectTools({}, probeWith([]));
-check(empty.length === 16, "空设置也返回全部字段");
+check(empty.length === 20, "空设置也返回全部字段");
 check(
   empty.filter((tool) => tool.control !== "select").every((tool) => tool.configured === false && tool.present === false),
   "空设置下所有路径字段都未配置且不可用"
@@ -150,7 +174,7 @@ check(
   empty.filter((tool) => tool.control === "select").every((tool) => tool.present === true && tool.path === tool.default),
   "下拉字段空值也拿得到默认值,且判为合法"
 );
-check(missingKeys(empty).length === 5, "空设置下五项必填都算未就绪");
+check(missingKeys(empty).length === 4, "空设置下四项必填都算未就绪");
 
 // 旧键兜底:改名不能让用户已经填好的路径消失
 const migrated = inspectTools(
@@ -161,7 +185,7 @@ const migratedByKey = new Map(migrated.map((tool) => [tool.key, tool]));
 check(migratedByKey.get("compilerPath")?.path === "C:\\old\\verilator_bin.exe", "旧 verilatorPath 落到 compilerPath");
 check(migratedByKey.get("simulatorPath")?.path === "C:\\old\\vsim.exe", "旧 modelsimPath 落到 simulatorPath");
 check(migratedByKey.get("synthesizerPath")?.path === "C:\\old\\vivado.bat", "旧 vivadoPath 落到 synthesizerPath");
-check(missingKeys(migrated).join(",") === "libraryPath,cachePath", "迁移后只剩没填过的那两项未就绪");
+check(missingKeys(migrated).join(",") === "cachePath", "迁移后只剩没填过的那一项未就绪");
 
 // 光在 valueOf 里兜底是不够的:设置页的输入框读的是**新键的原始值**,只兜底就会
 // "框是空的、状态却是绿的"(用户实际抓到的 bug)。所以要把值真的搬过去。
@@ -194,6 +218,28 @@ check(
   "下拉值不在选项里 → 判为不合法(而不是照用)"
 );
 
+// 路径类型随所选工具变:XSim 要的是 Vivado 的 bin **目录**(xvlog/xelab/xsim 三个命令都在里面),
+// ModelSim 要的是 vsim.exe。类型错了设置页会给 XSim 弹文件选择框,填个同名文件也会被判成"已就绪"。
+const xsimTools = new Map(
+  inspectTools({ simulator: "xsim", simulatorPath: "C:\\Xilinx\\Vivado\\bin" }, probeTyped(["C:\\Xilinx\\Vivado\\bin"], []))
+    .map((tool) => [tool.key, tool])
+);
+check(xsimTools.get("simulatorPath")?.kind === "directory", "选 XSim:仿真器路径按目录判定(设置页要弹目录选择框)");
+check(xsimTools.get("simulatorPath")?.present === true, "选 XSim + 填了存在的 bin 目录 → 就绪");
+check(
+  inspectTools(
+    { simulator: "xsim", simulatorPath: "C:\\Xilinx\\Vivado\\bin\\xsim.bat" },
+    probeTyped([], ["C:\\Xilinx\\Vivado\\bin\\xsim.bat"])
+  ).find((tool) => tool.key === "simulatorPath")?.present === false,
+  "选 XSim 却填了个文件 → 未就绪(那个路径里没有 xvlog/xelab/xsim)"
+);
+const modelsimTools = new Map(
+  inspectTools({ simulator: "modelsim", simulatorPath: "C:\\modeltech64\\win64\\vsim.exe" }, probeTyped([], ["C:\\modeltech64\\win64\\vsim.exe"]))
+    .map((tool) => [tool.key, tool])
+);
+check(modelsimTools.get("simulatorPath")?.kind === "file", "选 ModelSim:仍按文件判定(默认姿势不变)");
+check(modelsimTools.get("simulatorPath")?.present === true, "选 ModelSim + 填了存在的 vsim.exe → 就绪");
+
 const partial = inspectTools(
   { vivadoPath: "C:\\vivado.bat", modelsimPath: "C:\\missing\\vsim.exe", cachePath: "C:\\cache" },
   probeWith(["C:\\vivado.bat"])
@@ -206,7 +252,7 @@ check(
 );
 check(byKey.get("compilerPath")?.configured === false, "没填的项:未配置");
 check(
-  missingKeys(partial).join(",") === "compilerPath,simulatorPath,libraryPath,cachePath",
+  missingKeys(partial).join(",") === "compilerPath,simulatorPath,cachePath",
   `未就绪清单正确(实际 ${missingKeys(partial).join(",")})`
 );
 check(byKey.get("cachePath")?.present === false, "缓存目录状态如实反映(未创建)");
@@ -223,7 +269,7 @@ const throwing = inspectTools({ vivadoPath: "C:\\x" }, () => {
 check(throwing.find((tool) => tool.key === "vivadoPath")?.present === false, "探测抛错时按不可用处理,不向外冒泡");
 
 // 全部就绪
-const prepared = { vivadoPath: "C:\\v", modelsimPath: "C:\\m", verilatorPath: "C:\\t", libraryPath: "C:\\l", cachePath: "C:\\c" };
+const prepared = { vivadoPath: "C:\\v", modelsimPath: "C:\\m", verilatorPath: "C:\\t", modelsimIniPath: "C:\\l\\modelsim.ini", cachePath: "C:\\c" };
 const ready = inspectTools(prepared, probeWith(Object.values(prepared)));
 check(missingKeys(ready).length === 0, "全部就绪时没有缺失项");
 
@@ -235,6 +281,7 @@ check(missingKeys(ready).length === 0, "全部就绪时没有缺失项");
 const clientSource = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
 check(clientSource.includes(`"${NS}"`), `客户端命名空间与宿主一致(${NS})`);
 check(clientSource.includes("/plugins/fpga-workbench/toolchain"), "客户端用的状态路由与宿主一致");
+check(clientSource.includes("/plugins/fpga-workbench/detect"), "客户端用的检测路由与宿主一致");
 const hardcoded = KEYS.filter((key) => clientSource.includes(`"${key}"`));
 check(hardcoded.length === 0, "客户端没有硬编码任何字段名(定义只存在于宿主)", hardcoded.join(", "));
 const hardcodedHints = FIELDS.filter(
@@ -250,9 +297,10 @@ check(clientSource.includes('field.control === "hidden"'), "客户端不渲染�
 // 说明里要给确切文件名,不能含糊成"可执行文件" —— 真实教训:只写"可执行文件",
 // 用户就会去找 Windows 上并不存在的 vivado.exe。
 check(FIELDS.find((field) => field.key === "synthesizerPath")?.hint.includes("vivado.bat"), "综合器说明写了确切文件名 vivado.bat");
+check(FIELDS.find((field) => field.key === "synthesizerPath")?.hint.includes("quartus_sh.exe"), "综合器说明写了 Quartus 的确切文件名 quartus_sh.exe");
 check(FIELDS.find((field) => field.key === "simulatorPath")?.hint.includes("vsim.exe"), "仿真器说明写了确切文件名 vsim.exe");
 check(FIELDS.find((field) => field.key === "compilerPath")?.hint.includes("verilator_bin.exe"), "编译器说明写了确切文件名 verilator_bin.exe");
-// 客户端要按宿主返回的 skips 显示"会跳过什么",不能自己另写一份跳过清单
+// 客户端要按宿主返回的 skips 显示"当前不可执行哪些能力",不能自己另写一份清单
 // (只检查几个只可能来自宿主的步骤名,别用"综合"这种会撞上提示文案的词)
 check(clientSource.includes("skips"), "客户端用宿主返回的 skips 渲染提示");
 for (const step of ["比特流生成", "RTL 功能仿真", "厂商原语仿真"]) {
@@ -261,14 +309,62 @@ for (const step of ["比特流生成", "RTL 功能仿真", "厂商原语仿真"]
 // 取不到状态接口时必须说出来 —— 字段定义也来自那里,否则界面会是一片空白,
 // 看起来像插件没装好,而其实只是那条路由没答上来。
 check(clientSource.includes("failed"), "客户端在拿不到状态接口时会给出说明(否则就是空白页)");
-// 写入必须等落地再刷新状态。
-// scope.set 是排队的 mutation,不等它就去问宿主会拿到旧值 —— 实机现象是"填完路径要
-// 关掉设置再打开才显示已就绪"。这条只能靠源码断言守住:它是时序契约,不是纯逻辑。
+// 写入模型:改动先留在页面上,点「保存改动」才**一次原子提交**(scope.mutate 多字段)。
+// 逐字段写的老做法已经删掉 —— 它会出现"存了三个、第四个失败"的半吊子状态。
 check(
-  clientSource.includes("return Promise.resolve(pending)"),
-  "写入函数把 scope.set 的 promise 返回出去(不等结算就会显示旧状态)"
+  clientSource.includes("scope.mutate(ops)") && clientSource.includes('op: "set"'),
+  "保存走一次原子提交(scope.mutate 多字段,不是逐字段写)"
 );
-check(/writeField\([\s\S]{0,120}?\.then\(/u.test(clientSource), "刷新状态写在写入结算之后(.then 里)");
+check(
+  /const missed = keys\.filter/u.test(clientSource),
+  "保存成败靠比对宿主刷新后的值(宿主拒收时 mutate 也正常结算,等它报错是等不到的)"
+);
+check(
+  clientSource.includes("const [drafts, setDrafts]") && clientSource.includes("有未保存的改动"),
+  "改动先记在页面上并标出「有未保存的改动」,点保存才落地"
+);
+check(clientSource.includes("放弃改动"), "能丢弃未保存的改动(误改不用凭记忆打回原值)");
+check(
+  clientSource.includes("onToolChange(field.key, next, pathKey)"),
+  "换工具时联动换它管着的那条路径"
+);
+check(clientSource.includes("保存失败:"), "提交抛错时显示保存失败(否则用户以为已经生效)");
+check(
+  clientSource.includes("路径不可用 —— ") && clientSource.includes("field.blankNote"),
+  "填了却用不了时:说清它现在不生效,并带上宿主给的留空后果"
+);
+// 文件字段**只认文件**:目录也算"可用"的话,提示段会照着它拼出一条跑不通的命令行
+// (用户实际把 C:\msys64\mingw64\bin 填进了「编译器路径」)。
+check(
+  probeFilesystem(ROOT, "file") === false && probeFilesystem(ROOT, "directory") === true,
+  "目录填进文件字段 → 不可用(不允许「只要存在就算」)"
+);
+check(clientSource.includes("预设同步失败"), "预设同步失败在设置页可见(否则只躺在日志里)");
+check(
+  !clientSource.includes("检测本组工具") && clientSource.includes("detectNote"),
+  "没有「检测」按钮:检测在打开页面与换工具时自动跑,结论写在各自那一行下面"
+);
+check(clientSource.includes("没检测到"), "选中的工具没找到路径时就地说明(不回声用户原来填的那条)");
+check(
+  clientSource.includes('option?.value === "none"') && clientSource.includes("不用这个工具"),
+  "选了「不用」的字段:不再检测、也不再显示未就绪"
+);
+check(
+  clientSource.includes("selectedOptionOf") && clientSource.includes("hit.option === option.value"),
+  "检测结果按**当前选中的工具**筛(未保存的换工具也算)"
+);
+// "留空的后果"必须由宿主说:模板是"用自带那份"、库映射文件是"用安装目录那份"、运行时是"按 PATH 找"。
+// 客户端原来自己编一句「留空即用自带」—— 对后两类是错话,用户在设置页上实际看到了。
+check(
+  !clientSource.includes("留空即用自带"),
+  "客户端不再硬编码「留空即用自带」(否则库映射文件/运行时那两行都是错话)"
+);
+check(
+  libraryField?.blankNote === "留空用安装目录那份" &&
+    FIELDS.find((field) => field.key === "rtlTemplatePath")?.blankNote === "留空即用自带",
+  "两类可选字段的留空后果各说各的(库映射文件 ≠ 模板)"
+);
+check(clientSource.includes("可能是旧的"), "来自 PATH 的命中标明可信度低(不能与厂商安装位置一个说法)");
 
 // ── 发给设置页的载荷 ────────────────────────────────────────────────────────
 //
@@ -291,12 +387,33 @@ check(
 );
 
 // 不再往会话提示里注入任何东西 —— 这是刻意的设计决定
-check(!readFileSync(new URL("../lib/index.js", import.meta.url), "utf8").includes("systemPrompt"), "宿主不注册 systemPrompt 段");
+const hostSource = readFileSync(new URL("../lib/index.js", import.meta.url), "utf8");
+check(!hostSource.includes("systemPrompt"), "宿主不注册 systemPrompt 段");
+// 状态要跟着**页面上那一份**走:带查询串问一次 = 预演未保存的改动;桌面壳由宿主告知页面
+// (靠页面嗅探 UA 实测会失效 —— 在 DSH Desktop 里被当成普通浏览器,退了页面内列表)。
+check(
+  hostSource.includes("pendingOverrides"),
+  "状态路由能预演未保存的改动(带查询串问一次,不必先保存)"
+);
+check(
+  clientSource.includes("setPreview") && clientSource.includes("?${query.toString()}"),
+  "设置页为未保存的改动预演一次状态(不必先保存才看得见就绪与否)"
+);
+// 「浏览…」不再弹系统窗口(用户口径:弹窗出过好几回问题;而且这种外壳里它给不出真实路径)。
+// 一律用页面内列表 —— 所以客户端里不该再有"借文件框弹框"那条路。
+check(
+  !clientSource.includes("webkitdirectory") && !clientSource.includes('createElement("input")'),
+  "不再弹系统文件框(一律用页面内列表)"
+);
+check(
+  clientSource.includes("force.includes(entry.key)") && clientSource.includes("runDetect({ [selectKey]: option }"),
+  "换工具就去重跑检测并把那条路径**强制**跟着换(没检测到就清空)"
+);
 
 // ── 会话提示(只有本模式看得到) ──────────────────────────────────────────────
 //
-// 这一段是"五个路径真的被用起来"的落点:已就绪的路径与调用姿势原样交给 agent,
-// 未就绪的说清是没填还是填错、会跳过什么。断言的是三种状态的**措辞必须不同** ——
+// 这一段是"用户填的路径真的被用起来"的落点:已就绪的路径与调用姿势原样交给 agent,
+// 未就绪的说清是没填还是填错、以及哪些能力当前不可执行。断言的是三种状态的**措辞必须不同** ——
 // 把它们写成同一句"未配置",agent 就分不清该去填还是该去改。
 const readyText = describeEnv(prepared, probeWith(Object.values(prepared)));
 check(readyText.includes(prepared.vivadoPath), "提示里给出 Vivado 的真实路径");
@@ -314,9 +431,9 @@ check(
 check(readyText.includes("where"), "提示里写明权威来源,不让 agent 去 PATH 猜");
 
 const halfText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith([]));
-check(halfText.includes("路径不存在(C:\\vivado.bat)"), "填了但不存在:说成路径不存在(要去改)");
+check(halfText.includes("路径不可用(C:\\vivado.bat)"), "填了但用不了:说清原因(不存在,或类型不对)");
 check(halfText.includes("编译器路径:未配置"), "没填的项:说成未配置(要去填)");
-check(halfText.includes("比特流生成"), "未就绪时带上会跳过哪些步骤");
+check(halfText.includes("比特流生成"), "未就绪时带上当前不可执行的能力");
 
 const noCacheText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith(["C:\\vivado.bat"]));
 check(!noCacheText.includes("大型可再生的东西"), "缓存目录没就绪时,不提产物落盘约定(它落不下去)");
@@ -325,7 +442,7 @@ const unreadable = describeEnv(undefined, probeWith([]));
 check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设置时如实说读不到,而不是当成没配");
 
 // ── 浏览:列目录(设置页「浏览…」靠它) ──────────────────────────────────────
-const browseRoot = join(ROOT, ".tmp", "browse-fixture");
+const browseRoot = join(TMP_ROOT, `browse-fixture-${RUN_ID}`);
 mkdirSync(join(browseRoot, "subdir"), { recursive: true });
 writeFileSync(join(browseRoot, "tool.exe"), "");
 writeFileSync(join(browseRoot, "readme.txt"), "");
@@ -348,8 +465,159 @@ check(absent.entries.length === 0 && typeof absent.error === "string", "目录�
 const drives = listDirectory("");
 check(drives.entries.length > 0 && drives.entries.every((entry) => entry.kind === "directory"), "空路径列盘符(从根开始挑)");
 
+// ── 一键检测:只认厂商安装位置,PATH 命中单独标来源 ──────────────────────────
+//
+// 为什么这么设计:当年删掉的那版是**猜 PATH** —— 实测探测值指着一个已删除的目录,
+// agent 照着不存在的路径去调工具。所以:known 优先、path 标注可信度、多候选不自动选。
+const fakeEnv = { ProgramFiles: "C:\\PF", LocalAppData: "C:\\LA", PATH: "C:\\bin;C:\\old" };
+const listStub = (dirs) => (dir) => dirs[dir] ?? [];
+const detectProbe = (paths) => (path) => paths.includes(path);
+
+const knownHit = detectTools(
+  detectProbe(["C:\\modeltech64_2020.4\\win64\\vsim.exe"]),
+  listStub({ "C:\\": ["modeltech64_2020.4", "Windows"] }),
+  fakeEnv
+);
+check(
+  knownHit.some(
+    (hit) =>
+      hit.field === "simulatorPath" &&
+      hit.option === "modelsim" &&
+      hit.path === "C:\\modeltech64_2020.4\\win64\\vsim.exe" &&
+      hit.source === "known"
+  ),
+  "检测:厂商安装位置(模式展开)里的 ModelSim 命中,来源标 known"
+);
+
+const pathHit = detectTools(detectProbe(["C:\\bin\\vsim.exe"]), listStub({ "C:\\": [] }), fakeEnv);
+check(
+  pathHit.some((hit) => hit.path === "C:\\bin\\vsim.exe" && hit.source === "path"),
+  "检测:只在 PATH 上找到时照样报出来,但来源标 path(页面会写「可能是旧的」)"
+);
+
+const bothHit = detectTools(
+  detectProbe(["C:\\modeltech64_2020.4\\win64\\vsim.exe", "C:\\bin\\vsim.exe"]),
+  listStub({ "C:\\": ["modeltech64_2020.4"] }),
+  fakeEnv
+);
+const modelsimHits = bothHit.filter((hit) => hit.option === "modelsim");
+check(
+  modelsimHits.length === 1 && modelsimHits[0].source === "known",
+  "检测:有厂商安装位置命中时,不报同一工具的 PATH 命中(免得旧副本顶掉真安装)"
+);
+
+const xsimHit = detectTools(
+  detectProbe(["C:\\AMDDesignTools\\2025.2\\Vivado\\bin\\xvlog.bat"]),
+  listStub({ "C:\\": ["AMDDesignTools"], "C:\\AMDDesignTools": ["2025.2"] }),
+  fakeEnv
+);
+check(
+  xsimHit.some((hit) => hit.option === "xsim" && hit.path === "C:\\AMDDesignTools\\2025.2\\Vivado\\bin"),
+  "检测:XSim 报的是 bin 目录(那个字段本来就是目录,不是 xvlog.bat)"
+);
+
+const pwshHit = detectTools(
+  detectProbe(["C:\\PF\\PowerShell\\7\\pwsh.exe"]),
+  listStub({ "C:\\PF\\PowerShell": ["7"] }),
+  fakeEnv
+);
+check(
+  pwshHit.some(
+    (hit) => hit.field === "pwshPath" && hit.path === "C:\\PF\\PowerShell\\7\\pwsh.exe" && hit.option === "pwsh"
+  ),
+  "检测:PowerShell 7 按 %ProgramFiles% 展开找到(带选项标记,好让设置页按「不用」筛)"
+);
+
+const pythonHit = detectTools(
+  detectProbe(["C:\\PF\\Python314\\python.exe"]),
+  listStub({ "C:\\PF": ["Python314"] }),
+  fakeEnv
+);
+check(
+  pythonHit.some((hit) => hit.field === "pythonPath" && hit.path === "C:\\PF\\Python314\\python.exe"),
+  "检测:Python 3 按 Python3* 匹配到版本目录(不写死版本号)"
+);
+
+// 每个具体工具(选项里不是"其他"、也不是"不用"的)都必须在检测表里有对应项。这条守卫来自一次真实遗漏:
+// 下拉里有 Quartus、检测表里没有 —— 界面上写着"支持它",一键检测却对它无能为力。
+for (const [selectKey, pathKey] of [
+  ["compiler", "compilerPath"],
+  ["simulator", "simulatorPath"],
+  ["synthesizer", "synthesizerPath"],
+  ["pwsh", "pwshPath"],
+  ["python", "pythonPath"]
+]) {
+  const options = FIELDS.find((field) => field.key === selectKey)?.options ?? [];
+  const missing = options
+    .filter(
+      (option) =>
+        option.value !== "other" &&
+        option.value !== "none" &&
+        !DETECT_TARGETS.some((target) => target.option === option.value && target.field === pathKey)
+    )
+    .map((option) => option.value);
+  check(missing.length === 0, `${selectKey} 的每个具体工具都在检测表里(漏:${missing.join("、") || "无"})`);
+}
+
+// 每个下拉都要有「不用(本机没有这个工具)」:让用户能明确说"这台没有" —— 于是那个字段空着
+// 也不算未就绪,检测也不再反复提醒"没检测到路径"(用户口径:这样就不必一直去探有没有工具)。
+for (const key of ["compiler", "simulator", "synthesizer"]) {
+  const options = FIELDS.find((field) => field.key === key)?.options ?? [];
+  check(options.some((option) => option.value === "none"), `${key} 有「不用」选项`);
+}
+check(
+  statusOf({ compiler: "none" }).missing.includes("compilerPath") === false,
+  "选了「不用」:statusOf 的缺失清单里没有它(那是用户的决定,不是没配好)"
+);
+check(
+  describeEnv({ compiler: "none" }, probeWith([])).includes("用户已说明本机没有"),
+  "选了「不用」:提示段如实说本机没有它,而不是列进「当前不可执行」"
+);
+
+const quartus64 = detectTools(
+  detectProbe(["C:\\altera\\13.0sp1\\quartus\\bin64\\quartus_sh.exe", "C:\\altera\\13.0sp1\\quartus\\bin\\quartus_sh.exe"]),
+  listStub({ "C:\\": ["altera"], "C:\\altera": ["13.0sp1"] }),
+  fakeEnv
+);
+check(
+  quartus64.filter((hit) => hit.option === "quartus").length === 1 &&
+    quartus64.some((hit) => hit.path === "C:\\altera\\13.0sp1\\quartus\\bin64\\quartus_sh.exe"),
+  "检测:Quartus 认 altera\\<版本>\\quartus\\bin64;bin64 与 bin 同时在时只报 bin64(同一个工具不列两遍)"
+);
+
+const quartus32 = detectTools(
+  detectProbe(["C:\\altera\\13.0sp1\\quartus\\bin\\quartus_sh.exe"]),
+  listStub({ "C:\\": ["altera"], "C:\\altera": ["13.0sp1"] }),
+  fakeEnv
+);
+check(
+  quartus32.some((hit) => hit.option === "quartus" && hit.path === "C:\\altera\\13.0sp1\\quartus\\bin\\quartus_sh.exe"),
+  "检测:只有 32 位 bin 的老版本(Quartus II 13)也认(fallback 那一组)"
+);
+
+// 检测**不回声用户填的值**:已保存的设置和页面上未保存的改动可能不是一回事(用户刚换了
+// 工具还没保存)。宿主回声旧值,现象就是"换完工具点检测,报的还是我原来填的那条路径"。
+// 按当前选中的工具筛选、以及"填没填",由设置页做(它才看得到未保存的改动)。
+//
+// ⚠️ 这条断言**必须能失败**:以前它传了第 4 个"设置值"参数、而 detectTools 的签名只收
+// (probe, list, env) —— 参数被静默忽略,结果恒为 [] → 断言恒真、等于没测(审计抓到的)。
+// 现在改成"探得到就必须报出来":PATH 上的 vsim.exe 照样报(来源 path),不存在"回声"这条路。
+check(
+  detectTools(detectProbe(["C:\\bin\\vsim.exe"]), listStub({ "C:\\": [] }), fakeEnv).some(
+    (hit) => hit.field === "simulatorPath" && hit.path === "C:\\bin\\vsim.exe" && hit.source === "path"
+  ),
+  "检测只报机器上找到的(PATH 命中照样报出来)"
+);
+
+check(detectTools(detectProbe([]), listStub({}), { PATH: "" }).length === 0, "检测:什么都没有时返回空(不抛、不猜)");
+// 检测只读文件系统,不许起进程 —— 起进程会把"点一下检测"变成"可能挂住"
+check(
+  !/child_process|execSync|spawnSync|execFile/u.test(readFileSync(new URL("../lib/toolchain.js", import.meta.url), "utf8")),
+  "检测不起进程(只读文件系统)"
+);
+
 // ── 覆盖用户预设前的备份(用户的地盘不能无条件盖掉) ──────────────────────────
-const backupRoot = join(ROOT, ".tmp", `backup-check-${String(Date.now())}`);
+const backupRoot = join(TMP_ROOT, `backup-check-${RUN_ID}-${String(Date.now())}`);
 const backupSource = join(backupRoot, "source");
 const backupTarget = join(backupRoot, "user");
 mkdirSync(join(backupSource, "skills"), { recursive: true });
@@ -380,7 +648,7 @@ check(
 
 // 我们从包里删掉的文件,用户预设目录里那份要跟着删 —— 否则"删掉的技能"照样在被加载
 // (技能是从用户预设目录扫的;cpSync 只合并不删多余的)。
-const staleRoot = join(ROOT, ".tmp", `stale-check-${String(Date.now())}`);
+const staleRoot = join(TMP_ROOT, `stale-check-${RUN_ID}-${String(Date.now())}`);
 const staleSource = join(staleRoot, "source");
 const staleTarget = join(staleRoot, "user");
 mkdirSync(join(staleSource, "skills", "keep-me"), { recursive: true });
@@ -409,9 +677,41 @@ const withManifest = staleShippedFiles(staleSource, staleTarget, [...shippedBefo
 check(withManifest.includes("旧模板.sv"), "清单里记过、位于 skills/ 之外的文件按清单删");
 check(!staleShippedFiles(staleSource, staleTarget, undefined).includes("旧模板.sv"), "没有清单时不动 skills/ 之外的文件");
 
+// 用户自己往预设目录里放的东西(不在 skills/ 下的普通文件)**不参与"要不要同步"的判定** ——
+// 否则两棵树永远不一致,每次启动都重同步、重备份一遍(实测就是这么攒出一堆无用备份的)。
+const syncRoot = join(TMP_ROOT, `preset-sync-${RUN_ID}`);
+const syncSource = join(syncRoot, "source");
+const syncTarget = join(syncRoot, "user");
+mkdirSync(join(syncSource, "skills", "fpga-module-rtl"), { recursive: true });
+mkdirSync(join(syncTarget, "skills", "fpga-module-rtl"), { recursive: true });
+writeFileSync(join(syncSource, "preset.yml"), "包内那版\n");
+writeFileSync(join(syncTarget, "preset.yml"), "包内那版\n");
+writeFileSync(join(syncSource, "skills", "fpga-module-rtl", "SKILL.md"), "技能正文\n");
+writeFileSync(join(syncTarget, "skills", "fpga-module-rtl", "SKILL.md"), "技能正文\n");
+const syncManifest = listFiles(syncSource);
+check(presetSyncNeeded(syncSource, syncTarget, syncManifest) === false, "内容一致 → 不重新同步(幂等)");
+writeFileSync(join(syncTarget, "我的笔记.md"), "用户自己放的\n");
+check(
+  presetSyncNeeded(syncSource, syncTarget, syncManifest) === false,
+  "用户加的普通文件不触发重同步(第二次启动不该再同步一遍)"
+);
+check(
+  backupChangedFiles(syncSource, syncTarget, join(syncRoot, "out")) !== undefined,
+  "判定不触发同步,但真同步时用户那份仍会被备份(不会弄丢)"
+);
+writeFileSync(join(syncSource, "preset.yml"), "包内新版\n");
+check(presetSyncNeeded(syncSource, syncTarget, syncManifest) === true, "包内文件变了 → 要同步");
+writeFileSync(join(syncTarget, "preset.yml"), "包内新版\n");
+mkdirSync(join(syncTarget, "skills", "gone"), { recursive: true });
+writeFileSync(join(syncTarget, "skills", "gone", "SKILL.md"), "包内已删的旧技能\n");
+check(
+  presetSyncNeeded(syncSource, syncTarget, [...syncManifest, "skills/gone/SKILL.md"]) === true,
+  "包内已删的旧技能还在 → 要同步(否则弃用技能照样被加载)"
+);
+
 // 删完文件还要收掉空目录:只 unlink 会在用户预设里留下一串空壳技能目录(实测遇到过 9 个),
 // 列表里看着像"技能还在"。只删 skills/ 下的空目录,用户自己建的东西不碰。
-const pruneRoot = join(ROOT, ".tmp", `prune-skills-${String(Date.now())}`);
+const pruneRoot = join(TMP_ROOT, `prune-skills-${RUN_ID}-${String(Date.now())}`);
 mkdirSync(join(pruneRoot, "旧技能"), { recursive: true });
 mkdirSync(join(pruneRoot, "有内容的技能"), { recursive: true });
 writeFileSync(join(pruneRoot, "有内容的技能", "SKILL.md"), "还在用\n");
@@ -481,7 +781,9 @@ check(
   "选 XSim 时提示里换成 xvlog / xelab / xsim 三步"
 );
 check(
-  !xsimText.includes("vsim.exe") || xsimText.includes("xvlog"),
+  // 只留"不含 vsim 的命令"这一半:带上 `|| xsimText.includes("xvlog")` 会恒真 ——
+  // 那半边上面那条已经断言过了(审计抓到的恒真断言)。
+  !xsimText.includes('vsim.exe" -c -do'),
   "选了 XSim 就不会再拿 vsim 的命令糊弄"
 );
 // 换工具要跟着换命令:三条 usage 各自绑在选项上

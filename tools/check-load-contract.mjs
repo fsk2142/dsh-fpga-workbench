@@ -93,6 +93,18 @@ function findButton(node, text) {
 }
 
 /**
+ * 数一数树里有几个这样的按钮(用来断言"只有可检测的那一组有检测按钮")。
+ * @param node - createElement 的产物。
+ * @param text - 按钮文字里包含的片段。
+ * @returns 个数。
+ */
+function countButtons(node, text) {
+  if (node === null || typeof node !== "object") return 0;
+  const self = node.type === "button" && (node.children ?? []).some((child) => typeof child === "string" && child.includes(text)) ? 1 : 0;
+  return self + (node.children ?? []).reduce((sum, child) => sum + countButtons(child, text), 0);
+}
+
+/**
  * 在渲染树里找带某个 prop 的节点。
  * @param node - createElement 的产物。
  * @param predicate - 对 props 的判断。
@@ -114,7 +126,7 @@ const FILTER_BOX = (props) => typeof props.placeholder === "string" && props.pla
 /**
  * 跑一遍客户端 bundle:喂假的 window / document / fetch / react,返回它注册的那份 spec。
  *
- * 组件里会碰 document(注入样式表)与 fetch(两条路由),Node 里都没有,所以按参数注入,
+ * 组件里会碰 document(注入样式表)与 fetch(三条路由),Node 里都没有,所以按参数注入,
  * 而不是去改全局。
  * @param source - bundle 源码。
  * @param options - `{ fetch, react }` 替身。
@@ -127,8 +139,9 @@ const FILTER_BOX = (props) => typeof props.placeholder === "string" && props.pla
  */
 function createFakeDocument() {
   const stub = {
+    inputsCreated: 0,
     querySelector: () => null,
-    createElement: () => {
+    createElement: (tag) => {
       const element = {
         dataset: {},
         style: {},
@@ -139,6 +152,8 @@ function createFakeDocument() {
           element.clicked = true;
         }
       };
+      // 数一数建了几个 <input>:设置页**不该**再借文件框弹系统窗口(用户口径:别用弹窗)
+      if (tag === "input") stub.inputsCreated += 1;
       stub.lastCreated = element;
       return element;
     },
@@ -258,16 +273,22 @@ check(/export function apply/u.test(mode), "模式半侧导出 apply");
 // "渲染路径里引用了不存在的函数 / 结构写错"这类白屏问题能在重启前抓到 ——
 // 没有浏览器,这是唯一能自动验到那一层的手段。
 const fake = createFakeReact();
+/** 保存时真正提交上去的 ops(只有点「保存改动」才会往里进)。 */
 const written = [];
+/**
+ * 宿主那份值:保存被接受时会跟着变 —— 客户端就是靠**比对它**来判断存没存进去。
+ *
+ * 这里的 compilerPath 故意**不等于**浏览夹具里的那个文件:值一样时"改动"会被判成没改
+ * (改回原值就不算脏,这是设计),那样就测不到"未保存"这条路了。
+ */
+const hostValues = { compilerPath: "C:\\old\\verilator_bin.exe", simulator: "modelsim" };
+/** 模拟宿主拒收:mutate **正常结算**但值不进去(真实 SDK 就是这样:它 recover 一下就 return)。 */
+let hostAcceptsSave = true;
 const scope = {
-  store: {
-    getSnapshot: () => ({
-      status: "ready",
-      value: { compilerPath: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", simulator: "modelsim" }
-    })
-  },
-  set: (key, value) => {
-    written.push([key, value]);
+  store: { getSnapshot: () => ({ status: "ready", value: { ...hostValues } }) },
+  mutate: (ops) => {
+    written.push(...ops);
+    if (hostAcceptsSave) for (const op of ops) hostValues[op.path[0]] = op.value;
     return Promise.resolve();
   }
 };
@@ -275,9 +296,9 @@ let captured;
 let browserRequested = 0;
 const payload = {
   tools: [
-    { key: "compiler", label: "用哪个编译器", hint: "选一个", required: false, skips: [], path: "verilator", configured: true, present: true, group: "编译器", control: "select", options: [{ value: "verilator", label: "Verilator" }, { value: "other", label: "其他" }], default: "verilator" },
-    { key: "compilerPath", label: "编译器路径", hint: "填 exe", required: true, skips: ["快速 lint"], path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", configured: true, present: true, group: "编译器", control: "text", kind: "file" },
-    { key: "libraryPath", label: "库目录", hint: "填目录", required: true, skips: [], path: "", configured: false, present: false, group: "库与缓存", control: "text", kind: "directory" },
+    { key: "compiler", label: "用哪个编译器", hint: "选一个", required: false, skips: [], path: "verilator", configured: true, present: true, group: "编译器", control: "select", options: [{ value: "verilator", label: "Verilator", needs: "compilerPath" }, { value: "other", label: "其他", needs: "compilerPath" }, { value: "ghost", label: "没装的工具", needs: "compilerPath" }], default: "verilator", detectable: true },
+    { key: "compilerPath", label: "编译器路径", hint: "填 exe", required: true, skips: ["快速 lint"], path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", configured: true, present: true, group: "编译器", control: "text", kind: "file", detectable: true },
+    { key: "libraryPath", label: "库目录", hint: "填目录", required: true, skips: [], path: "", configured: false, present: false, group: "库与缓存", control: "text", kind: "directory", detectable: false },
     { key: "verilatorPath", label: "旧键里的路径", hint: "", required: false, skips: [], path: "", configured: false, present: false, group: "旧键", control: "hidden" }
   ],
   missing: ["libraryPath"],
@@ -292,12 +313,27 @@ const browsePayload = {
   ],
   truncated: false
 };
+/** 检测路由的答复:换工具时要靠它把路径一起换掉(也顺带覆盖检测结果那一块的渲染)。 */
+const detectPayload = {
+  found: [
+    { field: "compilerPath", option: "verilator", label: "Verilator", path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", source: "known" },
+    { field: "compilerPath", option: "other", label: "Icarus Verilog", path: "C:\\iverilog\\bin\\iverilog.exe", source: "known" }
+  ]
+};
+let detectRequested = 0;
+/** 状态路由带查询串的请求次数 = 客户端为"未保存的改动"预演了几次状态。 */
+let previewRequested = 0;
 const fetchStub = (url) => {
   const target = String(url);
   if (target.includes("/browse")) {
     browserRequested += 1;
     return Promise.resolve({ ok: true, json: () => Promise.resolve(browsePayload) });
   }
+  if (target.includes("/detect")) {
+    detectRequested += 1;
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(detectPayload) });
+  }
+  if (target.includes("?")) previewRequested += 1;
   return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
 };
 const doc = createFakeDocument();
@@ -346,6 +382,25 @@ for (const expected of ["用哪个编译器", "编译器路径", "库目录", "�
 check(!rendered.includes("旧键里的路径"), "隐藏字段没有被渲染出来");
 check(browserRequested === 0, "没点「浏览…」时不会去请求接口(不白跑)");
 
+// 检测不再靠按钮:打开页面就自动跑一次(结论写在字段行下面),所以页面里不该有检测按钮
+check(
+  countButtons(secondTree, "检测本组工具") === 0,
+  `页面里没有「检测本组工具」按钮(实际 ${countButtons(secondTree, "检测本组工具")} 个)`
+);
+
+// 保存栏在**最后**(用户口径),不在顶部
+const rootKids = (secondTree?.children ?? []).filter((kid) => kid !== null && typeof kid === "object");
+const footIndex = rootKids.findIndex((kid) => kid?.props?.className === "fpga-set-foot");
+const lastRowIndex = rootKids.map((kid) => kid?.props?.className).lastIndexOf("fpga-set-row");
+check(
+  lastRowIndex !== -1 && footIndex > lastRowIndex,
+  `保存栏在最后一行字段之后(实际 foot=${footIndex} / 最后一行=${lastRowIndex})`
+);
+check(
+  findButton(findByProp(secondTree, (props) => props.className === "fpga-set-head"), "保存改动") === undefined,
+  "保存按钮不在顶部(顶部只有标题)"
+);
+
 // 点「浏览…」:列目录 → 面板出现(带过滤框)
 let browsing;
 try {
@@ -379,72 +434,149 @@ try {
   check(!filteredText.includes("📁 mingw64"), "过滤把不匹配的项去掉(只剩一项才好回车)");
   written.length = 0;
   findByProp(filtered, FILTER_BOX).props.onKeyDown({ key: "Enter" });
+  fake.reset();
+  const picked = captured();
   check(
-    written.some(([key, value]) => key === "compilerPath" && value === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe"),
-    "过滤到唯一一项后回车直接选中并写进设置",
+    findByProp(picked, (props) => props.value === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe") !== undefined,
+    "过滤到唯一一项后回车:选中的值出现在输入框里"
+  );
+  check(written.length === 0, "回车选中**不立刻写设置**(改动先留在页面上)");
+  check(JSON.stringify(picked ?? {}).includes("有未保存的改动"), "回车选中后出现「有未保存的改动」");
+
+  // 点「保存改动」:一次原子提交;宿主接受后未保存标记消失
+  written.length = 0;
+  findButton(picked, "保存改动").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  check(
+    written.length === 1 &&
+      written[0].op === "set" &&
+      written[0].path[0] === "compilerPath" &&
+      written[0].value === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe",
+    "点保存:一次 mutate 提交那个字段(不是逐字段写)",
     JSON.stringify(written)
   );
+  fake.reset();
+  const saved = captured();
+  check(!JSON.stringify(saved ?? {}).includes("有未保存的改动"), "宿主接受后未保存标记消失");
+
+  // 宿主拒收:mutate 正常结算但值没进去 —— 只能靠**比对结果**发现,而且改动必须留着。
+  // (这条替换掉了原来那条源码断言:"保存失败要看得见"必须真渲染出来才算数。)
+  hostAcceptsSave = false;
+  findByProp(saved, (props) => props.value === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe").props.onChange({
+    target: { value: "D:\\alt\\verilator_bin.exe" }
+  });
+  fake.reset();
+  findButton(captured(), "保存改动").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  const rejected = captured();
+  const rejectedText = JSON.stringify(rejected ?? {});
+  check(rejectedText.includes("没有确认这次改动生效"), "宿主没接受时如实说没确认(不能假装成功)");
+  check(rejectedText.includes("有未保存的改动"), "保存没成功时改动仍然留着");
+  check(
+    findByProp(rejected, (props) => props.value === "D:\\alt\\verilator_bin.exe") !== undefined,
+    "保存没成功时输入框里还是用户改的那份"
+  );
+
+  // 放弃改动:回到宿主那份值
+  findButton(rejected, "放弃改动").props.onClick();
+  fake.reset();
+  const discarded = captured();
+  check(!JSON.stringify(discarded ?? {}).includes("有未保存的改动"), "点「放弃改动」后未保存标记消失");
+  check(
+    findByProp(discarded, (props) => props.value === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe") !== undefined,
+    "放弃改动后输入框回到宿主那份值"
+  );
+  hostAcceptsSave = true;
 } catch (error) {
   check(false, "过滤与回车能选中", String(error));
 }
 
-// 「浏览…」按外壳分流:桌面壳直接弹系统窗口(一步到位),普通浏览器直接给列表(不弹没用的窗口)。
-// 上面那几步是在普通浏览器(UA 空)下走的 —— 正好覆盖了后一半。
+// 换工具 → 它管着的那条路径**强制**跟着换(有就换成它的,没检测到就清空);检测不用按钮。
 try {
-  check(browserRequested > 0, "普通浏览器:点「浏览…」直接给页面内列表");
-  check(doc.lastCreated?.type !== "file", "普通浏览器:不去开注定拿不到路径的系统窗口");
+  written.length = 0;
+  fake.reset();
+  const selectNode = findByProp(captured(), (props) => props.value === "verilator");
+  check(selectNode !== undefined, "找得到「用哪个编译器」下拉");
+  selectNode.props.onChange({ target: { value: "other" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  const switched = captured();
+  check(detectRequested > 0, "换工具时问了一次检测接口(去拿那个工具的路径)");
+  check(
+    findByProp(switched, (props) => props.value === "C:\\iverilog\\bin\\iverilog.exe") !== undefined,
+    "换工具:路径自动换成那个工具的(检测到的)"
+  );
+  check(written.length === 0, "换工具也只是记进未保存区(不立刻写设置)");
 
-  // 切到桌面壳
-  nav.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DSH/1.0 Electron/28.0.0 Chrome/120.0 Safari/537.36";
+  // 换到**没装**的工具:路径必须清空 —— 留着上一个工具的路径会造出"框里是 A、下拉是 B、
+  // 状态还显示已就绪"的自相矛盾画面(用户实际反馈过这一条)。
+  fake.reset();
+  findByProp(captured(), (props) => props.value === "other").props.onChange({ target: { value: "ghost" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  const cleared = captured();
+  const clearedRow = findByProp(cleared, (props) => props.key === "compilerPath");
+  const clearedInput = findByProp(clearedRow, (props) => props.type === "text" && typeof props.onChange === "function");
+  check(
+    clearedInput?.props.value === "",
+    `换到没装的工具:路径被清空(实际 ${JSON.stringify(clearedInput?.props.value)})`
+  );
+  check(JSON.stringify(cleared ?? {}).includes("没检测到"), "换到没装的工具:那一行下面说明没检测到");
+} catch (error) {
+  check(false, "换工具时路径联动能走通", String(error));
+}
+
+// 检测结论只报**当前选中的工具**的路径:**换工具时**自动重跑(没有检测按钮),
+// 不回声原来那条,也不拿别的工具来答话。
+try {
+  // 换到「其他(Icarus Verilog)」:那一栏跟着换成它的(forced),结论也只报它
+  fake.reset();
+  findByProp(captured(), (props) => props.value === "ghost").props.onChange({ target: { value: "other" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  const switchedToOther = captured();
+  const otherText = JSON.stringify(switchedToOther ?? {});
+  check(otherText.includes("iverilog.exe"), "换成 Icarus Verilog:那一栏换成它的路径");
+  check(!otherText.includes("verilator_bin.exe"), "不拿别的工具(Verilator)的路径来答话");
+  check(!otherText.includes("没检测到"), "找到了就说找到了(不该同时说没检测到)");
+  check(
+    findByProp(
+      findByProp(switchedToOther, (props) => props.key === "compilerPath"),
+      (props) => props.value === "C:\\iverilog\\bin\\iverilog.exe"
+    ) !== undefined,
+    "输入框里就是新工具那条路径"
+  );
+
+  // 未保存的改动要能"预演"状态:带上页面上的值问一次宿主,于是**不必先保存**就看到就绪与否
+  // (防抖 250ms,所以这里等一拍)
+  fake.reset();
+  captured();
+  fake.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  check(previewRequested > 0, `未保存的改动预演了一次状态(实际 ${previewRequested} 次)`);
+} catch (error) {
+  check(false, "检测按选中的工具筛能走通", String(error));
+}
+
+// 「浏览…」**一律给页面内列表,不弹系统窗口**(用户口径:弹窗出过好几回问题;而且实测在这种
+// 外壳里系统框给不出真实路径)。所以:点它只去列目录,**永远不建 `<input type="file">`**。
+try {
+  check(browserRequested > 0, "点「浏览…」直接给页面内列表");
+  check(doc.inputsCreated === 0, `不弹系统文件框(实际建了 ${doc.inputsCreated} 个 input)`);
   const requestsBefore = browserRequested;
   fake.reset();
   findButton(captured(), "浏览…").props.onClick();
-  const input = doc.lastCreated;
-  check(input?.type === "file" && input.clicked === true, "桌面壳:点「浏览…」直接弹系统文件框(一步到位)");
-  check(browserRequested === requestsBefore, "桌面壳:不再先给列表");
-
-  // 1) 桌面壳 + 真路径 → 写入设置
-  written.length = 0;
-  input.files = [{ name: "vivado.bat", path: "D:\\Xilinx\\bin\\vivado.bat" }];
-  input.onchange();
-  check(
-    written.some(([key, value]) => key === "compilerPath" && value === "D:\\Xilinx\\bin\\vivado.bat"),
-    "桌面壳:拿到完整路径就直接写入设置",
-    JSON.stringify(written)
-  );
-
-  // 2) 目录字段 → 借文件夹选择框,取的是**所在目录**
-  written.length = 0;
-  fake.reset();
-  const libraryRow = findByProp(captured(), (props) => props.key === "libraryPath");
-  check(libraryRow !== undefined, "找得到「库目录」那一行");
-  findButton(libraryRow, "浏览…").props.onClick();
-  const dirInput = doc.lastCreated;
-  check(dirInput?.webkitdirectory === true, "目录字段借的是文件夹选择框");
-  dirInput.files = [{ name: "a.v", path: "C:\\Work\\ModelsimLibrary\\work_lib\\a.v" }];
-  dirInput.onchange();
-  check(
-    written.some(([key, value]) => key === "libraryPath" && value === "C:\\Work\\ModelsimLibrary\\work_lib"),
-    "目录字段取的是所在目录",
-    JSON.stringify(written)
-  );
-
-  // 3) 拿不到完整路径(假路径)→ 一个字节都不写,自动退回列表并说明
-  written.length = 0;
-  fake.reset();
-  const compilerRow = findByProp(captured(), (props) => props.key === "compilerPath");
-  findButton(compilerRow, "浏览…").props.onClick();
-  const fakeInput = doc.lastCreated;
-  fakeInput.files = [{ name: "vivado.bat", path: "C:\\fakepath\\vivado.bat" }];
-  const requestsBeforeFallback = browserRequested;
-  fakeInput.onchange();
+  check(doc.inputsCreated === 0, "换外壳(带 Electron 的 UA)也一样:不再弹框");
+  check(browserRequested === requestsBefore + 1, "仍然是去列目录");
   await new Promise((resolve) => setImmediate(resolve));
-  check(written.length === 0, "拿不到完整路径时绝不写入假路径");
-  check(browserRequested === requestsBeforeFallback + 1, "拿不到路径时自动退回页面内列表");
   fake.reset();
-  check(JSON.stringify(captured() ?? {}).includes("没给出完整路径"), "退回时如实说明原因");
+  check(
+    JSON.stringify(captured() ?? {}).includes("点一下"),
+    "列表打开时说明怎么选(点一下文件 / 过滤后回车 / 直接粘路径)"
+  );
 } catch (error) {
-  check(false, "「浏览…」按外壳分流能走通", String(error));
+  check(false, "「浏览…」只走页面内列表能走通", String(error));
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

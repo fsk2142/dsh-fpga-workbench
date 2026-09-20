@@ -292,6 +292,18 @@ for (const skill of projectSkills) {
   const wrongModuleArg = /module-(?:rtl-check|verif-new|verif-wave|synth-new|rtl-new)\.mjs"?\s*<?工作区根/u.test(text);
   check(!wrongModuleArg, `${skill} 没有把工作区根当 module 命令的参数`);
 }
+// 厂商命令的选项要**查过命令帮助**才能写。踩过一次:board 技能写了
+// `program_hw_devices -verify` —— Vivado 2025.2 的 program_hw_devices 根本没有这个选项
+// (verify_hw_devices 是给 eFUSE 器件做掩码比对的,不是通用回读)。
+// 所以这里钉一条:那条不存在的写法不许再出现在任何技能里。
+for (const skill of skillNames) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  // 允许在同一行里**否定**它(说明"没有这个选项"),所以要求它不出现在肯定语境里:
+  // 出现的行若带"没有/不是/错"等否定词,视为纠正性说明,放行。
+  const lines = text.split("\n").filter((line) => /program_hw_devices\s+-verify/u.test(line));
+  const wrong = lines.filter((line) => !/没有|不是|错的|不存在/u.test(line));
+  check(wrong.length === 0, `${skill} 没有写不存在的 program_hw_devices -verify 选项`);
+}
 
 // ── fpga-module-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
 //

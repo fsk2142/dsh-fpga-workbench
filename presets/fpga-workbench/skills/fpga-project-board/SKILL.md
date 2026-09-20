@@ -32,8 +32,13 @@ set_property PROGRAM.FILE {<bit 路径>} [current_hw_device]
 program_hw_devices [current_hw_device]
 ```
 
-- **加 `-verify` 跑一次**(`program_hw_devices -verify`)—— 它能抓出配置数据传输出错,
-  避免把传输问题当作逻辑问题排查
+- **确认下载成功**,别只看命令没报错:
+  - `program_hw_devices` 的输出与器件的 `DONE` 状态(下载后会置起)
+  - 要真做**配置回读**用独立命令 `readback_hw_device -force -file <回读文件> [current_hw_device]`,
+    再把回读数据与 bit 比对 —— 这才是"抓配置传输错误"的手段
+- **不存在的写法别用**:`program_hw_devices` **没有 `-verify` 选项**;`verify_hw_devices` 是
+  给 **eFUSE 加密器件**做密钥/掩码比对的,不是通用回读校验。这两条是查 Vivado 2025.2 的
+  命令帮助核实的(踩过一次:技能里曾写 `program_hw_devices -verify`,那是错的)
 - 抓到的内部信号要在**波形窗口**细看时,与模块级同一条路:`module-verif-wave.mjs`(加载对应
   设计、加好波形、停在 0 时刻由人操作)
 
@@ -73,7 +78,7 @@ write_cfgmem -force -format MCS -size <容量MB> -interface <SPIx4|BPIx16> \
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)
 
 - 结论 + 板子与器件型号 + bit 文件路径(哪一次实现出的)
-- 下载命令原文(含 `-verify` 结果)
+- 下载命令原文 + 成功依据(DONE 状态 / 回读文件路径)
 - ILA/VIO:抓了什么信号、触发条件、波形文件路径、看到了什么
 - 实测数据:回读的数据文件 + 与 golden 的比对结论(不一致时以比对结果为准)
 - 人工观察项与结论,标明是人工

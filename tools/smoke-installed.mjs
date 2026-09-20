@@ -36,7 +36,6 @@ if (host !== undefined) {
   check(typeof host.apply === "function", "导出 apply");
   check(host.SettingsSchema !== undefined, "导出 SettingsSchema(宿主注册设置命名空间要用)");
   check(typeof host.statusOf === "function", "导出 statusOf(设置页字段定义靠它)");
-  check(typeof host.ensureCacheDir === "function", "导出 ensureCacheDir");
 }
 
 // ── 2. 模式半侧:同样 import 得动 ───────────────────────────────────────────
@@ -66,7 +65,7 @@ try {
 if (host !== undefined) {
   try {
     const payload = host.statusOf(values);
-    check(payload.tools.length === 17, `设置页载荷含 17 个可见字段(实际 ${payload.tools.length})`);
+    check(payload.tools.length === 16, `设置页载荷含 16 个可见字段(实际 ${payload.tools.length})`);
     check(payload.tools.every((tool) => tool.group && tool.control), "每个字段都带分组与控件类型");
     check(payload.tools.every((tool) => tool.control !== "hidden"), "载荷里没有隐藏字段(改名前的旧键不发给设置页)");
     check(payload.tools.filter((tool) => tool.control === "select").every((tool) => tool.options.length > 1), "下拉字段带选项");

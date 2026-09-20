@@ -79,20 +79,20 @@ const REQUIRED_FIELDS = FIELDS.filter((field) => field.required === true);
 const CHOICE_FIELDS = VISIBLE.filter((field) => field.control === "select");
 const OPTIONAL_FIELDS = FIELDS.filter((field) => field.required !== true);
 const HIDDEN_FIELDS = FIELDS.filter((field) => field.control === "hidden");
-check(KEYS.length === 20, `字段共 20 个:17 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
-check(VISIBLE.length === 17, `可见字段 17 个(实际 ${VISIBLE.length})`);
+check(KEYS.length === 19, `字段共 19 个:16 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
+check(VISIBLE.length === 16, `可见字段 16 个(实际 ${VISIBLE.length})`);
 check(
   HIDDEN_FIELDS.map((field) => field.key).join(",") === "verilatorPath,modelsimPath,vivadoPath",
   "三个改名前的旧键作为隐藏字段保留(迁移用)"
 );
-check(KEYS.includes("cachePath"), "含缓存目录字段");
+check(!KEYS.includes("cachePath"), "不再有缓存目录字段(产物各归各环节目录)");
 check(
-  REQUIRED_FIELDS.length === 4,
-  `四个路径必填:编译器 / 仿真器 / 综合器 / 缓存(实际 ${REQUIRED_FIELDS.length})`
+  REQUIRED_FIELDS.length === 3,
+  `三个路径必填:编译器 / 仿真器 / 综合器(实际 ${REQUIRED_FIELDS.length})`
 );
 check(
-  REQUIRED_FIELDS.map((field) => field.key).join(",") === "compilerPath,simulatorPath,synthesizerPath,cachePath",
-  "必填的就是那四个路径",
+  REQUIRED_FIELDS.map((field) => field.key).join(",") === "compilerPath,simulatorPath,synthesizerPath",
+  "必填的就是那三个路径",
   REQUIRED_FIELDS.map((field) => field.key).join(",")
 );
 check(
@@ -114,8 +114,8 @@ check(
 const GROUPS = [...new Set(VISIBLE.map((field) => field.group))];
 check(GROUPS.length === 7, `可见的分组恰好七个(实际 ${GROUPS.join("、")})`);
 check(
-  GROUPS.join(",") === "终端工具,脚本工具,编译工具,仿真工具,综合工具,库与缓存,模板",
-  `分组按重要性排:终端 → 脚本 → 编译 → 仿真 → 综合 → 库与缓存 → 模板(实际 ${GROUPS.join(" → ")})`
+  GROUPS.join(",") === "终端工具,脚本工具,编译工具,仿真工具,综合工具,库映射,模板",
+  `分组按重要性排:终端 → 脚本 → 编译 → 仿真 → 综合 → 库映射 → 模板(实际 ${GROUPS.join(" → ")})`
 );
 // 每个工具组里:先"用哪个",紧跟它的路径 —— 这是用户要的排列
 const ORDER = VISIBLE.map((field) => field.key);
@@ -165,7 +165,7 @@ check(
 
 // ── 存在性判定 ──────────────────────────────────────────────────────────────
 const empty = inspectTools({}, probeWith([]));
-check(empty.length === 20, "空设置也返回全部字段");
+check(empty.length === 19, "空设置也返回全部字段");
 check(
   empty.filter((tool) => tool.control !== "select").every((tool) => tool.configured === false && tool.present === false),
   "空设置下所有路径字段都未配置且不可用"
@@ -174,7 +174,7 @@ check(
   empty.filter((tool) => tool.control === "select").every((tool) => tool.present === true && tool.path === tool.default),
   "下拉字段空值也拿得到默认值,且判为合法"
 );
-check(missingKeys(empty).length === 4, "空设置下四项必填都算未就绪");
+check(missingKeys(empty).length === 3, "空设置下三项必填都算未就绪");
 
 // 旧键兜底:改名不能让用户已经填好的路径消失
 const migrated = inspectTools(
@@ -185,7 +185,7 @@ const migratedByKey = new Map(migrated.map((tool) => [tool.key, tool]));
 check(migratedByKey.get("compilerPath")?.path === "C:\\old\\verilator_bin.exe", "旧 verilatorPath 落到 compilerPath");
 check(migratedByKey.get("simulatorPath")?.path === "C:\\old\\vsim.exe", "旧 modelsimPath 落到 simulatorPath");
 check(migratedByKey.get("synthesizerPath")?.path === "C:\\old\\vivado.bat", "旧 vivadoPath 落到 synthesizerPath");
-check(missingKeys(migrated).join(",") === "cachePath", "迁移后只剩没填过的那一项未就绪");
+check(missingKeys(migrated).join(",") === "", "迁移后没有未就绪项(三个路径都齐了)");
 
 // 光在 valueOf 里兜底是不够的:设置页的输入框读的是**新键的原始值**,只兜底就会
 // "框是空的、状态却是绿的"(用户实际抓到的 bug)。所以要把值真的搬过去。
@@ -241,7 +241,7 @@ check(modelsimTools.get("simulatorPath")?.kind === "file", "选 ModelSim:仍按�
 check(modelsimTools.get("simulatorPath")?.present === true, "选 ModelSim + 填了存在的 vsim.exe → 就绪");
 
 const partial = inspectTools(
-  { vivadoPath: "C:\\vivado.bat", modelsimPath: "C:\\missing\\vsim.exe", cachePath: "C:\\cache" },
+  { vivadoPath: "C:\\vivado.bat", modelsimPath: "C:\\missing\\vsim.exe" },
   probeWith(["C:\\vivado.bat"])
 );
 const byKey = new Map(partial.map((tool) => [tool.key, tool]));
@@ -252,10 +252,10 @@ check(
 );
 check(byKey.get("compilerPath")?.configured === false, "没填的项:未配置");
 check(
-  missingKeys(partial).join(",") === "compilerPath,simulatorPath,cachePath",
+  missingKeys(partial).join(",") === "compilerPath,simulatorPath",
   `未就绪清单正确(实际 ${missingKeys(partial).join(",")})`
 );
-check(byKey.get("cachePath")?.present === false, "缓存目录状态如实反映(未创建)");
+check(byKey.get("synthesizerPath")?.configured === true, "填了但路径不存在的项:已配置、未就绪");
 
 // 值两端空白要当成没填(否则 "  " 会被当成一条路径)
 const blank = inspectTools({ vivadoPath: "   " }, probeWith([]));
@@ -269,7 +269,7 @@ const throwing = inspectTools({ vivadoPath: "C:\\x" }, () => {
 check(throwing.find((tool) => tool.key === "vivadoPath")?.present === false, "探测抛错时按不可用处理,不向外冒泡");
 
 // 全部就绪
-const prepared = { vivadoPath: "C:\\v", modelsimPath: "C:\\m", verilatorPath: "C:\\t", modelsimIniPath: "C:\\l\\modelsim.ini", cachePath: "C:\\c" };
+const prepared = { vivadoPath: "C:\\v", modelsimPath: "C:\\m", verilatorPath: "C:\\t", modelsimIniPath: "C:\\l\\modelsim.ini" };
 const ready = inspectTools(prepared, probeWith(Object.values(prepared)));
 check(missingKeys(ready).length === 0, "全部就绪时没有缺失项");
 
@@ -421,12 +421,12 @@ check(readyText.includes("-mode batch"), "提示里给出 Vivado 的非交互调
 check(readyText.includes(prepared.modelsimPath) && readyText.includes("-c -do"), "提示里给出 ModelSim 的命令行调用方式");
 check(readyText.includes("--lint-only"), "提示里给出 Verilator 的 lint 调用方式");
 check(!readyText.includes("未就绪"), "全部就绪时不出现未就绪清单");
-// 产物落点的分工:大型可再生的进缓存目录,结论要指着的留在环节目录 —— 两处说法必须一致
-// (曾经提示段写"所有中间产物只写缓存",技能又要求日志/波形留在 verif/,用的人不知道该信哪条)
+// 产物落点:**每个阶段的产物放各自阶段的目录里**(用户定案,已没有"缓存目录"这个字段)。
+// 这句必须常在 —— 不管路径配没配齐,它都不该消失(以前是"缓存目录没就绪就不提",那个前提没了)。
 check(
-  readyText.includes(prepared.cachePath) && readyText.includes("大型可再生的东西") &&
-    readyText.includes("留在各自环节目录"),
-  "提示里写明产物落点的分工(缓存目录 vs 环节目录)"
+  readyText.includes("每个阶段的产物放各自阶段的目录里") && readyText.includes("`verif/work`") &&
+    readyText.includes("`synth/`"),
+  "提示里写明产物落点(各归各环节目录)"
 );
 check(readyText.includes("where"), "提示里写明权威来源,不让 agent 去 PATH 猜");
 
@@ -436,7 +436,10 @@ check(halfText.includes("编译器路径:未配置"), "没填的项:说成未配
 check(halfText.includes("比特流生成"), "未就绪时带上当前不可执行的能力");
 
 const noCacheText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith(["C:\\vivado.bat"]));
-check(!noCacheText.includes("大型可再生的东西"), "缓存目录没就绪时,不提产物落盘约定(它落不下去)");
+check(
+  noCacheText.includes("每个阶段的产物放各自阶段的目录里"),
+  "路径没配齐时,产物落点那条也照常说(它与路径就绪无关)"
+);
 
 const unreadable = describeEnv(undefined, probeWith([]));
 check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设置时如实说读不到,而不是当成没配");

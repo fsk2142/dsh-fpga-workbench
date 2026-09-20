@@ -109,7 +109,10 @@ node "<自带命令目录>\module\module-rtl-new.mjs" <模块根> <模块名> --
 - 拆了子模块就**多个文件**:被例化的在前,按层级自底向上排(与仿真那节同一条)——
   顺序错了会报"找不到模块",那不是代码写错
 - 报 `module not found`、而该模块来自 IP(只有 `.xci` 或加密模型,没有可检查的 HDL)属正常现象:
-  把该 IP 的端口 wrapper 一并传入,或临时生成只含端口的黑盒 stub 加入命令行。
+  把该 IP 的端口 wrapper 一并传入,或**优先用 IP 自带的 `*_stub.v`**(就在 `rtl/ip/` 下,原地不动)。
+  确实没有自带的那份、必须生成时,**生成物也要落回该 IP 目录下**
+  (`rtl/ip/<ip名>/<ip名>_stub.v`,用脚本生成即可,例如 `write_verilog -mode synth_stub`),
+  **不许放到别处** —— 仿真的 `run.do` 只跳过 `rtl/ip/` 下的 `*_stub.*`,放到别处就会和真模型同名打架。
   **不得为通过检查而改动端口**
 - 告警须清零;确需压制时在源码内**就地豁免**(`/* verilator lint_off XXX */` …
   `/* verilator lint_on XXX */`)并注明原因。**禁止用 `-Wno-XXX` 全局屏蔽**

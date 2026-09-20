@@ -36,6 +36,10 @@ const manifest = JSON.parse(read("package.json"));
  * 只实现设置页用到的那几个 hook:useState 存值(所以第二遍渲染能看到第一遍设的状态)、
  * useEffect 收集起来由调用方决定何时执行、createElement 返回可遍历的普通对象
  * (于是能在渲染树里找到某个按钮并"点"它)。
+ *
+ * **盲区(如实记下,不打算修)**:这个替身**不执行 useEffect 返回的清理函数**,所以客户端那处
+ * 250ms 防抖的 `clearTimeout` 不会生效(旧定时器照跑)。下面那些"等 400ms"是用墙钟时间凑合出来的,
+ * 也就是说**防抖本身没被验证**,只验证了"延迟之后确实问了一次状态"。
  * @returns `{ react, reset, runEffects, tree }`。
  */
 function createFakeReact() {
@@ -298,10 +302,14 @@ const payload = {
   tools: [
     { key: "compiler", label: "用哪个编译器", hint: "选一个", required: false, skips: [], path: "verilator", configured: true, present: true, group: "编译器", control: "select", options: [{ value: "verilator", label: "Verilator", needs: "compilerPath" }, { value: "other", label: "其他", needs: "compilerPath" }, { value: "ghost", label: "没装的工具", needs: "compilerPath" }], default: "verilator", detectable: true },
     { key: "compilerPath", label: "编译器路径", hint: "填 exe", required: true, skips: ["快速 lint"], path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", configured: true, present: true, group: "编译器", control: "text", kind: "file", detectable: true },
-    { key: "libraryPath", label: "库目录", hint: "填目录", required: true, skips: [], path: "", configured: false, present: false, group: "库与缓存", control: "text", kind: "directory", detectable: false },
+    // 目录字段的样本:key / 标签 / 组名照 lib/toolchain.js 的 FIELDS 写(`simulatorPath` 在「仿真工具」组)。
+    // 为什么这里必须有一个 kind=directory 的字段:选 XSim 时这个字段填的是 Vivado 的 bin **目录**
+    // (kind 挂在选项上,见 toolchain.js 的 SIMULATORS.xsim),所以目录分支在真实使用中可达,
+    // 「用这个目录」那条路要继续被测到。detectable 是假值:夹具里没有管它的 `simulator` 下拉。
+    { key: "simulatorPath", label: "仿真器路径", hint: "填目录", required: true, skips: [], path: "", configured: false, present: false, group: "仿真工具", control: "text", kind: "directory", detectable: false },
     { key: "verilatorPath", label: "旧键里的路径", hint: "", required: false, skips: [], path: "", configured: false, present: false, group: "旧键", control: "hidden" }
   ],
-  missing: ["libraryPath"],
+  missing: ["simulatorPath"],
   ok: false
 };
 const browsePayload = {
@@ -375,8 +383,20 @@ try {
 }
 
 check(firstTree !== undefined && secondTree !== undefined, "设置页两次渲染都没抛异常(第二遍带字段)");
+
+// 打开设置页自动检测一次(结论写在字段那一行下面)。上面两遍渲染各只跑了一轮 effects,而**第一遍**
+// 跑的时候字段还是空的 —— 检测函数遇到 `fields.length === 0` 直接 return,于是这条路径到这里
+// 还没被真正执行过。这里在"字段已就绪"之后补跑一轮:检测请求确实发出去了才算数。
+const detectBeforeAuto = detectRequested;
+fake.runEffects();
+await new Promise((resolve) => setImmediate(resolve));
+check(
+  detectRequested > detectBeforeAuto,
+  `字段就绪后打开页面自动检测了一次(实际发出 ${detectRequested - detectBeforeAuto} 次检测请求)`
+);
+
 const rendered = JSON.stringify(secondTree ?? {});
-for (const expected of ["用哪个编译器", "编译器路径", "库目录", "浏览…", "已就绪", "未就绪"]) {
+for (const expected of ["用哪个编译器", "编译器路径", "仿真器路径", "浏览…", "已就绪", "未就绪"]) {
   check(rendered.includes(expected), `渲染结果里出现「${expected}」`);
 }
 check(!rendered.includes("旧键里的路径"), "隐藏字段没有被渲染出来");
@@ -413,7 +433,10 @@ try {
   browsing = captured();
   const browseRendered = JSON.stringify(browsing ?? {});
   check(browseRendered.includes("verilator_bin.exe"), "浏览面板列出目录里的文件");
-  check(browseRendered.includes("用这个目录"), "浏览面板提供「用这个目录」(XSim 那种要目录的路径)");
+  // 「用这个目录」只该给**要目录**的字段:这里开的是**文件**字段(编译器路径),点了它会把当前
+  // 目录填进本该填 verilator_bin.exe 的框里。目录字段那一份在文件末尾单独验。
+  // 按**按钮**判,不按字符串判 —— 目录字段的说明文字里也有「用这个目录」这几个字。
+  check(findButton(browsing, "用这个目录") === undefined, "文件字段(编译器路径)的面板里没有「用这个目录」按钮");
   check(browseRendered.includes("↑ 上级"), "浏览面板能回上级目录");
   check(
     findByProp(browsing, FILTER_BOX) !== undefined,
@@ -577,6 +600,25 @@ try {
   );
 } catch (error) {
   check(false, "「浏览…」只走页面内列表能走通", String(error));
+}
+
+// 「用这个目录」在**目录字段**上还要有(上面验的是文件字段没有它):XSim 那种要目录的路径,
+// 没有这个按钮就只能一层层钻到底再手打一遍。按字段行取按钮,不靠"树里第几个"。
+try {
+  fake.reset();
+  const dirBrowse = findButton(findByProp(captured(), (props) => props.key === "simulatorPath"), "浏览…");
+  check(dirBrowse !== undefined, "目录字段(仿真器路径)那一行有自己的「浏览…」");
+  if (dirBrowse !== undefined) {
+    dirBrowse.props.onClick();
+    await new Promise((resolve) => setImmediate(resolve));
+    fake.reset();
+    check(
+      findButton(captured(), "用这个目录") !== undefined,
+      "目录字段的面板里有「用这个目录」按钮(XSim 那种要目录的路径)"
+    );
+  }
+} catch (error) {
+  check(false, "目录字段的浏览面板能渲染", String(error));
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

@@ -36,6 +36,15 @@ module <ModuleName> # (
                 localparam int unsigned                             ADDR_W  =   $clog2(DEPTH);
 
 //==================================================================================//
+//    Registers                                                                     //
+//==================================================================================//
+// TODO: replace with module-specific registers / internal signals
+                logic   [ADDR_W-1:0]                                rd_ptr_q;
+                logic   [ADDR_W-1:0]                                wr_ptr_q;
+                logic   [PIXEL_W-1:0]                               din_q;
+                state_t                                             state_q;
+
+//==================================================================================//
 //    Types                                                                         //
 //==================================================================================//
 // TODO: replace with module-specific typedef / FSM states
@@ -44,15 +53,6 @@ module <ModuleName> # (
                     ST_RUN,
                     ST_DONE
                 } state_t;
-
-//==================================================================================//
-//    Registers                                                                     //
-//==================================================================================//
-// TODO: replace with module-specific registers / internal signals
-                logic   [ADDR_W-1:0]                                rd_ptr_q;
-                logic   [ADDR_W-1:0]                                wr_ptr_q;
-                logic   [PIXEL_W-1:0]                               din_q;
-                state_t                                             state_q;
 
 //==================================================================================//
 //    Combinational Logic                                                           //

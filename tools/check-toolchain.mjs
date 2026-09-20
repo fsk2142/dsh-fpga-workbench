@@ -429,11 +429,32 @@ check(
   "提示里写明产物落点(各归各环节目录)"
 );
 check(readyText.includes("where"), "提示里写明权威来源,不让 agent 去 PATH 猜");
+// 可选项里"配了就该让 agent 看见"的三个(两个运行时 + 库映射文件):它们不在 required 里,
+// 以前一个字都不提 —— 用户配好、也验证过存在,agent 却只能用 PATH 猜(实测反馈)。
+// 反向也要成立:没配或探不到的一律不出现(可选字段永不制造门禁)。
+check(
+  readyText.includes("可选运行时与库映射") && readyText.includes(prepared.modelsimIniPath),
+  "提示里带上一小段可选项:库映射文件(配了就能用)"
+);
+const optionalText = describeEnv(
+  { ...prepared, pwshPath: "C:\\p\\pwsh.exe", pythonPath: "C:\\y\\python.exe" },
+  probeWith([...Object.values(prepared), "C:\\p\\pwsh.exe", "C:\\y\\python.exe"])
+);
+check(
+  optionalText.includes("C:\\p\\pwsh.exe") && optionalText.includes("C:\\y\\python.exe"),
+  "提示里带上 PowerShell 7 与 Python 3 的路径(配了就该用得上)"
+);
+const optionalMissing = describeEnv({ ...prepared, pwshPath: "C:\\p\\pwsh.exe" }, probeWith(Object.values(prepared)));
+check(
+  !optionalMissing.includes("C:\\p\\pwsh.exe") && optionalMissing.includes(prepared.modelsimIniPath),
+  "填了但探不到的运行时不出现在提示里(可选字段不报未就绪、也不当可用)"
+);
 
 const halfText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith([]));
 check(halfText.includes("路径不可用(C:\\vivado.bat)"), "填了但用不了:说清原因(不存在,或类型不对)");
 check(halfText.includes("编译器路径:未配置"), "没填的项:说成未配置(要去填)");
 check(halfText.includes("比特流生成"), "未就绪时带上当前不可执行的能力");
+check(!halfText.includes("可选运行时与库映射"), "一个可选项都没配:那一小段不出现(不制造噪音)");
 
 const noCacheText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith(["C:\\vivado.bat"]));
 check(

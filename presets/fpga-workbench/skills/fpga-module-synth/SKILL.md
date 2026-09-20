@@ -60,6 +60,16 @@ description: 综合 FPGA 模块并判定"综合门禁 + 综合后时序"能否�
 node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> --template "<约束模板路径>"
 ```
 
+**再起综合脚本**(不用给模块名 —— 顶层模块名在脚本里,由脚本从 spec 填):
+
+```
+node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> --kind synth-script
+```
+
+落 `<模块根>/synth/run_synth.tcl`,**器件型号与顶层模块名从 `spec/spec.md` 读出来填进那两行** ——
+器件只写一处,别再手抄;spec 里读不到就不填(保留模板原样并提示),这时按 spec 手填那两行。
+已存在不覆盖(`--force` 才覆盖);换自己的脚本用 `--template`。
+
 **再跑综合**(全程批处理,不弹界面):
 
 ```powershell
@@ -67,6 +77,7 @@ node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> 
 ```
 
 - **`-mode batch` 必须加** —— 不加会拉起图形界面等人操作,无人值守就跑不下去
+- **别手抄**:用上面那条 `--kind synth-script` 起一份,再按工程改(器件预检、失败判定都固化在里面了)
 - 流程:建模块本地工程 → 加 `rtl/`(含 `rtl/ip/` 下的 IP 与 `.xci`)→ 跑 `synth_design` → 写报告
 - 报告落 `<模块根>/synth/`;Vivado 工程与中间产物**就地落在 `synth/` 下**(可再生的,别提交),**不得把工程塞进 `rtl/`**
 

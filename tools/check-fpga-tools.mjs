@@ -149,6 +149,24 @@ check(
   `警告样本只报警告(实际 ${warnOnlyIssues.map((issue) => issue.rule).join("、") || "什么都没报"})`
 );
 
+// 端口**写法**问题(类型没写全)同样只警告:排版/写法错了不会让结论错 —— 实测吃过亏:一个跑得通、
+// 仿真全过的平台,因为端口写法被报 3 项阻塞 FAIL,排版拿到了和功能失败一样的红色,人就不再看它了。
+// 样本从合规样本改出来(**只动端口声明那几行**),所以它身上只该有这一类问题:报出来(不静默消失)
+// 但不拦门禁(退出码 0,在下面 CLI 那一组验)。
+const styleFile = join(SANDBOX, "style-mod", "rtl", "style.sv");
+mkdirSync(dirname(styleFile), { recursive: true });
+writeFileSync(
+  styleFile,
+  goodRtl
+    .replace("    input  wire        clk,", "    input              clk,")
+    .replace("    input  wire        rst,", "    input              rst,")
+);
+const styleIssues = blocking(styleFile, false);
+check(
+  styleIssues.length > 0 && styleIssues.every((issue) => issue.rule === "端口类型"),
+  `端口写法样本报出来的只有「端口类型」(实际 ${styleIssues.map((issue) => `${issue.rule}@${issue.line}`).join("、") || "什么都没报"})`
+);
+
 // ── 自带模板必须过自己的检查器 ──────────────────────────────────────────────
 const templateRtl = blocking(join(TEMPLATES, "rtl.sv"), false);
 check(templateRtl.length === 0, "自带 RTL 模板过检查器", templateRtl.map((i) => i.message).join("; "));
@@ -284,6 +302,16 @@ check(
   "自带 TB 模板写明 $fatal 不改 vsim 退出码(不是'必须非零退出'那种说法)"
 );
 
+// 自带 run.do 模板(verif 环节的批处理仿真脚本):`--kind run-do` 起的就是它。
+// 那几条踩过的坑是"退出码可信"的全部依据(跳 stub / onfinish stop / gate 里 -code 1),缺一段都不能按退出码判。
+const bundledRunDoPath = join(TEMPLATES, "run.do");
+const bundledRunDoExists = existsSync(bundledRunDoPath);
+const bundledRunDo = bundledRunDoExists ? readFileSync(bundledRunDoPath, "utf8") : "";
+check(bundledRunDoExists, "自带 run.do 模板存在(module-verif-new --kind run-do 起的就是它)");
+for (const marker of ["*_stub.*", "onfinish stop", "quit -f -code 1", "ALL TESTS PASSED"]) {
+  check(bundledRunDo.includes(marker), `自带 run.do 模板里有「${marker}」`);
+}
+
 // 用户自己的模板(没有任何占位符)→ 必须与模板逐字节一致
 const plainTemplate = join(SANDBOX, "plain-tb.vhd");
 writeFileSync(plainTemplate, "-- 我自己的模板\nentity tb_x is end entity;\n");
@@ -298,7 +326,34 @@ check(
   "测试平台落到 verif/tb_<snake>.sv(驼峰转下划线;仿真与比对合成一个环节后落在 verif/)"
 );
 check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("verif", "tb_uart_rx.vhd"), "扩展名跟着模板走");
+// run.do 反过来:名字是**固定**的(跑法里 `do run.do` 写死了它),不跟模板扩展名走、也不替模块名
+check(
+  defaultDestination("run-do", undefined, "C:/t/run.do") === join("verif", "run.do"),
+  "run.do 落到 verif/run.do(起它时不用给模块名)"
+);
+check(
+  defaultDestination("run-do", "UartRx", "C:/t/custom.tcl") === join("verif", "run.do"),
+  "换了自己的模板也还是 verif/run.do(文件名不跟模板扩展名走)"
+);
 check(defaultDestination("xdc", "UartRx", "C:/t/c.xdc") === join("synth", "UartRx.xdc"), "约束文件落 synth/<模块名>.xdc");
+// 综合脚本与比对脚本的文件名同样是**固定**的:跑法里写死了 `synth/run_synth.tcl`、
+// 技能里写死了 `verif/comp.py`,换个名字就对不上 —— 所以不看 name、也不跟模板扩展名走
+check(
+  defaultDestination("synth-script", "UartRx", "C:/t/run_synth.tcl") === join("synth", "run_synth.tcl"),
+  "综合脚本落 synth/run_synth.tcl"
+);
+check(
+  defaultDestination("synth-script", "UartRx", "C:/t/my_synth.tcl") === join("synth", "run_synth.tcl"),
+  "换了自己的综合脚本模板,落点仍是 synth/run_synth.tcl(文件名不跟模板扩展名走)"
+);
+check(
+  defaultDestination("comp", undefined, "C:/t/comp.py") === join("verif", "comp.py"),
+  "比对脚本落 verif/comp.py(起它时不用给模块名)"
+);
+check(
+  defaultDestination("comp", "UartRx", "C:/t/my_compare.py") === join("verif", "comp.py"),
+  "换了自己的比对脚本模板,落点仍是 verif/comp.py"
+);
 // 模块级约束**只要时钟**(用户 2026-09-19 确认:模块没有管脚,管脚/电平/IO 延迟都是工程级的事)。
 // 自带 XDC 模板要说清这条,而且不许再引用旧包的 `device_config.tcl / TIMING_CLOCKS` ——
 // 那是旧结构,我们现在只有 spec/spec.md 这一处时钟参考。
@@ -343,7 +398,145 @@ check(run("module-rtl-check.mjs", [join(SANDBOX, "vhdl-mod")]) === 2, "纯 VHDL 
 check(run("module-rtl-check.mjs", [join(SANDBOX, "good-mod")]) === 0, "check-rtl 合规 → 退出码 0");
 check(run("module-rtl-check.mjs", [join(SANDBOX, "bad-mod")]) === 1, "check-rtl 违规 → 退出码 1");
 check(run("module-rtl-check.mjs", [join(SANDBOX, "warn-mod")]) === 0, "check-rtl 只有警告 → 退出码 0(警告不拦门禁)");
+check(run("module-rtl-check.mjs", [join(SANDBOX, "style-mod")]) === 0, "check-rtl 只有端口写法问题 → 退出码 0(排版不拦门禁)");
 check(run("module-rtl-check.mjs", [join(SANDBOX, "no-such-mod")]) === 2, "check-rtl 没有 rtl/ → 退出码 2");
+
+// ── 三条来自实测事故的判据:断言说明逐条齐全 / 数据比对禁 != / 成功标记挂 err_cnt ─────
+//
+// 这三条以前都只查"整个文件里有没有那个字样",于是"看着有、其实没有"。所以既要验退出码
+// (说明它真的会咬人),也要验报出来的行号(能定位到具体哪一处),还要验没误伤旁边那处。
+// 夹具都放在只带 verif/ 的模块根下(rtl/ 建空目录,让退出码只由测试平台决定)。
+
+// ① 断言说明必须逐条齐全:每处断言各自写一遍 Purpose / Trigger / Failure
+const tbAsserts = [
+  header("tb_asserts"), "`resetall", "`timescale 1ns/1ps", "`default_nettype none", "",
+  "module tb_asserts;", "    integer err_cnt = 0;", "    logic clk = 0;", "",
+  "    // Purpose  : reset must hold the first check",
+  "    // Trigger  : checked every posedge clk",
+  "    // Failure  : the first check must report",
+  "    a_first : assert property (@(posedge clk) rst |-> rst);", "",
+  "    // Purpose  : second check",
+  "    // Trigger  : checked every posedge clk",
+  "    // Failure  : the second check must report",
+  "    a_second : assert property (@(posedge clk) clk |-> clk);", "",
+  "    initial begin",
+  "        if (err_cnt == 0) $display(\"ALL TESTS PASSED (err_cnt=0)\");",
+  "        else $fatal(1, \"TB FAILED\");",
+  "        $finish;",
+  "    end",
+  "endmodule", "`resetall", "`default_nettype wire", ""
+].join("\n");
+const assertMod = join(SANDBOX, "assert-mod");
+mkdirSync(join(assertMod, "rtl"), { recursive: true });
+mkdirSync(join(assertMod, "verif"), { recursive: true });
+const tbAssertsPath = join(assertMod, "verif", "tb_asserts.sv");
+writeFileSync(tbAssertsPath, tbAsserts);
+const assertOkCode = run("module-rtl-check.mjs", [assertMod]);
+check(assertOkCode === 0, `两条断言的说明各写一遍 → 退出码 0(实际 ${assertOkCode})`);
+// 只删第一条断言的 Purpose,其余一行不动
+const tbAssertsMissing = tbAsserts
+  .split("\n")
+  .filter((line) => line !== "    // Purpose  : reset must hold the first check")
+  .join("\n");
+writeFileSync(tbAssertsPath, tbAssertsMissing);
+const assertBadCode = run("module-rtl-check.mjs", [assertMod]);
+check(assertBadCode === 1, `只删第一条断言的 Purpose → 退出码 1(逐条查,不是全文件查;实际 ${assertBadCode})`);
+const assertLines = tbAssertsMissing.split("\n");
+const firstAssertLine = assertLines.findIndex((line) => line.includes("a_first : assert property")) + 1;
+const secondAssertLine = assertLines.findIndex((line) => line.includes("a_second : assert property")) + 1;
+const assertIssues = blocking(tbAssertsPath, true);
+check(
+  assertIssues.some((issue) => issue.rule === "设计断言" && issue.line === firstAssertLine && issue.message.includes("Purpose")),
+  `缺说明报在第一处断言那一行(第 ${firstAssertLine} 行;实际 ${assertIssues.map((i) => `${i.rule}@${i.line}`).join("、") || "什么都没报"})`
+);
+check(
+  !assertIssues.some((issue) => issue.line === secondAssertLine),
+  `第二条(说明齐全)没被连坐(第 ${secondAssertLine} 行)`
+);
+
+// ② 数据比对禁 `!=`:同一行出现期望值命名的信号 → 阻塞;循环/计数条件 → 只警告
+//    (全 X 时 `X != y` 求值为 X,`if (X)` 为假 → 一条错都不报)
+const neqMod = join(SANDBOX, "neq-mod");
+mkdirSync(join(neqMod, "rtl"), { recursive: true });
+mkdirSync(join(neqMod, "verif"), { recursive: true });
+const neqPath = join(neqMod, "verif", "tb_neq.sv");
+const neqBad = goodTb
+  .replace("module tb_good;", "module tb_neq;")
+  .replace(
+    "        if (err_cnt == 0)",
+    "        if (dut_data != exp_data) err_cnt = err_cnt + 1;\n        if (err_cnt == 0)"
+  );
+writeFileSync(neqPath, neqBad);
+const neqBadCode = run("module-rtl-check.mjs", [neqMod]);
+check(neqBadCode === 1, `数据比对用 '!='(同行有 exp_data)→ 退出码 1(实际 ${neqBadCode})`);
+check(
+  blocking(neqPath, true).some((issue) => issue.rule === "数据比对"),
+  "报出来的是「数据比对」这条阻塞规则(不是混进警告里)"
+);
+writeFileSync(neqPath, neqBad.replace("dut_data != exp_data", "dut_data !== exp_data"));
+const neqOkCode = run("module-rtl-check.mjs", [neqMod]);
+check(neqOkCode === 0, `同一行改成 '!==' → 退出码 0(实际 ${neqOkCode})`);
+
+const neqLoopMod = join(SANDBOX, "neq-loop-mod");
+mkdirSync(join(neqLoopMod, "rtl"), { recursive: true });
+mkdirSync(join(neqLoopMod, "verif"), { recursive: true });
+const neqLoopPath = join(neqLoopMod, "verif", "tb_neq_loop.sv");
+writeFileSync(neqLoopPath, goodTb
+  .replace("module tb_good;", "module tb_neq_loop;")
+  .replace(
+    "        if (err_cnt == 0)",
+    "        while (i != 0) i = i - 1;\n        if (err_cnt == 0)"
+  ));
+check(
+  blocking(neqLoopPath, true).some((issue) => issue.rule === "!= 待确认"),
+  "循环/计数条件的 '!=' 会被报出来(不是静默放过)"
+);
+const neqLoopCode = run("module-rtl-check.mjs", [neqLoopMod]);
+check(neqLoopCode === 0, `循环条件的 '!=' 只报警告 → 退出码 0(不拦门禁;实际 ${neqLoopCode})`);
+
+// ③ 成功标记必须与 err_cnt 挂钩:无条件打印的 ALL TESTS PASSED 只是字形
+//    (控制头与打印之间夹一行说明也是同一条语句 —— 自带模板就是这种分行写法)
+const tbMarker = (verdict) => [
+  header("tb_marker"), "`resetall", "`timescale 1ns/1ps", "`default_nettype none", "",
+  "module tb_marker;", "    integer err_cnt = 0;", "    initial begin",
+  ...verdict,
+  "        $finish;", "    end", "endmodule", "`resetall", "`default_nettype wire", ""
+].join("\n");
+const VERDICT_TIED = [
+  "        if (err_cnt == 0)",
+  "            // only zero violations counts as a pass",
+  "            $display(\"ALL TESTS PASSED (err_cnt=0)\");",
+  "        else $fatal(1, \"TB FAILED\");"
+];
+const VERDICT_UNCONDITIONAL = [
+  "        $display(\"ALL TESTS PASSED\");",
+  "        $fatal(1, \"TB FAILED\");"
+];
+// 串里写着 err_cnt=0 但无条件 —— 这张正是实测事故的形状:字样在,条件不在
+const VERDICT_STRING_ONLY = [
+  "        $display(\"ALL TESTS PASSED (err_cnt=0)\");",
+  "        $fatal(1, \"TB FAILED\");"
+];
+const markerMod = join(SANDBOX, "marker-mod");
+mkdirSync(join(markerMod, "rtl"), { recursive: true });
+mkdirSync(join(markerMod, "verif"), { recursive: true });
+const markerPath = join(markerMod, "verif", "tb_marker.sv");
+writeFileSync(markerPath, tbMarker(VERDICT_TIED));
+const markerOkCode = run("module-rtl-check.mjs", [markerMod]);
+check(markerOkCode === 0, `成功标记挂在 err_cnt 条件上 → 退出码 0(实际 ${markerOkCode})`);
+const markerBad = tbMarker(VERDICT_UNCONDITIONAL);
+writeFileSync(markerPath, markerBad);
+const markerBadCode = run("module-rtl-check.mjs", [markerMod]);
+check(markerBadCode === 1, `无条件打印 ALL TESTS PASSED → 退出码 1(实际 ${markerBadCode})`);
+const markerLine = markerBad.split("\n").findIndex((line) => line.includes("ALL TESTS PASSED")) + 1;
+check(
+  blocking(markerPath, true).some((issue) => issue.rule === "测试平台自检" && issue.line === markerLine),
+  `成功标记那条报在打印它的行上(期望第 ${markerLine} 行)`
+);
+writeFileSync(markerPath, tbMarker(VERDICT_STRING_ONLY));
+const markerStringCode = run("module-rtl-check.mjs", [markerMod]);
+check(markerStringCode === 1, `打印串里写着 err_cnt=0 但无条件 → 退出码 1(字符串不是条件;实际 ${markerStringCode})`);
+
 check(run("setup-scaffold.mjs", []) === 2, "setup-scaffold 不给根目录 → 退出码 2");
 // 起文件:不覆盖已有文件、模板不存在要报错
 const newFileRoot = join(SANDBOX, `new-file-${stamp}`);
@@ -361,6 +554,97 @@ check(
     && existsSync(join(newFileRoot, "verif", "tb_uart_rx.sv")),
   "verif-new 把测试平台落在 verif/tb_<snake>.sv"
 );
+// `--kind run-do`:技能里就是这么调的(只给模块根)—— 不给 --template 也要能起出 verif/run.do
+check(
+  run("module-verif-new.mjs", [newFileRoot, "--kind", "run-do"]) === 0
+    && existsSync(join(newFileRoot, "verif", "run.do")),
+  "verif-new --kind run-do 起出 verif/run.do(不用给模块名与模板)"
+);
+check(
+  readFileSync(join(newFileRoot, "verif", "run.do"), "utf8") === bundledRunDo,
+  "起出来的 run.do 与自带模板逐字节一致(不替模块名、不改内容)"
+);
+check(
+  run("module-verif-new.mjs", [newFileRoot, "--kind", "run-do"]) === 1,
+  "已存在的 run.do 不覆盖 → 退出码 1"
+);
+check(
+  run("module-verif-new.mjs", [newFileRoot, "--kind", "run-do", "--force"]) === 0,
+  "--force 才覆盖 run.do"
+);
+// 漏给根目录时必须报参数错,不能把 `--kind` 的值当成根目录去写(实测踩过:会在 ./run-do/ 下起文件还退 0)
+check(
+  run("module-verif-new.mjs", ["--kind", "run-do"]) === 2,
+  "漏给模块根 → 退出码 2(`--kind` 的值不会被当成根目录)"
+);
+
+// ── 起综合脚本 / 比对脚本(module-synth-new --kind synth-script / module-verif-new --kind comp)──
+// 综合脚本那两行(器件型号、顶层模块名)以前靠手抄 —— 手抄就是"器件与时钟只写一处"之外的第二处
+// 来源,换器件时必漏。现在起脚本时从 spec/spec.md 读出来填。夹具器件**故意与自带模板里那个
+// 不同**:填没填上,一眼分得出来。
+const bundledRunSynth = readFileSync(join(TEMPLATES, "run_synth.tcl"), "utf8");
+const specMod = join(SANDBOX, `spec-mod-${stamp}`);
+mkdirSync(join(specMod, "spec"), { recursive: true });
+const specFile = join(specMod, "spec", "spec.md");
+writeFileSync(specFile, [
+  "# spec:uart_rx", "",
+  "## 目标器件与封装", "",
+  "- 器件型号:xc7z020clg484-1",
+  "- 器件族:Zynq-7000", "",
+  "## 接口", "",
+  "- 顶层模块名:uart_rx", ""
+].join("\n"));
+const specScript = join(specMod, "synth", "run_synth.tcl");
+const specCode = run("module-synth-new.mjs", [specMod, "uart_rx", "--kind", "synth-script"]);
+check(
+  specCode === 0 && existsSync(specScript),
+  `module-synth-new --kind synth-script 起出 synth/run_synth.tcl(实际退出码 ${specCode})`
+);
+const specText = existsSync(specScript) ? readFileSync(specScript, "utf8") : "";
+check(specText.includes('set PART "xc7z020clg484-1"'), "脚本里的器件型号是照 spec/spec.md 填的(夹具器件与模板默认值不同)");
+check(specText.includes('set TOP "uart_rx"'), "脚本里的顶层模块名也是照 spec/spec.md 填的");
+check(!specText.includes("xc7a100tfgg484-2"), "模板里那个默认器件被替掉了(不留第二处器件来源)");
+check(!/<[A-Za-z_][A-Za-z0-9_]*>/u.test(specText), "起出来的综合脚本里没有未替换的占位符");
+check(run("module-synth-new.mjs", [specMod, "uart_rx", "--kind", "synth-script"]) === 1, "已存在的 run_synth.tcl 不覆盖 → 退出码 1");
+check(run("module-synth-new.mjs", [specMod, "uart_rx", "--kind", "synth-script", "--force"]) === 0, "--force 才覆盖 run_synth.tcl");
+
+// 读不到 / 说不清就**不猜**:spec 里器件写成"待定 + 两个候选"时,那两行必须还是模板原样
+writeFileSync(specFile, [
+  "# spec:uart_rx", "",
+  "## 目标器件", "",
+  "器件型号:待定(候选 xc7a100tfgg484-2 或 xc7z020clg484-1)", ""
+].join("\n"));
+const ambiguousText = run("module-synth-new.mjs", [specMod, "uart_rx", "--kind", "synth-script", "--force"]) === 0
+  && existsSync(specScript)
+  ? readFileSync(specScript, "utf8")
+  : "";
+check(
+  ambiguousText === renderTemplate(bundledRunSynth, "uart_rx").text,
+  "spec 里说不清器件(两个候选)时:脚本与模板逐字节一致(没有猜一个型号写进去)"
+);
+// 连 spec/spec.md 都没有时同样不猜(new-file 那个模块根只有 rtl/ verif/ synth/)
+const noSpecScript = join(newFileRoot, "synth", "run_synth.tcl");
+const noSpecCode = run("module-synth-new.mjs", [newFileRoot, "uart_rx", "--kind", "synth-script"]);
+check(
+  noSpecCode === 0 && existsSync(noSpecScript)
+    && readFileSync(noSpecScript, "utf8") === renderTemplate(bundledRunSynth, "uart_rx").text,
+  `没有 spec/spec.md 时:脚本起得出来、两行一个都不填(实际退出码 ${noSpecCode})`
+);
+
+// `--kind comp`:比对脚本落 verif/comp.py(原样复制,不改一个字符)
+const bundledCompPath = join(TEMPLATES, "comp.py");
+const bundledComp = existsSync(bundledCompPath) ? readFileSync(bundledCompPath, "utf8") : "";
+check(existsSync(bundledCompPath), "自带 comp.py 模板存在(module-verif-new --kind comp 起的就是它)");
+const compPath = join(newFileRoot, "verif", "comp.py");
+const compCode = run("module-verif-new.mjs", [newFileRoot, "--kind", "comp"]);
+check(
+  compCode === 0 && existsSync(compPath),
+  `module-verif-new --kind comp 起出 verif/comp.py(不用给模块名与模板;实际退出码 ${compCode})`
+);
+check(existsSync(compPath) && readFileSync(compPath, "utf8") === bundledComp, "起出来的 comp.py 与自带模板逐字节一致(不替模块名、不改内容)");
+check(run("module-verif-new.mjs", [newFileRoot, "--kind", "comp"]) === 1, "已存在的 comp.py 不覆盖 → 退出码 1");
+check(run("module-verif-new.mjs", [newFileRoot, "--kind", "comp", "--force"]) === 0, "--force 才覆盖 comp.py");
+check(run("module-verif-new.mjs", ["--kind", "comp"]) === 2, "漏给模块根(comp)→ 退出码 2");
 
 // ── module-verif-wave:看波形的手段(用户明确要求"要看波形时必须真有这条")────────────────
 // 只验生成物与判定,不真的开 GUI:开窗会卡住自检。生成的脚本语法另外用真 vsim 批处理跑过

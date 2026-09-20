@@ -486,8 +486,8 @@ check(
 // 而 VHDL 本检查器不覆盖 —— 必须说清"记 NOT_APPLICABLE",不能静默当通过
 check(/仿真语言/u.test(verifSkillText) && /\.vhd/u.test(verifSkillText), "验证技能写明 TB 扩展名跟仿真语言走(含 .vhd)");
 // ModelSim 的跑法:run -all / quit -f 是仿真器命令,得放进 .do 再一次调用(-c -do run.do)。
-// 写成"逐行 shell 命令"跑不通,而退出码判据也不成立:实测 $fatal 之后 vsim 退出码仍是 0,
-// 所以技能必须写明"看日志里的成功标记,不是看退出码"。
+// 判据升级(2026-09-20 实测):裸 vsim 的退出码不可信($fatal 之后仍是 0),所以 run.do 模板里的
+// **run-level gate** 把日志条目变成退出码 —— 技能必须同时写明这两件事,不许退回"只看日志/只看退出码"。
 check(
   /-c -do/u.test(verifSkillText) && /run -all/u.test(verifSkillText),
   "验证技能给出 ModelSim 的一次调用形态(把 run -all/quit 放进 .do,再 -c -do 跑)"
@@ -498,7 +498,11 @@ check(
 );
 check(
   /退出码[\s\S]{0,60}(仍是 0|不是 0|看日志)/u.test(verifSkillText),
-  "验证技能写明:$fatal 不改 vsim 退出码,判成败靠日志"
+  "验证技能写明:裸 vsim 的退出码不可信($fatal 之后仍是 0)"
+);
+check(
+  /gate[\s\S]{0,80}退出码|退出码[\s\S]{0,80}gate/u.test(verifSkillText),
+  "验证技能写明:退出码由 run.do 的 gate 决定(所以跑 run.do 的退出码才是判据)"
 );
 
 // TB 落点是 `verif/tb_<snake>`(stamp.mjs 的 defaultDestination 把驼峰转下划线,UartRx → tb_uart_rx,
@@ -553,6 +557,12 @@ check(
 check(
   /取值真的不同才算 FAIL|取值[\s\S]{0,10}不同才算 FAIL/u.test(verifSkillText),
   "验证技能写明:只有取值真的不同才算 FAIL(位宽/字节序导致数值变了属功能问题)"
+);
+// 金标 CRLF、输出 LF → 逐字节比会"每行都不一致",一个排版差异冒充功能失败(实测踩过)。
+// 所以技能必须写明"先归一化再比"+"格式差异不单独判 FAIL",两条缺一不可。
+check(
+  /CRLF[\s\S]{0,60}LF/u.test(verifSkillText) && /格式差异[\s\S]{0,20}永不单独/u.test(verifSkillText),
+  "验证技能写明:比对前先归一化行尾(CRLF/LF)/空白/大小写,格式差异不单独判 FAIL"
 );
 
 check(

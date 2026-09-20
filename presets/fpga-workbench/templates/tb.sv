@@ -8,22 +8,25 @@
 // Copyright    : Copyright (c) YYYY <Author>. All rights reserved.                   //
 // Open Source  : This file is proprietary and NOT open source.                       //
 //==================================================================================//
-// TB conventions (new workflow):
-//  1. Write compare data to the confirmed module-plan comparison_output path
-//     (relative to verif/sim/). Its suffix and serialization must match the
-//     comparison_input declaration; do not rename it to a guessed .hex file.
+// TB conventions (current workflow):
+//  1. Write compare data to the output path confirmed in spec/spec.md (the
+//     verification plan), relative to verif/ - the TB runs with cwd = verif/.
+//     Its suffix and serialization must match the comparison input file
+//     declared there; do not rename it to a guessed .hex file.
 //  2. Self-check: $error for each mismatch + err_cnt accumulation; the final
-//     verdict MUST escalate to $fatal when err_cnt > 0 (non-zero exit), and
-//     print a clear PASS message on success; $display-only FAIL verdicts are
-//     forbidden (a failed TB must exit through $fatal)
-//  3. Input data: use the module-plan comparison_input only when file-based
-//     stimulus is required; otherwise implement the confirmed no-file method.
+//     verdict MUST escalate to $fatal when err_cnt > 0, and print a clear PASS
+//     message on success; $display-only FAIL verdicts are forbidden.
+//     NOTE: $fatal alone does NOT make vsim exit non-zero (measured 2020.4) -
+//     the exit code comes from the run-level gate in verif/run.do, so keep it.
+//  3. Input data: use the comparison input file declared in spec/spec.md only
+//     when file-based stimulus is required; otherwise implement the confirmed
+//     no-file method.
 //  4. Timeout guard: watchdog in initial (#(CLK_PERIOD*N); $fatal(1,"TB TIMEOUT"))
-//  5. Simulation models: use the REAL IP simulation models from ip/ (never
-//     simplified/fast stubs); dev and review must run the same models
-//  6. Complex modules may add tb_sub_*.sv and tb_top_*.sv beside this TB.
-//     run_auto.do executes submodule TBs before the top-level TB; each TB must
-//     use a unique dump name and the module SPEC selects the final comp dump.
+//  5. Simulation models: use the REAL IP simulation models under verif/
+//     (never simplified/fast stubs); dev and review must run the same models
+//  6. Complex modules may add tb_sub_*.sv and tb_top_*.sv beside this TB; run
+//     each TB in its own process, the tb_sub_* ones before the top-level TB.
+//     Each TB must use a unique dump name (dumps land in verif/).
 //==================================================================================//
 `resetall
 `timescale 1ns/1ps
@@ -41,7 +44,7 @@ module tb_<module_snake>;
   // Clock contract: the scaffold uses 250 MHz (4.000 ns) by default.
   // This is only the TB clock period/protocol pace, not physical timing proof.
   // If the module confirms another target or multiple clocks, update this TB
-  // and record the approved periods in doc/main_spec.md and clock_constraints.xdc.
+  // and record the approved periods in spec/spec.md and synth/<ModuleName>.xdc.
   //----------------------------------------------------------------------------//
   localparam time CLK_PERIOD = 4ns;
   localparam integer WATCHDOG_CYCLES = 2_500_000;

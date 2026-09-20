@@ -63,32 +63,30 @@ ModelSim / Vivado XSim / Verilator、路径是什么,都写在那里。**不得�
 
 **ModelSim / Questa(默认)**
 
-`run -all`、`quit -f` 是**仿真器自己的命令**,不是 shell 命令 —— 写进 `verif/run.do`,再一次调用
-(会话开头给的调用姿势就是这个形态):
+`run -all`、`quit -f` 是**仿真器自己的命令**,不是 shell 命令 —— 写进 `verif/run.do`,再一次调用。
 
-```
-# verif/run.do
-onerror {quit -code 1}
-if {[file exists work]} { catch {vdel -lib work -all} }
-vlib work
-vcom -2008 <VHDL 文件...>              # 只有混语言模块才需要
-vlog -sv ../rtl/<源码...> tb_<snake>.sv
-vsim -c -voptargs="+acc=rn" tb_<模块名>
-run -all
-quit -f
-```
+**别手抄 `run.do`**:用模板起一份(它把踩过的坑固化了,起完按工程改):
 
 ```powershell
+node "<预设>/tools/module/module-verif-new.mjs" <模块根> --kind run-do
 cd <模块根>/verif
-& "<仿真器路径>" -c -do run.do
+& "<仿真器路径>" -c -do "do run.do; quit -f"
 ```
 
-两处实测结论(都影响判定,不能省):
+模板里这几段**别删**(删了就退回"看着跑完了、其实没跑"的形态):
 
-- **`vdel` 要防住没有 work 库的情况**:第一次跑时裸的 `vdel` 会报错并中止整个脚本,后续命令
-  全不执行,而退出码仍是 0 —— 表现为"已跑过",实际什么都没跑。写成
-  `if {[file exists work]} { catch {vdel -lib work -all} }`
-- **`$fatal` 不改 vsim 退出码**(2020.4 实测,`run -all` 既不抛错也不改退出码)→ 判成败只能看日志
+- 收集时**跳过 `rtl/ip/` 下的 `*_stub.*`**:IP 自带的黑盒 stub 与真模型**同名**,放它进编译会
+  **静默覆盖真模型**(vlog 只给 Warning),整轮仿真跑在空模块上还打印成功标记;跳过了要打印出来。
+- 编译用 `catch` 判定,失败即 `quit -f -code 1`;
+- **`onfinish stop` 必须在 elaborate 之后**,否则 `$finish`/`$fatal` 直接结束会话,后面全成死代码;
+- 结尾的 **run-level gate** 扫 `sim.log`:有 `Error`/`Fatal` 或缺成功标记 → `-code 1`。
+
+**判据:跑 `run.do` 的退出码说了算** —— 但要知道它为什么可信:裸 `vsim` 的退出码**不可信**
+(实测 2020.4:`$fatal` 之后 `run -all` 既不抛错也不改退出码,退出码仍是 0),是**模板里的 gate**
+把它变成可靠判据的。**没有 gate 的脚本不能按退出码判。**
+
+- 想清库重跑:`vdel` 要先判一下 `if {[file exists work]} { catch {vdel -lib work -all} }` ——
+  裸的 `vdel` 在没有 work 库时会报错并中止整个脚本、而退出码仍是 0(表现为"已跑过",实际什么都没跑)
 
 **Vivado XSim**(选了它就用 Vivado bin 目录下的这三个命令)
 
@@ -196,9 +194,24 @@ node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path 
 - **表示形式不同**(十六进制 / 十进制、大小写、分隔符、行尾、列序、每行几个词)而数值逐个等价
   → **功能正确**,记一句"格式与 spec 表述不同,数据等价"即可,不阻塞通过、不必为此回头追问
 - **能确定取值等价就直接转换后比**(读进来转成同一个口径),不要因为两边写法不同就判 FAIL
+- **比对前先归一化,只比值**:行尾(**CRLF 与 LF 是同一份数据的两种写法**)、行尾空白、首尾空白、
+  十六进制大小写与 `0x` 前缀 —— 这些差异**先抹平再比**。实测踩过:金标是 CRLF、本工具输出是 LF,
+  逐字节比导致**每一行都"不一致"**,一个纯排版差异冒充了功能失败、还被升成了阻塞。
+- **格式差异永不单独判 FAIL / 阻塞**:归一化之后**取值**不同才是 FAIL;归一化之前的差异只在报告里
+  记一句"格式差异(已归一)",不改变结论、不挡流程。
 - 但**必须实际比过再放过**:没有转成同一口径、没逐个对上就说"只是格式问题",等于没验
 - **只有取值真的不同才算 FAIL** —— 宽度少一位、符号或字节序不同导致**数值变了**、丢掉某个通道,
   这些看着像格式,实际是功能问题,不得当格式放过
+
+**比对脚本用自带模板 `templates/comp.py` 起一份**(它已经做到了"先归一化、只比值"):
+
+```powershell
+node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp
+python verif/comp.py <参照文件> <输出文件> [--kind hex|text]
+```
+
+固定落 `verif/comp.py`(文件名不跟模板扩展名走,也不替模块名;已存在不覆盖,`--force` 才覆盖)
+—— 取值一致退 0、不一致退 1 并指出位置、读不到退 2。
 
 **自己无法判定数据是否等价时再问用户**,尤其是:
 
@@ -215,7 +228,8 @@ node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path 
 ## 判据
 
 **判成败靠日志与比对结果,不是退出码**:ModelSim 批处理下 `$fatal` 之后退出码仍是 0(实测),
-"退出码 0 = 通过"不成立。
+"退出码 0 = 通过"对**裸 `vsim`** 不成立 —— 所以 `run.do` 里的 gate 负责把日志条目变成退出码:
+**跑 `run.do` 拿到的退出码才是判据**(没有 gate 的脚本不能这么判)。
 
 - **PASS**:测试平台跑出成功标记(模板里是 `ALL TESTS PASSED (err_cnt=0)`)、日志无
   `** Error:` / `** Fatal:` / `TB TIMEOUT`,**且**独立比对的**样本取值**逐个等价、样本数 > 0
@@ -254,6 +268,8 @@ node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path 
 | 干什么 | 命令 | 在哪一节 |
 |---|---|---|
 | 起测试平台 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"` | 第一步 |
+| 起仿真脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind run-do` | 第二步 |
+| 起比对脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp` | 第四步 |
 | 跑出来 | `& "<仿真器路径>" -c -do run.do`(在 `verif/` 下;`run.do` 的写法见第二步) | 第二步 |
 | 看波形 | `node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"` | 第三步 |
 

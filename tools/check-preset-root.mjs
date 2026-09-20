@@ -287,6 +287,10 @@ for (const skill of projectSkills) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
   check(/^## 前置/mu.test(text), `${skill} 有「前置」一节`);
   check(/^## 产物/mu.test(text), `${skill} 有「产物」一节`);
+  // `module-*` 命令的参数是**模块根**,不是工作区根 —— 工程根下平铺着 project/ 与多个模块,
+  // 传工作区根只会扫到不相干的东西。实测踩过:integrate 技能原来就写着 `<工作区根>`。
+  const wrongModuleArg = /module-(?:rtl-check|verif-new|verif-wave|synth-new|rtl-new)\.mjs"?\s*<?工作区根/u.test(text);
+  check(!wrongModuleArg, `${skill} 没有把工作区根当 module 命令的参数`);
 }
 
 // ── fpga-module-spec 的提问顺序(用户明确要求过) ────────────────────────────────────

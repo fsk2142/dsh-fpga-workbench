@@ -237,6 +237,19 @@ pnpm 安装 `file:` 依赖时按 `files` 打包,白名单外的东西**不会被
 
 ## 自检
 
+**唯一入口是 `npm test`** —— 它按固定顺序跑源码级与环境级检查,并且**看退出码**,不是看输出里的
+`PASS` 字样。这一点有来由:曾经某个 check 打印完 `PASS` 之后又崩了(用了没导入的
+`readdirSync`),而我只 grep 输出、把它当成终端的假警报,那个缺陷在仓库里躺了好几轮。
+
+```powershell
+npm test                  # 源码级 + 环境级(缺本机 DSH 的记 SKIP,不算失败)
+npm run test:installed    # 再加上已装副本比对与加载冒烟
+npm run test:safety       # 再加上依赖安全(较慢,要跑两次 pnpm)
+node tools/check-all.mjs --list   # 看它到底跑哪些
+```
+
+想单跑某一项时:
+
 ```powershell
 node tools/check-toolchain.mjs      # 字段/存在性/警告措辞/两侧契约/提示文案三种状态
 node tools/check-load-contract.mjs  # 加载契约:语法/lib 内部 import/bundle 契约/半侧分工(重启前必跑)
@@ -249,9 +262,8 @@ node tools/smoke-installed.mjs      # 已装副本在真实解析环境里能否
 node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不动既有依赖(较慢,要跑两次 pnpm)
 ```
 
-上面七项 `check-*` / `smoke-*` 是每轮改动都要跑的那一套；`sync-installed.mjs`(装/同步已装副本,
-改名删文件时加 `--prune`)、`install.mjs`(装完自动跑 `smoke-installed`)与 `check-install-safety.mjs`
-按需跑。`tools/shipped.mjs` 是内部模块,不是命令。
+`sync-installed.mjs`(装/同步已装副本,改名删文件时加 `--prune`)、`install.mjs`(装完自动跑
+`smoke-installed`)按需跑。`tools/shipped.mjs` 是内部模块,不是命令。
 
 **自检自己收尾**:会建 fixture 的几项(`check-toolchain` / `check-fpga-tools`)跑完把 `.tmp/` 下的
 临时目录清掉,跑完那一区是空的 —— 以前它只建不删,攒过上百个时间戳目录。
@@ -286,7 +298,7 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
 
   早期雏形 `fpga-module-flow` 已删除(它的产物路径是当初拍定的、已被这些技能取代;
   Git 历史里能翻到)。
-- ✅ **工程级流程**(9 个技能,`fpga-project-*`):**早期集成随时可做**(搭骨架、试接口、
+- ✅ **工程级流程**(8 个技能,`fpga-project-*`):**早期集成随时可做**(搭骨架、试接口、
   定位集成问题,把未验证的模块标注清楚);**正式集成验收**才要求相关模块的模块级结论齐。
 
   | 技能 | 干什么 | 结果落在哪 |

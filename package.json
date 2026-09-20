@@ -16,6 +16,11 @@
     "presets",
     "cordis.patch.yml"
   ],
+  "scripts": {
+    "test": "node tools/check-all.mjs",
+    "test:installed": "node tools/check-all.mjs --installed",
+    "test:safety": "node tools/check-all.mjs --safety"
+  },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.2"
   },

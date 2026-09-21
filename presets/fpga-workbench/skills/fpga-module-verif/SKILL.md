@@ -137,18 +137,11 @@ xsim tb_sim -runall
 
 ## 第三步:看波形(用户要看时)
 
-批处理只留日志与数据文件,人工排查需要波形窗口。用自带命令打开:
+批处理只留日志与数据文件,人工排查需要波形窗口。**用已经确认过的 `verif/run.do` 起 GUI**
+(XSim 用 `xelab` 起好的那个 snapshot 起 GUI)—— 库映射、源码集合与顶层都由那份脚本决定,
+另起一次手工加载必然少编东西。**不要在 `verif/` 里直接开 GUI 加载设计**:TB 在时刻 0 会以
+写方式打开它的 dump 文件,光是加载设计就会把那几个文件清零。
 
-```
-node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"
-```
-
-编译 → 开 GUI → 把信号加进波形窗口 → **停在 0 时刻**(不自动 run)。生成 `verif/wave.do`;
-打开后 `run -all` 看全程、`run <时长>` 看一段,换信号用 `delete wave *`。`--dry-run` 只列出要用
-哪些文件、哪个平台、哪个仿真器。
-
-- 平台自动识别(`verif/` 下按 `tb_top_` → `tb_` → `tb_sub_` 挑),可用 `--tb` 指定
-- 认不出仿真器时如实说明,不套用一个命令;XSim 的 Tcl 不接受 `add wave`,需在波形窗口手动加
 - 需要**文本形态**波形(写进报告或供模型读取)用工具自带的 `wlf2vcd`:
   `wlf2vcd -o verif/dump.vcd verif/vsim.wlf`,只保留需要的区间
 - 波形是**排查手段**,不是结论:看到的现象要落回 `verif/verif.md` 的结论与归属判断
@@ -271,6 +264,6 @@ python verif/comp.py <参照文件> <输出文件> [--kind hex|text]
 | 起仿真脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind run-do` | 第二步 |
 | 起比对脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp` | 第四步 |
 | 跑出来 | `& "<仿真器路径>" -c -do run.do`(在 `verif/` 下;`run.do` 的写法见第二步) | 第二步 |
-| 看波形 | `node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"` | 第三步 |
+| 看波形 | 用已经确认过的 `verif/run.do` 起 GUI(XSim 用它的 snapshot),不另起一套加载 | 第三步 |
 
 比对脚本按 spec 约定的格式自己写或复用参考模型,不是一条固定命令 —— 判法见第四步。

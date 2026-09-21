@@ -8,7 +8,7 @@
 // Copyright    : Copyright (c) YYYY <Author>. All rights reserved.                   //
 // Open Source  : This file is proprietary and NOT open source.                       //
 //==================================================================================//
-// TB conventions (current workflow):
+// TB conventions (current workflow) - every item is measured, keep all six:
 //  1. Write compare data to the output path confirmed in spec/spec.md (the
 //     verification plan), relative to verif/ - the TB runs with cwd = verif/.
 //     Its suffix and serialization must match the comparison input file
@@ -17,13 +17,13 @@
 //     verdict MUST escalate to $fatal when err_cnt > 0, and print a clear PASS
 //     message on success; $display-only FAIL verdicts are forbidden.
 //     NOTE: $fatal alone does NOT make vsim exit non-zero (measured 2020.4) -
-//     the exit code comes from the run-level gate in verif/run.do, so keep it.
+//     the exit code comes from the run-level gate in verif/run.do; keep it.
 //  3. Input data: use the comparison input file declared in spec/spec.md only
 //     when file-based stimulus is required; otherwise implement the confirmed
 //     no-file method.
-//  4. Timeout guard: watchdog in initial (#(CLK_PERIOD*N); $fatal(1,"TB TIMEOUT"))
+//  4. Timeout guard: watchdog in initial (#(CLK_PERIOD*N); $fatal(1,"TB TIMEOUT")).
 //  5. Simulation models: use the REAL IP simulation models under verif/
-//     (never simplified/fast stubs); dev and review must run the same models
+//     (never simplified/fast stubs); dev and review must run the same models.
 //  6. Complex modules may add tb_sub_*.sv and tb_top_*.sv beside this TB; run
 //     each TB in its own process, the tb_sub_* ones before the top-level TB.
 //     Each TB must use a unique dump name (dumps land in verif/).
@@ -52,6 +52,7 @@ module tb_<module_snake>;
   logic clk = 1'b0;
   always #(CLK_PERIOD / 2) clk = ~clk;
 
+  //----------------------------------------------------------------------------//
   // TODO(AI): reset gen, DUT instance, interface drive, SVA asserts, and the
   // verification-contract-defined output dump. Keep checks at this clock rate.
   // The dump format is a red line: $fwrite/$fdisplay must not use %x/%h.
@@ -62,15 +63,18 @@ module tb_<module_snake>;
   //   $fwrite(fh, "%c%c\n", upnib(value[7:4]), upnib(value[3:0]));
   //----------------------------------------------------------------------------//
 
+  //----------------------------------------------------------------------------//
+  // Stimulus + checks. On mismatch: $error(...); err_cnt = err_cnt + 1;
+  //----------------------------------------------------------------------------//
   initial begin
     $display("[TB] test start");
-    // TODO: stimulus + checks (on mismatch: $error(...); err_cnt = err_cnt + 1;)
+    // TODO: stimulus + checks
     $display("[TB] test done");
 
     // ---- final verdict ----
-    // ModelSim batch note: $fatal does NOT make vsim exit non-zero (measured 2020.4),
-    // so the FAILURE MARKER + this success line are the evidence, not $?/%LASTEXITCODE.
-    // Keep both strings exactly as written below: the run scripts grep for them.
+    // Keep both strings exactly as printed below: the run scripts grep for them,
+    // and the FAIL verdict only becomes a non-zero exit code through the
+    // run-level gate in verif/run.do, not through vsim itself (conventions #2).
     if (err_cnt == 0)
       $display("ALL TESTS PASSED (err_cnt=0)");
     else
@@ -78,7 +82,9 @@ module tb_<module_snake>;
     $finish;
   end
 
-  // watchdog: prevent hang
+  //----------------------------------------------------------------------------//
+  // Watchdog: prevent hang (a hung TB must FAIL, not run forever).
+  //----------------------------------------------------------------------------//
   initial begin
     #(CLK_PERIOD * WATCHDOG_CYCLES);
     $fatal(1, "TB TIMEOUT");

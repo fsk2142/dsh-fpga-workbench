@@ -39,8 +39,9 @@ program_hw_devices [current_hw_device]
 - **不存在的写法别用**:`program_hw_devices` **没有 `-verify` 选项**;`verify_hw_devices` 是
   给 **eFUSE 加密器件**做密钥/掩码比对的,不是通用回读校验。这两条是查 Vivado 2025.2 的
   命令帮助核实的(踩过一次:技能里曾写 `program_hw_devices -verify`,那是错的)
-- 抓到的内部信号要在**波形窗口**细看时,与模块级同一条路:`module-verif-wave.mjs`(加载对应
-  设计、加好波形、停在 0 时刻由人操作)
+- 抓到的内部信号要在**波形窗口**细看时,与模块级同一条路:用**已经确认过的 `verif/run.do`**
+  起仿真 GUI(见 `fpga-module-verif` 第三步);不要在 `verif/` 里直接开 GUI 加载设计,
+  那会把 TB 的 dump 文件清零
 
 ## 固化到 Flash(需要掉电保持时)
 

@@ -45,6 +45,8 @@ description: 综合 FPGA 模块并判定"综合门禁 + 综合后时序"能否�
 
 模块级没有管脚,所以这里**只写时钟约束**,其余都不属于本环节:
 
+- **一个 xdc 里的段落顺序固定**:IO 约束 → 时钟约束 → CFG 命令 → debug 约束;模块级只填
+  「时钟约束」这一段(自带模板已按这个顺序分段)
 - **每个时钟域一条 `create_clock`**;分频/倍频出来的时钟另写 `create_generated_clock`
 - 几个时钟之间没有真实时序关系时,加 `set_clock_groups -asynchronous` ——
   否则工具会把跨域路径算成未约束(判据要求 `unconstrained_path_count = 0`)

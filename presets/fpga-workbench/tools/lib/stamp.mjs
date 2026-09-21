@@ -228,7 +228,7 @@ export function stampFile(options) {
  * @returns 参数字典(`kind` 只在真传了 `--kind` 时有值 —— 默认值由各入口按自己的环节给)。
  */
 export function parseStampArgs(argv) {
-  // 位置参数只取**第一个选项之前**的那些(与 module-verif-wave 同一条规矩):否则选项的值会被当成
+  // 位置参数只取**第一个选项之前**的那些(与 setup-scaffold 同一条规矩):否则选项的值会被当成
   // 模块根/模块名 —— 实测 `module-verif-new.mjs --kind run-do` 漏给根目录时,`run-do` 会被当成根,
   // 于是在 `./run-do/` 下起出 verif/run.do 还退 0(少给参数变成了"悄悄写到别处")。
   const positional = [];

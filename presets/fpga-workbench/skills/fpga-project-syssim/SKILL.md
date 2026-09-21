@@ -55,7 +55,9 @@ cd <工作区根>/project/syssim
 & "<仿真器路径>" -c -do run.do
 ```
 
-要人工看波形时用模块级那条:`node "<自带命令目录>\module\module-verif-wave.mjs" <模块根> --sim-path "<仿真器路径>"`。
+要人工看波形时,用**已经确认过的那份 `project/syssim/run.do`** 起 GUI(XSim 用它的 snapshot):
+库映射、源码集合与顶层都由那份脚本决定。**不要在 `syssim/` 里直接开 GUI 加载设计** —— TB 在
+时刻 0 会以写方式打开它的 dump 文件,光是加载设计就会把那几个文件清零。
 
 ## 判据
 

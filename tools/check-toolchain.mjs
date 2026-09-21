@@ -961,7 +961,7 @@ const prefixViolations = TOOLS.filter((tool) => {
   const prefix = STAGE_PREFIX[tool.stage];
   // 两级共用的命令不带级别前缀,也就不参与"级别+环节"的拼接检查
   if (prefix === undefined || tool.level === "shared") return false;
-  // 命令名形如 module-rtl-new / module-verif-wave:级别前缀之后紧跟环节前缀
+  // 命令名形如 module-rtl-new / module-verif-new:级别前缀之后紧跟环节前缀
   return !tool.file.startsWith(`${toolLevelPrefix(tool)}${prefix}`);
 });
 check(

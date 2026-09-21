@@ -291,7 +291,7 @@ for (const skill of projectSkills) {
   check(/^## 产物/mu.test(text), `${skill} 有「产物」一节`);
   // `module-*` 命令的参数是**模块根**,不是工作区根 —— 工程根下平铺着 project/ 与多个模块,
   // 传工作区根只会扫到不相干的东西。实测踩过:integrate 技能原来就写着 `<工作区根>`。
-  const wrongModuleArg = /module-(?:rtl-check|verif-new|verif-wave|synth-new|rtl-new)\.mjs"?\s*<?工作区根/u.test(text);
+  const wrongModuleArg = /module-(?:rtl-check|verif-new|synth-new|rtl-new)\.mjs"?\s*<?工作区根/u.test(text);
   check(!wrongModuleArg, `${skill} 没有把工作区根当 module 命令的参数`);
 }
 // 厂商命令的选项要**查过命令帮助**才能写。踩过一次:board 技能写了
@@ -515,10 +515,16 @@ check(
   /verif-new\.mjs/u.test(verifSkillText),
   "验证技能写明用 module-verif-new.mjs 起测试平台(命令名与环节名一致)"
 );
-// 用户明确要求过:说"要看波形"时必须真有手段 —— 技能里得有这条命令与用法,不能只有批处理
+// 用户明确要求过:说"要看波形"时必须真有手段 —— 手段是**用已经确认过的 run.do 起 GUI**,
+// 不是自己另编一套编译/顶层/仿真器流程(那条会替 AI 拍板的脚本已删)。同时要点明反面:
+// 不要在环节目录里直接开 GUI 加载设计 —— TB 在时刻 0 就把 dump 文件清零了。
 check(
-  /module-verif-wave\.mjs/u.test(verifSkillText) && /波形/u.test(verifSkillText),
-  "验证技能写明看波形的手段(module-verif-wave:开 GUI、加波形、不自动 run)"
+  /run\.do[\s\S]{0,40}GUI/u.test(verifSkillText) && /波形/u.test(verifSkillText),
+  "验证技能写明看波形的手段(用已经确认过的 run.do 起 GUI)"
+);
+check(
+  /不要在[\s\S]{0,40}加载设计/u.test(verifSkillText),
+  "验证技能写明:不要在 verif/ 里直接开 GUI 加载设计(dump 文件会被清零)"
 );
 // 验证**不只有文件 golden 一种**(审查指出,2026-09-19):FIFO / UART / 握手这类常靠独立
 // scoreboard、断言与协议检查。技能要把这些手段列全,同时守住独立性底线。

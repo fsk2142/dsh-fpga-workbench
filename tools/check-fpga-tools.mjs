@@ -18,7 +18,6 @@ import { fileURLToPath } from "node:url";
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
 import { applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
-import { modelSimDo, pickTestbench, simulatorKind } from "../presets/fpga-workbench/tools/module/module-verif-wave.mjs";
 import { SWEEP_GRACE_MS, sweepTempEntries } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -374,6 +373,12 @@ check(
   /set_clock_groups -asynchronous|create_generated_clock/u.test(bundledXdc),
   "自带 XDC 模板提到多时钟域要加 generated clock 或异步时钟组(否则会报未约束/跨域)"
 );
+// 用户既有约定:一个 xdc 里按 IO → 时钟 → CFG → debug 四段的顺序摆(模块级只填时钟那段)。
+// 顺序是给人照着写文件的,写在模板头部 —— 乱了这条就红。
+check(
+  /I\/O constraints[\s\S]*Clock constraints[\s\S]*Configuration commands[\s\S]*Debug constraints/u.test(bundledXdc),
+  "自带 XDC 模板按 IO → 时钟 → CFG → debug 四段的顺序摆好"
+);
 
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
 // setup-scaffold 是两级共用(在 tools/ 顶层、名字不带级别前缀);其余被调用的都是模块级命令
@@ -647,47 +652,7 @@ check(run("module-verif-new.mjs", [newFileRoot, "--kind", "comp"]) === 1, "已�
 check(run("module-verif-new.mjs", [newFileRoot, "--kind", "comp", "--force"]) === 0, "--force 才覆盖 comp.py");
 check(run("module-verif-new.mjs", ["--kind", "comp"]) === 2, "漏给模块根(comp)→ 退出码 2");
 
-// ── module-verif-wave:看波形的手段(用户明确要求"要看波形时必须真有这条")────────────────
-// 只验生成物与判定,不真的开 GUI:开窗会卡住自检。生成的脚本语法另外用真 vsim 批处理跑过
-// (`vsim -gui` 换成 `vsim -c`),`log`/`add wave`/`cd` 这些命令都实测过。
-check(
-  run("module-verif-wave.mjs", [newFileRoot, "--sim-path", join(TEMPLATES, "..", "tools", "xsim-placeholder"), "--dry-run"]) === 0,
-  "module-verif-wave --dry-run 不落盘也能判定(退出码 0)"
-);
-check(
-  pickTestbench(join(newFileRoot, "verif"), undefined, newFileRoot)?.endsWith("tb_uart_rx.sv") === true,
-  "能自己认出 verif/ 下的测试平台"
-);
-const emptyVerif = join(SANDBOX, `wave-empty-${stamp}`);
-mkdirSync(emptyVerif, { recursive: true });
-check(
-  pickTestbench(emptyVerif, undefined, emptyVerif) === undefined,
-  "verif/ 下没有测试平台时返回 undefined(CLI 会如实退 1,不硬编一个名字)"
-);
-check(simulatorKind("C:/modeltech64_2020.4/win64/vsim.exe") === "modelsim", "按路径认出 ModelSim");
-check(simulatorKind("C:/Xilinx/Vivado/2025.2/bin") === "xsim", "按路径认出 XSim");
-check(simulatorKind("C:/some/other/sim.exe") === undefined, "认不出的仿真器返回 undefined(如实说明,不乱猜)");
-const waveScript = modelSimDo(["C:/proj/rtl/a.sv", "C:/proj/verif/tb_a.sv"], "tb_a");
-check(
-  waveScript.includes('vsim -gui -voptargs="+acc=rn" tb_a') && waveScript.includes("add wave -r /*"),
-  "生成的脚本:开 GUI 并把信号加进波形窗口"
-);
-check(
-  waveScript.includes("log -r /*"),
-  "生成的脚本有 log -r /*(实测:不加它 wlf 里只有时刻 0,波形是空的)"
-);
-check(
-  waveScript.includes('cd "verif"'),
-  "生成的脚本切到 verif/ 再建库(工作库与波形跟 run.do 的结果放一处)"
-);
-check(
-  !/\brun\b/u.test(waveScript.replace(/^#.*$/gmu, "")),
-  "生成的脚本不自动 run(GUI 停住等人操作,与批处理 run.do 互补)"
-);
-check(
-  !/[\u4e00-\u9fff]/u.test(waveScript),
-  "生成的脚本没有非 ASCII 字符(ModelSim 的 Tcl 不按 UTF-8 读 .do,中文注释会让它报 invalid command)"
-);
+// ── module-synth-new:约束落点 ───────────────────────────────────────────────
 check(
   run("module-synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0
     && existsSync(join(newFileRoot, "synth", "uart_rx.xdc")),

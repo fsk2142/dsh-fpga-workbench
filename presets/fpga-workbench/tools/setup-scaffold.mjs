@@ -172,8 +172,8 @@ export function moduleNameError(name) {
 const VALUE_FLAGS = ["--kind", "--modules"];
 
 /**
- * 解析命令行参数。位置参数**只取第一个选项之前**的那些(与 `lib/stamp.mjs` 的 `parseStampArgs`、
- * `module-verif-wave` 同一条规矩),其余一律算用法错误。
+ * 解析命令行参数。位置参数**只取第一个选项之前**的那些(与 `lib/stamp.mjs` 的 `parseStampArgs`
+ * 同一条规矩),其余一律算用法错误。
  *
  * 为什么不能"随便挑一个不像选项的当根目录":实测 `--kind project <根>` 会把选项的值(`project`)
  * 当成根目录,于是在**当前目录**下建出一整套 `./project/` 还退 0 —— 用户以为建在了自己给的根上。

@@ -21,7 +21,7 @@
 // 退出码:0 全部通过(可以只有警告) / 1 有 FAIL / 2 用法或环境错误。
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /**
@@ -50,7 +50,7 @@ const SKIP_DIRS = new Set([
  *     "这模块过了"这个结论本身就不成立。
  * 端口对齐这条规则现在**不存在**(文件里没有),存在的是「端口类型」;哪天加了,按同一判据并进这里。
  */
-const WARN_ONLY = new Set(["Tab 字符", "代码行非英文", "行尾混用", "!= 待确认", "端口类型", "IP 卡", "字面量写法", "内部 wire"]);
+const WARN_ONLY = new Set(["Tab 字符", "代码行非英文", "行尾混用", "!= 待确认", "端口类型", "IP 卡", "字面量写法", "内部 wire", "恒真断言"]);
 
 /**
  * 端口方向与类型的搭配(用户口径 2026-09-21):input 必须 wire、output 必须 logic、inout 必须 tri。
@@ -110,6 +110,39 @@ function ipCardEntries(ipDir) {
         if (missingFields.length > 0) {
           return warn(`timing.json 缺栏目:${missingFields.join("、")} —— card(这是什么)/ measured(哪天测的)/ probe(拿什么测的)/ config(什么配置)都要有,否则别人没法复核`);
         }
+        // 光"键在"还不够(第三轮复审 N-12):空串 / 空对象 / 指向不存在的探针,都是"有张卡但复核不了"。
+        const problems = [];
+        for (const key of ["card", "measured", "probe"]) {
+          if (typeof parsed[key] !== "string" || parsed[key].trim() === "") {
+            problems.push(`${key} 要是非空字符串(现在是 ${JSON.stringify(parsed[key])})`);
+          }
+        }
+        if (typeof parsed.config !== "object" || parsed.config === null || Object.keys(parsed.config).length === 0) {
+          problems.push("config 要是非空对象(不写配置,这卡就说不清是在什么配置下测的)");
+        }
+        // 探针必须真的在模块里(相对模块根):不然这张卡说的"谁测的"没法复核
+        if (typeof parsed.probe === "string" && parsed.probe.trim() !== "") {
+          const probeRel = parsed.probe.split(/\s+/u)[0].replace(/^\.\//u, "");
+          const moduleRoot = resolve(ipDir, "..", "..");
+          const inside = !probeRel.split(/[\\/]+/u).includes("..") && !/^[A-Za-z]:/u.test(probeRel) && !probeRel.startsWith("\\\\");
+          if (!inside || !existsSync(join(moduleRoot, probeRel))) {
+            problems.push(`probe 指的探针找不到:${probeRel}(要写模块根相对的路径,且文件真的在)`);
+          }
+        }
+        // "有实测数值"才是卡的意义:一个数字都没有 → 这张卡没说测到了什么。
+        // 判**类型**(不是拿 JSON.stringify 去正则找数字:JSON 里数字不带引号,正则会全判错 —— 实测踩过)。
+        // `config` 里的是配置值(几路、什么模式),不是实测结果,所以不算数。
+        const hasNumber = (value) => {
+          if (typeof value === "number") return true;
+          if (Array.isArray(value)) return value.some(hasNumber);
+          if (value !== null && typeof value === "object") return Object.values(value).some(hasNumber);
+          return false;
+        };
+        const measured = Object.entries(parsed).filter(([key]) => key !== "config").map(([, value]) => value);
+        if (!measured.some(hasNumber)) {
+          problems.push("卡里一个实测数值都没有(config 里的配置值不算)—— 至少写一条测到的数(读延迟、复位占用拍等)");
+        }
+        if (problems.length > 0) return warn(`timing.json 不完整:${problems.join(";")}`);
       } catch (error) {
         return warn(`timing.json 解析不了(${String(error?.message ?? error)}) —— 卡读不出来等于没有卡`);
       }
@@ -315,18 +348,25 @@ export function checkFile(file, isTestbench) {
     // `X != 0`、`(expr % W) != (W-1)` 这类一侧是常量/表达式的,一律只提醒。
     if (isTestbench && line.includes("!=")) {
       const operands = codeOnly(line);
-      const pair = /([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*(?<![=!])!=(?!=)\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)/u.exec(operands);
-      if (pair !== null) {
-        const expectedSide = EXPECTED_SIGNAL.test(pair[1]) || EXPECTED_SIGNAL.test(pair[2]);
-        if (expectedSide) {
-          add("数据比对", number, "数据比对用了 '!='(全 X 时 X != y 求值为 X,if (X) 为假 → 一条错都不报):改用 '!=='");
-        } else {
-          add("!= 待确认", number, "这一行有 '!=':确认是数据比对就改 '!=='(否则全 X 会漏检);循环/计数条件可以保留");
-        }
+      // **一行里所有** `a != b` 都要看(第三轮复审 N-06:只取第一个的话,
+      // `i != 0 && dut_data != exp_data` 会把真正的数据比对漏成"待确认")
+      const pairs = [...operands.matchAll(/([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*(?<![=!])!=(?!=)\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)/gu)];
+      const expectedSide = pairs.some((pair) => EXPECTED_SIGNAL.test(pair[1]) || EXPECTED_SIGNAL.test(pair[2]));
+      if (pairs.length > 0 && expectedSide) {
+        add("数据比对", number, "数据比对用了 '!='(全 X 时 X != y 求值为 X,if (X) 为假 → 一条错都不报):改用 '!=='");
       } else if (/(?<![=!])!=(?!=)/u.test(operands)) {
-        // 一侧是常量 / 表达式(计数与索引的常见形状):不判 FAIL,但要提醒一句
+        // 两侧都是信号但没命中期望值命名 → 提醒;一侧是常量 / 表达式(计数与索引的常见形状)→ 提醒
         add("!= 待确认", number, "这一行有 '!=':确认是数据比对就改 '!=='(否则全 X 会漏检);循环/计数条件可以保留");
       }
+    }
+
+    // ── 恒真断言(`X |-> X`):"有断言"不等于"有设计检查"(第三轮复审 N-07)──
+    //
+    // 判据:`assert property` 的**前件与后件是同一个标识符** —— 不管设计怎样都成立,是恒真式。
+    // 只警告(不拦门禁):模板里的占位断言就长这样;但必须被看见,别把"有断言"当成"验过了"。
+    const vacuous = /assert\s+property\s*\([^;]*?\b([A-Za-z_]\w*)\s*\|->\s*\1\b/u.exec(codeOnly(line));
+    if (vacuous !== null) {
+      add("恒真断言", number, `恒真断言(\`${vacuous[1]} |-> ${vacuous[1]}\`):它不管设计怎样都通过,不是设计检查 —— 换成真正要守的性质`);
     }
 
     // ── end 与 else begin 同行 ──

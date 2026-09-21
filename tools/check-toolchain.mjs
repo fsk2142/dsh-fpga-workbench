@@ -1479,6 +1479,25 @@ check(
   "白名单里登记的文件都存在(名字写错等于白名单永远不生效)"
 );
 
+// ── 安装器的回滚要覆盖"add 之后的失败"(第三轮复审 N-02)────────────────────────
+//
+// 以前只有 `dsh plugin add` 失败才回滚:pnpm 返回 0 却少拷了文件、或新副本一加载就炸时,坏副本
+// **留在盘上**(备份就在旁边),重启就是黑屏。断言锚在**代码形状**上(注释里出现"回滚"不算数):
+// 必须有一个统一 rollback(内部调 restore(backup)),且"比对不一致"与"冒烟失败"两条路都走它。
+const installSource = stripComments(readFileSync(join(ROOT, "tools", "install.mjs"), "utf8"));
+check(
+  /const rollback = \(what\) => \{[\s\S]{0,600}?restore\(backup\)/u.test(installSource),
+  "install.mjs 有统一的 rollback(内部调 restore(backup))"
+);
+check(
+  /if \(after\.length !== 0\) \{\s*rollback\(/u.test(installSource),
+  "已装副本比对不一致时走回滚(不是只打印就退出)"
+);
+check(
+  /if \(\(smoke\.status \?\? 1\) !== 0\) \{\s*rollback\(/u.test(installSource),
+  "冒烟失败时走回滚(坏副本不能留在盘上等着被重启加载)"
+);
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");
 if (failures.length > 0) process.exitCode = 1;
 

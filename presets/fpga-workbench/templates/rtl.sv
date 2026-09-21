@@ -130,13 +130,14 @@ endtask
 //==================================================================================//
 //    Assertions                                                                    //
 //==================================================================================//
-// --- reset hold guard (placeholder; replace with module-specific assertions) ---
-// Purpose : assert the design stays in reset while rst is asserted.
-// Trigger : checked every posedge clk.
-// Failure : $error flags if reset semantics are violated.
+// --- reset actually clears the FSM (example; replace with module-specific assertions) ---
+// Purpose : assert that an asserted rst really clears the state register next cycle
+//           (a tautology like `rst |-> rst` would pass no matter how the logic is wired).
+// Trigger : every posedge clk with rst asserted.
+// Failure : $error flags if the state register is not ST_IDLE one cycle after reset.
 // TODO: replace with module-specific design assertions (FIFO no overflow / FSM one-hot / handshake).
-assert property (@( posedge clk ) rst |-> rst)
-    else $error("reset semantics violated");
+assert property (@( posedge clk ) rst |=> state_r == ST_IDLE)
+    else $error("reset did not clear the FSM state");
 
 // --- example: FIFO no-overflow (illustrative; remove if not applicable) ---
 // Purpose : flag if write pointer catches read pointer while full.

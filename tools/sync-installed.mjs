@@ -109,18 +109,31 @@ if (checkOnly) {
     .map((rel) => ({ rel, source: join(ROOT, rel), target: join(INSTALLED, rel) }))
     .filter(({ source, target }) => !existsSync(target) || hashOf(source) !== hashOf(target));
 
-  for (const { rel, source, target } of targets) {
-    mkdirSync(dirname(target), { recursive: true });
-    copyFileSync(source, target);
-    console.log(`  写入 ${rel}`);
+  // 半途失败**不能静默留下混合树**(第三轮复审 N-10):逐个覆写时,中途出错会得到"一部分新、
+  // 一部分旧"的副本 —— 那种状态重启后行为不确定。如实说清写到哪了、怎么收敛,并让退出码非 0。
+  let written = 0;
+  try {
+    for (const { rel, source, target } of targets) {
+      mkdirSync(dirname(target), { recursive: true });
+      copyFileSync(source, target);
+      written += 1;
+      console.log(`  写入 ${rel}`);
+    }
+  } catch (error) {
+    console.error(`\n同步中断:${error.message}`);
+    console.error(`  已写入 ${written}/${targets.length} 个文件 —— 已装副本现在是**混合状态**(部分新、部分旧)。`);
+    console.error("  **别在这时重启**:本脚本是幂等的,修掉上面那个错误(通常是文件被占用或没有写权限)后");
+    console.error("  重跑同一条命令即可收敛;要退回旧状态就按上面的路径手动处理。");
+    reportExtras(extraFiles());
+    process.exit(1);
   }
-  console.log(`\n已写入 ${targets.length} 个文件(共 ${files.length} 个,其余一致、跳过)。`);
+  console.log(`\n已写入 ${written} 个文件(共 ${files.length} 个,其余一致、跳过)。`);
 
   const after = compareTree(ROOT, INSTALLED);
   const remaining = blockingOf(after);
   if (remaining.length === 0) {
     const extras = extrasOf(after).length;
-    console.log(`\nPASS: 已装副本与源逐字节一致${extras === 0 ? "" : `(另有 ${extras} 个源里没有的旧文件,只报告不删除)`}。重启 DSH Desktop 生效。`);
+    console.log(`\nPASS: 源里列出的 ${files.length} 个文件在已装副本里逐字节一致${extras === 0 ? "" : `(另有 ${extras} 个源里没有的旧文件,只报告不删除 —— 它们仍在已装目录里,重启后照样会被加载)`}。重启 DSH Desktop 生效。`);
     console.log("(这不是 pnpm 安装:依赖声明与锁文件本来就有这个包,只是内容旧了。");
     console.log(" 下次正常 pnpm 操作会用同源内容重链一次,无害。)");
   } else {

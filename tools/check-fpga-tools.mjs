@@ -600,8 +600,10 @@ check(
   `缺说明报在第一处断言那一行(第 ${firstAssertLine} 行;实际 ${assertIssues.map((i) => `${i.rule}@${i.line}`).join("、") || "什么都没报"})`
 );
 check(
-  !assertIssues.some((issue) => issue.line === secondAssertLine),
-  `第二条(说明齐全)没被连坐(第 ${secondAssertLine} 行)`
+  // 只看「设计断言」这条:夹具里那两条断言本身是**恒真式**(`rst |-> rst` / `clk |-> clk`),
+  // 所以「恒真断言」那条警告本来就该在两条上都报 —— 这里要验的是说明块规则别连坐。
+  !assertIssues.some((issue) => issue.rule === "设计断言" && issue.line === secondAssertLine),
+  `第二条(说明齐全)没被「设计断言」连坐(第 ${secondAssertLine} 行)`
 );
 
 // ② 数据比对禁 `!=`:同一行出现期望值命名的信号 → 阻塞;循环/计数条件 → 只警告
@@ -666,6 +668,36 @@ check(
 );
 const neqConstCode = run("module-rtl-check.mjs", [neqConstMod]);
 check(neqConstCode === 0, `计数/索引比常量只报警告 → 退出码 0(实际 ${neqConstCode})`);
+
+// ②c 一行里有**多个** `!=`:每一个都要看(第三轮复审 N-06)
+//     真正会漏的形状:第一个 `!=` **两侧都是信号**但不是期望值命名(`a != b`),数据比对在后面 ——
+//     只看第一个匹配就会把它当"待确认",于是真正的数据比对被漏掉。
+const neqMultiMod = join(SANDBOX, "neq-multi-mod");
+mkdirSync(join(neqMultiMod, "rtl"), { recursive: true });
+mkdirSync(join(neqMultiMod, "verif"), { recursive: true });
+const neqMultiPath = join(neqMultiMod, "verif", "tb_neq_multi.sv");
+writeFileSync(neqMultiPath, goodTb
+  .replace("module tb_good;", "module tb_neq_multi;")
+  .replace(
+    "        if (err_cnt == 0)",
+    "        if (sq_a != sq_b && dut_data != exp_data) err_cnt = err_cnt + 1;\n        if (err_cnt == 0)"
+  ));
+check(
+  blocking(neqMultiPath, true).some((issue) => issue.rule === "数据比对"),
+  "同一行前一个 '!=' 是信号间比较(非期望值命名)、后一个才是数据比对 → 仍然判 FAIL(N-06)"
+);
+const neqMultiTwoSignals = goodTb
+  .replace("module tb_good;", "module tb_neq_multi2;")
+  .replace(
+    "        if (err_cnt == 0)",
+    "        if (sq_a != sq_b && sq_c != sq_d) err_cnt = err_cnt + 1;\n        if (err_cnt == 0)"
+  );
+writeFileSync(neqMultiPath, neqMultiTwoSignals);
+check(
+  !blocking(neqMultiPath, true).some((issue) => issue.rule === "数据比对") &&
+    blocking(neqMultiPath, true).some((issue) => issue.rule === "!= 待确认"),
+  "同一行两个都是普通信号比较 → 只提醒、不判 FAIL"
+);
 
 // ③ 成功标记必须与 err_cnt 挂钩:无条件打印的 ALL TESTS PASSED 只是字形
 //    (控制头与打印之间夹一行说明也是同一条语句 —— 自带模板就是这种分行写法)
@@ -797,7 +829,8 @@ check(
 //
 // stdio 不能开管道(沙箱限制,见文件头):stderr 也重定向到**文件句柄**再读。
 const runStderr = (script, args) => {
-  const path = existsSync(join(MODULE_TOOLS, script)) ? join(MODULE_TOOLS, script) : join(TOOLS, script);
+  // 解析顺序:预设的工具目录 → 仓库根 tools/(install / sync-installed 这些在仓库层)
+  const path = [join(MODULE_TOOLS, script), join(TOOLS, script), join(ROOT, "tools", script)].find((candidate) => existsSync(candidate)) ?? join(TOOLS, script);
   const log = join(SANDBOX, `stderr-${script}-${String(Date.now())}.log`);
   const fd = openSync(log, "w");
   const code = spawnSync(process.execPath, [path, ...args], { stdio: ["ignore", "ignore", fd] }).status;
@@ -807,7 +840,8 @@ const runStderr = (script, args) => {
 // 同一个道理,但收 **stdout** —— 检查器把正常结论(ok / warn / PASS)写在 stdout,只有用法错误与
 // 落盘失败走 stderr。用 runStderr 去读一条警告会什么都读不到(实测踩过:断言像在测空气)。
 const runStdout = (script, args) => {
-  const path = existsSync(join(MODULE_TOOLS, script)) ? join(MODULE_TOOLS, script) : join(TOOLS, script);
+  // 解析顺序:预设的工具目录 → 仓库根 tools/(install / sync-installed 这些在仓库层)
+  const path = [join(MODULE_TOOLS, script), join(TOOLS, script), join(ROOT, "tools", script)].find((candidate) => existsSync(candidate)) ?? join(TOOLS, script);
   const log = join(SANDBOX, `stdout-${script}-${String(Date.now())}.log`);
   const fd = openSync(log, "w");
   const code = spawnSync(process.execPath, [path, ...args], { stdio: ["ignore", fd, "ignore"] }).status;
@@ -861,6 +895,14 @@ check(
   /regexp[^\n]*part\[\^A-Za-z0-9\]/u.test(bundledRunSynth),
   "run_synth.tcl 仍保留老写法(整条器件串)作退路(两种写法都要认)"
 );
+// 器件串不全(缺速度等级)时**不能打成 OK**(第三轮复审 N-13):只能按前缀比 —— 那必须说出来。
+// 断言按 if/else 的代码形状钉(不是钉"文本里出现过 INCOMPLETE"),真实行为已用 Vivado Tcl 复核过:
+// JSON 三段全 → complete=1;缺 SPEEDGRADE → complete=0;老式整串 → complete=1。
+check(
+  /if \{\$xcomplete\} \{\s*\n\s*puts "\\\[run_synth\\\] OK:/u.test(bundledRunSynth) &&
+    /else \{\s*\n[\s\S]{0,400}?INCOMPLETE/u.test(bundledRunSynth),
+  "run_synth.tcl 只在器件串**完整**时打 OK;不全时改为 WARN + INCOMPLETE(N-13)"
+);
 check(
   !/\[\^\}\]\*\?/u.test(bundledRunSynth),
   "run_synth.tcl 里没有「排除花括号」那种正则(裸花括号会把 braced 字符串提前关掉,实测把 proc 拆散)"
@@ -890,27 +932,68 @@ check(!/<[A-Za-z_][A-Za-z0-9_]*>/u.test(specText), "起出来的综合脚本里�
 check(run("module-synth-new.mjs", [specMod, "uart_rx", "--kind", "synth-script"]) === 1, "已存在的 run_synth.tcl 不覆盖 → 退出码 1");
 check(run("module-synth-new.mjs", [specMod, "uart_rx", "--kind", "synth-script", "--force"]) === 0, "--force 才覆盖 run_synth.tcl");
 
-// 读不到 / 说不清就**不猜**:spec 里器件写成"待定 + 两个候选"时,那两行必须还是模板原样
+// 器件定不下来就**拒绝生成**(用户口径 2026-09-21 + 第三轮复审 N-01):以前是"起出来、两行保留模板
+// 原样",那等于把模板默认器件(XC7A100T)留在别的器件工程里 —— 看起来可信的错值比直接报错坏得多。
 writeFileSync(specFile, [
   "# spec:uart_rx", "",
   "## 目标器件", "",
   "器件型号:待定(候选 xc7a100tfgg484-2 或 xc7z020clg484-1)", ""
 ].join("\n"));
-const ambiguousText = run("module-synth-new.mjs", [specMod, "uart_rx", "--kind", "synth-script", "--force"]) === 0
-  && existsSync(specScript)
-  ? readFileSync(specScript, "utf8")
-  : "";
+const ambiguousCode = run("module-synth-new.mjs", [specMod, "uart_rx", "--kind", "synth-script", "--force"]);
+check(ambiguousCode === 2, `spec 里说不清器件(两个候选)→ 拒绝生成、退出码 2(实际 ${ambiguousCode})`);
 check(
-  ambiguousText === renderTemplate(bundledRunSynth, "uart_rx").text,
-  "spec 里说不清器件(两个候选)时:脚本与模板逐字节一致(没有猜一个型号写进去)"
+  readFileSync(specScript, "utf8").includes('set PART "xc7z020clg484-1"'),
+  "拒绝时不碰已有文件(里面还是上次那份真器件)"
 );
-// 连 spec/spec.md 都没有时同样不猜(new-file 那个模块根只有 rtl/ verif/ synth/)
+// 连 spec/spec.md 都没有的模块根:同样拒绝,而且**不落文件**
 const noSpecScript = join(newFileRoot, "synth", "run_synth.tcl");
 const noSpecCode = run("module-synth-new.mjs", [newFileRoot, "uart_rx", "--kind", "synth-script"]);
 check(
-  noSpecCode === 0 && existsSync(noSpecScript)
-    && readFileSync(noSpecScript, "utf8") === renderTemplate(bundledRunSynth, "uart_rx").text,
-  `没有 spec/spec.md 时:脚本起得出来、两行一个都不填(实际退出码 ${noSpecCode})`
+  noSpecCode === 2 && !existsSync(noSpecScript),
+  `没有 spec/spec.md → 拒绝生成、退出码 2、不落文件(实际 ${noSpecCode})`
+);
+
+// 模块 spec **不重述器件**时(N-01 后的常态):器件从**兄弟工程 spec** 读;顶层名缺省用模块名
+const projSynthRoot = join(SANDBOX, `synth-proj-${stamp}`);
+const projSynthMod = join(projSynthRoot, "uart_rx");
+mkdirSync(join(projSynthRoot, "project", "spec"), { recursive: true });
+mkdirSync(join(projSynthMod, "spec"), { recursive: true });
+writeFileSync(join(projSynthRoot, "project", "spec", "spec.md"), "# 工程 spec\n\n- 器件型号:xcku040-ffva1156-2-e\n");
+writeFileSync(join(projSynthMod, "spec", "spec.md"), "# 模块 spec\n\n- 器件见工程 spec(不重述)\n");
+const projSynthCode = run("module-synth-new.mjs", [projSynthMod, "uart_rx", "--kind", "synth-script"]);
+// 读之前先判存在:被咬坏时这里**红**就够了,不能因为文件没生成就抛 ENOENT 把整份自检崩掉
+const projSynthScript = join(projSynthMod, "synth", "run_synth.tcl");
+const projSynthText = existsSync(projSynthScript) ? readFileSync(projSynthScript, "utf8") : "";
+check(
+  projSynthCode === 0 && projSynthText.includes('set PART "xcku040-ffva1156-2-e"') &&
+    !projSynthText.includes("xc7a100tfgg484-2"),
+  `模块 spec 不写器件 → 器件取自工程 spec(退出码 ${String(projSynthCode)})`,
+  projSynthText.split("\n").filter((line) => line.startsWith("set ")).join(" | ")
+);
+check(
+  projSynthText.includes('set TOP "uart_rx"'),
+  "spec 没写顶层名 → 按模块名填(不是模板默认 top)"
+);
+// 真实 spec 的形状(2026-09-21 实测踩到):除了「目标器件」字段行,**修订历史表**里还会留旧器件,
+// 字段行同一行还带括号里的族名(`(Artix-7 XC7A100T,-2,…)`)—— 不处理就会判成"说不清"而拒绝生成。
+writeFileSync(
+  join(projSynthMod, "spec", "spec.md"),
+  [
+    "# spec:uart_rx", "",
+    "| 版本 | 日期 | 变更 |",
+    "|---|---|---|",
+    "| v1.2 | 2026-09-20 | 目标器件改判为 `xc7a100tfgg484-2`(原 `xcku3p-ffva676-2-i` 不同族,IP 被锁) |", "",
+    "## 目标器件", "",
+    "- **目标器件**:`xc7a100tfgg484-2`(Artix-7 XC7A100T,-2,Vivado 2025.2)。", "",
+    "- 顶层模块名:uart_rx", ""
+  ].join("\n")
+);
+const realShapeCode = run("module-synth-new.mjs", [projSynthMod, "uart_rx", "--kind", "synth-script", "--force"]);
+const realShapeText = existsSync(projSynthScript) ? readFileSync(projSynthScript, "utf8") : "";
+check(
+  realShapeCode === 0 && realShapeText.includes('set PART "xc7a100tfgg484-2"') && !realShapeText.includes("xcku3p"),
+  `真实 spec 形状(字段行 + 族名 + 历史行)→ 取字段行那个器件(退出码 ${String(realShapeCode)})`,
+  realShapeText.split("\n").filter((line) => line.startsWith("set ")).join(" | ")
 );
 
 // `--kind comp`:比对脚本落 verif/comp.py(原样复制,不改一个字符)
@@ -1328,6 +1411,30 @@ check(
   "timing.json 少了 measured / probe → 警告点出缺哪栏(卡片要能复核)",
   partialCard.output.slice(-300)
 );
+// N-12:光"四个键都在"不算合格 —— 空串 / 空 config / 探针不存在 / 一条数值都没有,都要点出来
+writeFileSync(
+  join(ipCardRoot, "rtl", "ip", "xpm_fifo_sync", "timing.json"),
+  `${JSON.stringify({ card: "xpm_fifo_sync", measured: "2026-09-21", probe: "rtl/ip/xpm_fifo_sync/probe_missing.sv", config: {} }, null, 2)}\n`
+);
+const hollowCard = runStdout("module-rtl-check.mjs", [ipCardRoot]);
+check(
+  hollowCard.code === 0 && /探针找不到/u.test(hollowCard.output) && /config 要是非空对象/u.test(hollowCard.output) && /数值都没有/u.test(hollowCard.output),
+  "空洞的卡(config 空、探针不在、没有数值)→ 三条都点出来(N-12)",
+  hollowCard.output.slice(-400)
+);
+writeFileSync(
+  join(ipCardRoot, "rtl", "ip", "xpm_fifo_sync", "probe.sv"),
+  "// probe\n"
+);
+writeFileSync(
+  join(ipCardRoot, "rtl", "ip", "xpm_fifo_sync", "timing.json"),
+  `${JSON.stringify({ card: "xpm_fifo_sync", measured: "2026-09-21", probe: "rtl/ip/xpm_fifo_sync/probe.sv", config: { READ_MODE: "std" }, read_latency: 2 }, null, 2)}\n`
+);
+const realCardNow = runStdout("module-rtl-check.mjs", [ipCardRoot]);
+check(
+  !/timing\.json/u.test(realCardNow.output) || !/不完整|缺栏目/u.test(realCardNow.output),
+  "填全之后(探针真在、有数值)不再报卡的问题"
+);
 writeFileSync(join(ipCardRoot, "rtl", "ip", "xpm_fifo_sync", "timing.json"), '{ broken json\n');
 const badCard = runStdout("module-rtl-check.mjs", [ipCardRoot]);
 check(
@@ -1390,6 +1497,15 @@ check(
 check(
   !hasIssue(nameRuleIssues("    assign dout = '{default: 1'b0}"), /字面量写法/u),
   "赋值模式 `'{default: …}`(数组清零用)不当成无宽度填充"
+);
+// 恒真断言(`X |-> X`):"有断言"不等于"有设计检查"(第三轮复审 N-07)
+check(
+  hasIssue(nameRuleIssues("    assert property (@(posedge clk) rst |-> rst);"), /恒真断言/u),
+  "恒真断言 `rst |-> rst` → 警告(它不管设计怎样都通过)"
+);
+check(
+  !hasIssue(nameRuleIssues("    assert property (@(posedge clk) rst |=> !done);"), /恒真断言/u),
+  "真正要守的性质(前后件不是同一标识符)不报恒真断言"
 );
 check(
   hasIssue(nameRuleIssues(["    input wire clk,", "    output logic dout", "    wire mid;", "    assign mid = clk;"].join("\n")),
@@ -1509,6 +1625,25 @@ check(
   `依据内容真的变了 → 警告(不判错,退出码 ${String(digested.code)})`,
   digested.output.slice(-300)
 );
+// N-08:依据变了之后,**不许**用 --record 直接盖章;要先确认,再显式 --accept-changed
+// (拒绝信息走 stderr —— 那是错误通道,所以这里用 runStderr 抓)
+const blockedRecord = runStderr("module-report-check.mjs", [rcRoot, "--record"]);
+check(
+  blockedRecord.code === 1 && /内容变了/u.test(blockedRecord.output) && /verif\/sim\.log/u.test(blockedRecord.output),
+  `依据变了时 --record 拒绝盖章、点出是哪个文件(实际退出码 ${String(blockedRecord.code)})`,
+  blockedRecord.output.slice(-300)
+);
+const acceptedRecord = runStdout("module-report-check.mjs", [rcRoot, "--record", "--accept-changed"]);
+check(
+  acceptedRecord.code === 0 && /接受.*verif\/sim\.log/u.test(acceptedRecord.output),
+  "--accept-changed 才写回新摘要,并说明「接受了哪些变更」",
+  acceptedRecord.output.slice(-300)
+);
+const afterAccept = runStdout("module-report-check.mjs", [rcRoot]);
+check(
+  afterAccept.code === 0 && !/摘要变了/u.test(afterAccept.output),
+  "接受后重跑不再报摘要变化"
+);
 
 // 场景 E:器件一致性(模块 spec vs 它所属工程 spec,用户口径 2026-09-21:器件只写一处)
 const projRoot = join(SANDBOX, `device-${stamp}`);
@@ -1528,6 +1663,76 @@ const deviceOk = runStdout("module-report-check.mjs", [devMod]);
 check(
   deviceOk.code === 0 && !deviceOk.output.includes("器件两处不一致"),
   "模块 spec 不重述器件(以工程为准)→ 不报"
+);
+
+// 场景 F:第三轮复审 N-03 / N-04 / N-05 / N-09 —— 空检查不是通过、器件按字段读、证据不许越界
+const scopeRoot = join(SANDBOX, `inscope-${stamp}`);
+mkdirSync(join(scopeRoot, "spec"), { recursive: true });
+mkdirSync(join(scopeRoot, "verif"), { recursive: true });
+const bare = runStdout("module-report-check.mjs", [scopeRoot]);
+check(
+  bare.code === 0 && /NO_REPORTS/u.test(bare.output) && !/^PASS/mu.test(bare.output),
+  "一份文件都没有 → NO_REPORTS,不能叫 PASS(N-03)",
+  bare.output.slice(-200)
+);
+// N-09:只有草稿(没有「结论:」行)时,AC 里缺证据只报 info —— 以前任何 verif/*.md 都会触发硬失败
+writeFileSync(join(scopeRoot, "spec", "spec.md"), acSpec("verif/nowhere.md"));
+writeFileSync(join(scopeRoot, "verif", "debug.md"), "# 调试草稿\n\n- 临时引用:`verif/nowhere.md`\n");
+const draftOnly = runStdout("module-report-check.mjs", [scopeRoot]);
+check(
+  draftOnly.code === 0,
+  `只有草稿(没有「结论:」行)时 AC 缺证据不判错(实际退出码 ${String(draftOnly.code)})`,
+  draftOnly.output.slice(-260)
+);
+// N-03:有结论文件但一条证据路径都没引用 → NO_EVIDENCE,同样不能叫 PASS
+writeFileSync(join(scopeRoot, "spec", "spec.md"), "# spec(没有 AC 表)\n");
+writeFileSync(join(scopeRoot, "verif", "debug.md"), "# 调试草稿(清空引用)\n");
+writeFileSync(join(scopeRoot, "verif", "verif.md"), "# 验证报告\n\n结论: PASS\n");
+const noEvidence = runStdout("module-report-check.mjs", [scopeRoot]);
+check(
+  noEvidence.code === 0 && /NO_EVIDENCE/u.test(noEvidence.output) && !/^PASS/mu.test(noEvidence.output),
+  "有结论但零引用 → NO_EVIDENCE,不能叫 PASS(N-03)",
+  noEvidence.output.slice(-200)
+);
+// N-05:证据路径越界(`..` / 绝对路径)一律如实报,且不拿它去核存在性
+writeFileSync(join(scopeRoot, "verif", "verif.md"), ["# 验证报告", "", "结论: PASS", "", "- 越界引用:`verif/../../outside.txt`", ""].join("\n"));
+const escaped = runStdout("module-report-check.mjs", [scopeRoot]);
+check(
+  escaped.code === 1 && /必须留在模块根里面/u.test(escaped.output) && escaped.output.includes("verif/../../outside.txt"),
+  `证据路径越出模块根 → FAIL 并点名(实际退出码 ${String(escaped.code)})`,
+  escaped.output.slice(-300)
+);
+// N-04:UltraScale 型号按**字段行**读(老正则 `x[a-z]?\d` 匹配不上 xcku040/xczu7ev → 静默不报)
+const usRoot = join(SANDBOX, `ultrascale-${stamp}`);
+const usMod = join(usRoot, "uart_rx");
+mkdirSync(join(usRoot, "project", "spec"), { recursive: true });
+mkdirSync(join(usMod, "spec"), { recursive: true });
+writeFileSync(join(usRoot, "project", "spec", "spec.md"), "# 工程 spec\n\n- 器件型号:xcku040-ffva1156-2-e\n");
+writeFileSync(join(usMod, "spec", "spec.md"), "# 模块 spec\n\n- 器件型号:xczu7ev-ffvc1156-2-e\n");
+const usBad = runStdout("module-report-check.mjs", [usMod]);
+check(
+  /器件\(xczu7ev-ffvc1156-2-e\)与工程 spec 器件\(xcku040-ffva1156-2-e\)不一致/u.test(usBad.output),
+  "UltraScale 器件(xcku040 / xczu7ev)能读出来并判不一致(N-04)",
+  usBad.output.slice(-300)
+);
+
+// 场景 G:sync-installed 半途失败 → 必须说清"混合状态"、退出码非 0(第三轮复审 N-10)
+//   造法:在沙箱 profile 里把本该写文件的位置**放成目录**(copyFileSync 对它必然 EPERM),
+//   且它排在写入顺序的第二个 —— 于是恰好是"写了一个、第二个失败"的半途状态。
+const syncSb = join(SANDBOX, `sync-partial-${stamp}`);
+const syncInstalled = join(syncSb, "profiles", "desktop", "node_modules", "dsh-fpga-workbench");
+mkdirSync(join(syncInstalled, "lib", "client.js"), { recursive: true });
+writeFileSync(join(syncInstalled, "package.json"), "{}\n");
+const savedProfileDir = process.env.DSH_PROFILE_DIR;
+process.env.DSH_PROFILE_DIR = join(syncSb, "profiles", "desktop");
+// 中断信息走 stderr(错误通道),所以用 runStderr 抓
+const syncPartial = runStderr("sync-installed.mjs", []);
+if (savedProfileDir === undefined) delete process.env.DSH_PROFILE_DIR;
+else process.env.DSH_PROFILE_DIR = savedProfileDir;
+check(
+  syncPartial.code === 1 && /混合状态/u.test(syncPartial.output) && /已写入 \d+\/\d+ 个文件/u.test(syncPartial.output),
+  `sync-installed 半途失败 → 退出码 1 并说清"混合状态 + 已写几个"(实际 ${String(syncPartial.code)})`,
+  syncPartial.output.slice(-300)
 );
 
 // ── F-03:check-patch-file.mjs 不许写死仓库绝对路径 ───────────────────────────

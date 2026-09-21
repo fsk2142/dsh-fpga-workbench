@@ -37,10 +37,12 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { writeFileRecoverable } from "../lib/stamp.mjs";
+// 器件从 spec 里怎么读,**复用综合脚本那一套**(不各写一份,免得两个工具读法不一致)
+import { fieldsFromSpec } from "./module-synth-new.mjs";
 
 /** 结论文件所在的环节目录(只扫顶层 `*.md`;`explore/`、`work/` 那些中间产物不看)。 */
 const REPORT_DIRS = ["spec", "verif", "synth"];
@@ -73,16 +75,46 @@ const REGENERABLE = /(?:^|\/)work\//u;
  * @returns 去重后的路径数组(保持出现顺序;行号后缀已摘掉)。
  */
 export function evidencePaths(text) {
+  // 注意返回的是**字符串数组**(调用方直接 join/存在性判断);带 `safe` 标记的那份是 evidenceTokens
+  return evidenceTokens(text).filter((token) => token.safe).map((token) => token.raw);
+}
+
+/**
+ * 抽反引号里的证据路径,**并标出哪些是"不许引用"的越界写法**。
+ *
+ * 越界(N-05,第三轮复审):证据路径必须留在模块根里面 —— `verif/../../secrets.txt` 这种以前会被
+ * 当普通路径核、`--record` 还会**读模块外的文件**去算摘要。现在:含 `..` 段、绝对路径、含 NUL 的
+ * 一律标 `safe: false`,由调用方如实报"不许这样引用"(而不是默默当它存在/不存在)。
+ * @param text - 文件正文。
+ * @returns `{ raw, safe }[]`(去重,保持出现顺序;行号后缀已摘掉)。
+ */
+export function evidenceTokens(text) {
   const out = [];
+  const seen = new Set();
   for (const match of text.matchAll(/`([^`\n]+)`/gu)) {
     let raw = match[1].trim();
     if (!EVIDENCE_PREFIX.test(raw)) continue;
     if (raw.includes("<") || raw.includes("*") || /\s/u.test(raw)) continue;
     raw = raw.replace(LINE_SUFFIX, "");
-    if (raw === "" || out.includes(raw)) continue;
-    out.push(raw);
+    if (raw === "" || seen.has(raw)) continue;
+    seen.add(raw);
+    out.push({ raw, safe: isSafeRelative(raw) });
   }
   return out;
+}
+
+/**
+ * 这条相对路径能不能当证据引用:必须是**模块根内部**的相对路径。
+ *
+ * 判据:非绝对路径(含盘符 / UNC)、任何一段不是 `..`、不含 NUL。`..` 一律拒绝 —— 模块内的证据
+ * 引用没有需要往上跳的正当理由,而放行它就能读到模块外(复审 N-05)。
+ * @param path - 反引号里摘出来的字符串(模块根相对)。
+ * @returns 安全时为 true。
+ */
+export function isSafeRelative(path) {
+  if (path.includes("\u0000")) return false;
+  if (isAbsolute(path) || /^[A-Za-z]:/u.test(path) || path.startsWith("\\\\")) return false;
+  return !path.split(/[\\/]+/u).includes("..");
 }
 
 /**
@@ -180,8 +212,18 @@ export function auditReports(moduleRoot) {
   };
 
   const conclusions = REPORT_DIRS.flatMap((dir) => mdIn(dir));
-  // "已经写出结论" = 除 spec 的规划文档以外,还有别的环节报告(那时 AC 声明的落点才该真的在)
-  const concluded = conclusions.some((rel) => !rel.startsWith("spec/"));
+  // "已经写出结论" = `verif/` 或 `synth/` 里有一份**真的写了结论**的报告 —— 判据是文件里有 `结论:` 行
+  // (用户口径:结论文件的判据就是那一行)。只有 `debug.md` 这种草稿、或空文件时不算"已经写出结论"。
+  // (第三轮复审 N-09:以前只要有 `verif/` 或 `synth/` 下任何 .md,AC 里缺证据就直接判 FAIL —— 草稿也会触发。)
+  const concluded = conclusions.some(
+    (rel) => !rel.startsWith("spec/") && /^\s*结论\s*[:：]/mu.test(readIf(rel) ?? "")
+  );
+
+  // 越界引用(含 `..` / 绝对路径):一律如实报,不算"存在与否"的问题(复审 N-05)
+  const invalid = [];
+  const noteInvalid = (file, token, ac) => {
+    invalid.push({ file, path: token.raw, ac, reason: "证据路径必须留在模块根里面(不许 `..` / 绝对路径)" });
+  };
 
   // ── ① spec 的 AC 行:证据位置是**声明**;声明的落点不存在时,只有"已经写出结论"才算问题 ──
   const specText = readIf("spec/spec.md");
@@ -189,7 +231,12 @@ export function auditReports(moduleRoot) {
     const acLines = specText.split(/\r?\n/u).filter((line) => AC_ROW.test(line));
     for (const line of acLines) {
       const ac = AC_ROW.exec(line)?.[1] ?? "AC";
-      for (const path of evidencePaths(line)) {
+      for (const token of evidenceTokens(line)) {
+        if (!token.safe) {
+          noteInvalid("spec/spec.md", token, ac);
+          continue;
+        }
+        const path = token.raw;
         if (existsSync(join(moduleRoot, path))) continue;
         const soft = !concluded || REGENERABLE.test(path);
         missing.push({
@@ -214,33 +261,44 @@ export function auditReports(moduleRoot) {
     seen.add(rel);
     const text = readIf(rel);
     if (text === undefined) continue;
-    const paths = evidencePaths(text);
-    const digests = recordedDigests(text);
-    files.push({ file: rel, paths });
-    for (const path of paths) {
+    const paths = [];
+    // 这份报告**写出结论**了吗:写了才算"给判定撑腰的文档",它引用的路径缺失才是错。
+    // 草稿(没有 `结论:` 行)里引用还没落地的路径是正常的 —— 以前不分青红皂白判 FAIL(复审 N-09)。
+    const isConclusion = /^\s*结论\s*[:：]/mu.test(text);
+    for (const token of evidenceTokens(text)) {
+      if (!token.safe) {
+        noteInvalid(rel, token, "");
+        continue;
+      }
+      paths.push(token.raw);
+      const path = token.raw;
       const abs = join(moduleRoot, path);
       if (!existsSync(abs)) {
+        const soft = !isConclusion || REGENERABLE.test(path);
         missing.push({
           file: rel,
           path,
           ac: "",
-          hard: !REGENERABLE.test(path),
-          reason: REGENERABLE.test(path)
-            ? `${rel} 引用的路径现在不在 —— 可再生目录,不判错`
-            : `${rel} 引用了不存在的路径`
+          hard: !soft,
+          reason: !isConclusion
+            ? `${rel} 引用的路径现在不在 —— 这份还没写结论(草稿),只提示、不判错`
+            : REGENERABLE.test(path)
+              ? `${rel} 引用的路径现在不在 —— 可再生目录,不判错`
+              : `${rel} 引用了不存在的路径`
         });
         continue;
       }
       // ── ③ 依据的摘要对不上:报告写完之后那份依据**内容**变了(只警告,不判错)──
       if (!isEvidenceFile(moduleRoot, path)) continue;
-      const recorded = digests.get(path);
+      const recorded = recordedDigests(text).get(path);
       if (recorded === undefined) continue; // 没记过摘要 = 还没启用这一步,不猜
       const current = sha256Of(abs);
       if (current !== undefined && current !== recorded) changed.push({ file: rel, path, recorded, current });
     }
+    files.push({ file: rel, paths });
   }
 
-  return { files, missing, changed, concluded };
+  return { files, missing, changed, invalid, concluded, checkedPaths: files.reduce((sum, entry) => sum + entry.paths.length, 0) };
 }
 
 /**
@@ -253,19 +311,12 @@ export function auditReports(moduleRoot) {
  * @returns `{ module?, project?, ok }`;两边都没写器件时为 `{ ok: true }`。
  */
 export function deviceConsistency(moduleRoot) {
-  const deviceIn = (path) => {
-    try {
-      const text = readFileSync(path, "utf8");
-      // 器件串一律以 xc/zynq/… 开头?不猜:抓 "xc<字母数字>" 这种 Xilinx 器件串(AMD 也用它)
-      return /(?:^|[^\w])(x[a-z]?\d[a-z0-9]*[a-z0-9-]*)/iu.exec(text)?.[1];
-    } catch {
-      return undefined;
-    }
-  };
-  const moduleSpec = join(moduleRoot, "spec", "spec.md");
-  const projectSpec = join(moduleRoot, "..", "project", "spec", "spec.md");
-  const mine = existsSync(moduleSpec) ? deviceIn(moduleSpec) : undefined;
-  const theirs = existsSync(projectSpec) ? deviceIn(projectSpec) : undefined;
+  // 读法与综合脚本**共用**(`fieldsFromSpec`):先认写着「器件 / device / part」的字段行、只认唯一候选。
+  // 老写法是"全文第一条 xc…",两个毛病(第三轮复审 N-04):① `xcku040-ffva1156-2-e` 这类
+  // UltraScale 型号(字母两三位)匹配不上,解析结果 undefined → 检查**静默不报**;
+  // ② 全文第一条未必是目标器件(附录、备选、引用别的工程都会先出现)。
+  const mine = fieldsFromSpec(join(moduleRoot, "spec", "spec.md")).part;
+  const theirs = fieldsFromSpec(join(moduleRoot, "..", "project", "spec", "spec.md")).part;
   if (mine === undefined || theirs === undefined) return { module: mine, project: theirs, ok: true };
   return { module: mine, project: theirs, ok: mine.toLowerCase() === theirs.toLowerCase() };
 }
@@ -288,7 +339,12 @@ function main() {
 
   if (record) {
     // 只做一件事:给每份结论文件写回"当前引用的证据 + 摘要"。不动别的,覆盖走可恢复写(留 .bak)。
-    const written = [];
+    //
+    // **先看再写**(第三轮复审 N-08):已经记过摘要、而那份依据**内容变了**时,直接 `--record` 等于
+    // 把"变了"这件事一笔勾销 —— 那正是本工具要抓的"结论还成立吗"。这种文件默认**不写**,
+    // 列出来让人先判断;确实确认过、要接受新版本,再加 `--accept-changed`。
+    const acceptChanged = args.includes("--accept-changed");
+    const targets = [];
     for (const dir of REPORT_DIRS) {
       for (const rel of (() => {
         try {
@@ -299,40 +355,62 @@ function main() {
           return [];
         }
       })()) {
-        const abs = join(moduleRoot, rel);
-        const text = readFileSync(abs, "utf8");
+        const text = readFileSync(join(moduleRoot, rel), "utf8");
         const entries = [];
+        const stale = [];
         for (const path of evidencePaths(text)) {
           if (!isEvidenceFile(moduleRoot, path)) continue;
           const digest = sha256Of(join(moduleRoot, path));
-          if (digest !== undefined) entries.push([path, digest]);
+          if (digest === undefined) continue;
+          entries.push([path, digest]);
+          const recorded = recordedDigests(text).get(path);
+          if (recorded !== undefined && recorded !== digest) stale.push(path);
         }
         if (entries.length === 0 && !DIGEST_BLOCK.test(text)) continue;
-        const next = withDigests(text, entries);
-        if (next === text) continue;
-        const snapshot = writeFileRecoverable(abs, next);
-        written.push({ file: rel, count: entries.length, backup: snapshot });
+        targets.push({ rel, text, entries, stale });
       }
     }
-    if (asJson) console.log(JSON.stringify({ recorded: written }, null, 2));
+    const blocked = targets.filter((item) => item.stale.length > 0);
+    if (blocked.length > 0 && !acceptChanged) {
+      console.error("这些报告引用的依据**内容变了**,不自动盖章(先确认结论还成不成立):");
+      for (const item of blocked) console.error(`  ${item.rel} → ${item.stale.join("、")}`);
+      console.error("确认过、要接受新版本:再加 --accept-changed 重跑。");
+      return 1;
+    }
+    const written = [];
+    for (const item of targets) {
+      const next = withDigests(item.text, item.entries);
+      if (next === item.text) continue;
+      const snapshot = writeFileRecoverable(join(moduleRoot, item.rel), next);
+      written.push({ file: item.rel, count: item.entries.length, backup: snapshot, acceptedChanged: item.stale });
+    }
+    if (asJson) console.log(JSON.stringify({ recorded: written, acceptedChanged: blocked.map((item) => item.rel) }, null, 2));
     else if (written.length === 0) console.log("没有可记录的依据(报告里没有引用到具体证据文件)。");
-    else for (const item of written) console.log(`已记录 ${item.count} 条摘要 → ${item.file}${item.backup === undefined ? "" : `(旧版本留在 ${item.backup})`}`);
+    else for (const item of written) console.log(`已记录 ${item.count} 条摘要 → ${item.file}${item.backup === undefined ? "" : `(旧版本留在 ${item.backup})`}${item.acceptedChanged.length === 0 ? "" : `(**接受**了变更的依据:${item.acceptedChanged.join("、")})`}`);
     return 0;
   }
 
-  const { files, missing, changed, concluded } = auditReports(moduleRoot);
+  const { files, missing, changed, invalid, concluded, checkedPaths } = auditReports(moduleRoot);
   const device = deviceConsistency(moduleRoot);
-  const hard = missing.filter((entry) => entry.hard);
+  const hard = [...invalid, ...missing.filter((entry) => entry.hard)];
   const soft = missing.filter((entry) => !entry.hard);
+  // 一份"什么都没有"的检查**不是通过**(第三轮复审 N-03):没报告、或有报告但一条证据都没引用,
+  // 都要有自己的一句话,不能说 PASS。
+  const status = files.length === 0 ? "no-reports" : checkedPaths === 0 ? "no-evidence" : "checked";
 
   if (asJson) {
-    console.log(JSON.stringify({ module: moduleRoot, concluded, files, missing, changed, device, failures: hard.length }, null, 2));
+    console.log(JSON.stringify({
+      module: moduleRoot, status, concluded, checkedPaths, files, missing, invalid, changed, device, failures: hard.length
+    }, null, 2));
   } else {
     for (const entry of files) {
-      const bad = missing.filter((item) => item.file === entry.file && item.hard).length;
+      const bad = [...invalid, ...missing].filter((item) => item.file === entry.file && (item.hard ?? true)).length;
       const moved = changed.filter((item) => item.file === entry.file).length;
       const notes = [bad === 0 ? "" : `缺 ${bad} 条`, moved === 0 ? "" : `${moved} 条依据的摘要变了`].filter((s) => s !== "");
       console.log(`${bad === 0 ? "ok  " : "FAIL"}  ${entry.file}  (引用 ${entry.paths.length} 条路径${notes.length === 0 ? "" : ` / ${notes.join(" / ")}`})`);
+    }
+    for (const item of invalid) {
+      console.log(`        FAIL  ${item.file} → ${item.path}  ${item.reason}`);
     }
     for (const item of missing) {
       console.log(`        ${item.hard ? "FAIL" : "info"}  ${item.file} → ${item.path}  ${item.reason}`);
@@ -347,10 +425,18 @@ function main() {
     if (soft.length > 0) notes.push(`${soft.length} 条"可再生 / 还没做到"`);
     if (changed.length > 0) notes.push(`${changed.length} 条"摘要变了"`);
     if (!device.ok) notes.push("器件两处不一致");
+    const summary = [
+      `${hard.length} 条:报告/AC 引用了不存在或越界的证据路径`,
+      invalid.length > 0 ? `其中 ${invalid.length} 条越界(不许 \`..\` / 绝对路径)` : ""
+    ].filter((s) => s !== "").join(",");
     console.log(
       hard.length === 0
-        ? `\nPASS: 引用的证据路径都在${notes.length > 0 ? `(另有 ${notes.join("、")},见上面 info/warn)` : ""}`
-        : `\nFAIL (${hard.length} 条:报告/AC 引用了不存在的证据路径)`
+        ? status === "no-reports"
+          ? "\nNO_REPORTS: 这个模块还没有 spec / 结论文件 —— 没有证据路径可核(这**不是**通过)"
+          : status === "no-evidence"
+            ? "\nNO_EVIDENCE: 有文件,但一条证据路径都没引用 —— 没有可核的东西(**不是**通过;要么还没写证据,要么写法不对)"
+            : `\nPASS: 引用到的 ${checkedPaths} 条证据路径都在 —— 只证明"路径存在"(内容对不对、功能过没过不归本工具判)${notes.length > 0 ? `(另有 ${notes.join("、")},见上面 info/warn)` : ""}`
+        : `\nFAIL (${summary})`
     );
   }
   return hard.length === 0 ? 0 : 1;

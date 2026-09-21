@@ -30,8 +30,8 @@
 set MODULE_ROOT [file normalize [pwd]]
 
 # ---- 旋钮:默认就是常规布局,不改也能跑 -------------------------------------- #
-# 1) PART          器件型号:从 `spec/spec.md` 抄 —— 那是**唯一来源**;换器件只改这
-#                  一处,别在这儿另立一份。
+# 1) PART          器件型号:从**工程 spec**(`<工程根>/project/spec/spec.md`)或本模块
+#                  的 `spec/spec.md` 读,整条链上只该有一处;别在这儿另立一份。
 # 2) TOP           顶层模块名:必须与 RTL 里的 module 名一致。
 # 3) RTL_DIR       RTL 根目录(相对模块根):HDL 与 `ip/` 下的 `.xci` 都从这儿收。
 # 4) REPORT_DIR    报告输出目录(相对模块根):报告写进这里;Vivado 工程就地落在它下面。
@@ -162,9 +162,15 @@ foreach xci $XCIS {
          project  : $PART
          IP built for another part/family blows up only at synthesis time and the error does\
          not point at the root cause.
-         Re-generate the IP for '$PART', or fix PART here (spec/spec.md is the single source)."
+         Re-generate the IP for '$PART', or fix PART here (the project spec is the single source of the device)."
   }
-  puts "\[run_synth\] OK: [file tail $xci] part = $xpart"
+  if {$xcomplete} {
+    puts "\[run_synth\] OK: [file tail $xci] part = $xpart"
+  } else {
+    # 器件串不全(缺速度等级)时只比到前缀 —— **不能打成 OK**(第三轮复审 N-13):那会让人以为
+    # "器件核对过了",而实际上速度等级没核。如实说清比到了什么、什么没核。
+    puts "\[run_synth\] WARN: [file tail $xci] part = $xpart INCOMPLETE: only device+package known, speed grade missing -- prefix compare against $PART passed"
+  }
 }
 
 # ---- 建工程(就地落在报告目录下,别塞进 rtl/) -------------------------------- #

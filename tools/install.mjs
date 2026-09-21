@@ -210,27 +210,33 @@ if (checkOnly) {
     process.exit(1);
   }
 
-  // 6. 校验
+  // 6. 校验 + 冒烟:**任何一步不过都回到运行前的状态**(第三轮复审 N-02)。
+  //
+  // 以前只有 `add` 失败才回滚:pnpm "返回成功但少拷了文件"、或新副本一加载就炸时,坏副本**留在盘上**,
+  // 重启就是黑屏 —— 而备份明明还在旁边。现在两条路都走同一个 rollback:把半成品改名移开、备份改回原名。
   console.log("");
-  const after = verify();
-  if (after.length === 0) {
-    console.log("PASS: 已装副本与源逐字节一致。");
-    // 光"字节一致"还不够 —— 再在真实解析环境里加载一遍(宿主半侧 import + 客户端 bundle
-    // 的工厂函数执行)。这一步能抓住"文件都对、但一加载就炸"的情况,而那种情况重启后就是黑屏。
-    console.log("\n冒烟测试:在 profile 的解析环境里加载一遍…\n");
-    const smoke = spawnSync(process.execPath, [join(ROOT, "tools", "smoke-installed.mjs")], { stdio: "inherit" });
-    if ((smoke.status ?? 1) === 0) {
-      console.log("\n重启 DSH Desktop 生效。");
-    } else {
-      console.log("\n冒烟测试没过 —— 先别重启,把上面的 FAIL 发出来。");
-      process.exitCode = 1;
+  const rollback = (what) => {
+    console.error(`\n失败:${what}`);
+    console.error("正在回到运行前的状态(把新副本移开、备份改回原名)—— 重启不会用到坏副本。");
+    if (!restore(backup)) {
+      console.error("**回滚没成功**,盘上现在可能是混合状态:请在你自己的终端里手动跑:");
+      console.error(`  ${RECOVERY}`);
     }
     reportLeftovers();
-  } else {
-    console.log(`FAIL: ${after.join(" | ")}`);
-    console.log(`pnpm 又跳过了拷贝 —— 再跑一次本脚本,或手动:${RECOVERY}`);
-    console.log("旧副本仍完整保留在备份目录里,需要时可以改名回去。");
-    reportLeftovers();
-    process.exitCode = 1;
+    process.exit(1);
+  };
+  const after = verify();
+  if (after.length !== 0) {
+    rollback(`已装副本与源不一致(pnpm 又跳过了拷贝):${after.join(" | ")}`);
   }
+  console.log("PASS: 已装副本与源逐字节一致。");
+  // 光"字节一致"还不够 —— 再在真实解析环境里加载一遍(宿主半侧 import + 客户端 bundle
+  // 的工厂函数执行)。这一步能抓住"文件都对、但一加载就炸"的情况,而那种情况重启后就是黑屏。
+  console.log("\n冒烟测试:在 profile 的解析环境里加载一遍…\n");
+  const smoke = spawnSync(process.execPath, [join(ROOT, "tools", "smoke-installed.mjs")], { stdio: "inherit" });
+  if ((smoke.status ?? 1) !== 0) {
+    rollback("冒烟测试没过(新副本在这个解析环境里加载不起来)");
+  }
+  console.log("\n重启 DSH Desktop 生效。");
+  reportLeftovers();
 }

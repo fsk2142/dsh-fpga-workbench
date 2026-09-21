@@ -19,6 +19,7 @@ import {
   NS,
   SWEEP_GRACE_MS,
   DETECT_TARGETS,
+  TEMPLATE_FIELDS,
   TOOLS,
   backupChangedFiles,
   describeEnv,
@@ -79,8 +80,8 @@ const REQUIRED_FIELDS = FIELDS.filter((field) => field.required === true);
 const CHOICE_FIELDS = VISIBLE.filter((field) => field.control === "select");
 const OPTIONAL_FIELDS = FIELDS.filter((field) => field.required !== true);
 const HIDDEN_FIELDS = FIELDS.filter((field) => field.control === "hidden");
-check(KEYS.length === 19, `字段共 19 个:16 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
-check(VISIBLE.length === 16, `可见字段 16 个(实际 ${VISIBLE.length})`);
+check(KEYS.length === 22, `字段共 22 个:19 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
+check(VISIBLE.length === 19, `可见字段 19 个(实际 ${VISIBLE.length})`);
 check(
   HIDDEN_FIELDS.map((field) => field.key).join(",") === "verilatorPath,modelsimPath,vivadoPath",
   "三个改名前的旧键作为隐藏字段保留(迁移用)"
@@ -165,7 +166,7 @@ check(
 
 // ── 存在性判定 ──────────────────────────────────────────────────────────────
 const empty = inspectTools({}, probeWith([]));
-check(empty.length === 19, "空设置也返回全部字段");
+check(empty.length === 22, "空设置也返回全部字段");
 check(
   empty.filter((tool) => tool.control !== "select").every((tool) => tool.configured === false && tool.present === false),
   "空设置下所有路径字段都未配置且不可用"
@@ -749,7 +750,7 @@ check(pruneEmptySkillDirs(join(ROOT, ".tmp", "根本没有这个目录")) === 0,
 // 写法规范由模板承载(文件头、九个小节、对齐这些),不写死在技能正文里 —— 所以
 // "用哪一份"必须在提示里说清,否则 agent 只能猜,而猜错就是格式不一致。
 const bundled = resolveTemplates({}, probeFilesystem);
-check(bundled.length === 3, `认三种模板:RTL / 测试平台 / 约束(实际 ${bundled.length})`);
+check(bundled.length === 6, `认六种模板:RTL / 测试平台 / 约束 + 仿真 / 综合 / 比对脚本(实际 ${bundled.length})`);
 check(
   bundled.every((template) => template.present),
   "插件自带的模板都在包里(少一份,agent 就只能自己编格式)",
@@ -790,6 +791,111 @@ const userText = describeEnv(
   (path) => path === USER_RTL || Object.values(prepared).includes(path)
 );
 check(userText.includes("你提供的"), "用户提供了模板时,提示里标明是他提供的");
+
+// ── 三个环节脚本模板:设置字段与前三份同款,提示里的播报规则不同 ──────────────
+//
+// 自带那份脚本由命令的默认值起出来(`--kind run-do` / `--kind synth-script` / `--kind comp`,
+// 起法写在环节技能里),提示里不必播报一条 agent 不会去读的路径;但用户配了自己那份时**必须**
+// 出现 —— 他要把它传给 `--template`,不说就等于没配(这正是本轮补的功能)。
+// 设置页那份标签带括号说明(三个模板字段挨着,得让用户看出这是脚本),提示段那份用短名 ——
+// 括号里那句说明在提示里是多余的(那一节的用法说明已经写了)。
+const SCRIPT_TEMPLATE_FIELDS = [
+  { key: "runDoTemplatePath", label: "run.do 模板", settingsLabel: "run.do 模板(仿真脚本)", file: "run.do" },
+  { key: "synthScriptTemplatePath", label: "综合脚本模板", settingsLabel: "综合脚本模板", file: "run_synth.tcl" },
+  { key: "compScriptTemplatePath", label: "比对脚本模板", settingsLabel: "比对脚本模板", file: "comp.py" }
+];
+for (const { key, settingsLabel, file } of SCRIPT_TEMPLATE_FIELDS) {
+  const field = FIELDS.find((entry) => entry.key === key);
+  check(
+    field !== undefined &&
+      field.group === "模板" &&
+      field.control === "text" &&
+      field.kind === "file" &&
+      field.required === false &&
+      field.skips.length === 0 &&
+      field.blankNote === "留空即用自带" &&
+      field.label === settingsLabel,
+    `${key}:与另外三份模板同款的**可选**字段(文本输入、文件类型、留空即用自带、缺了不挡路)`,
+    JSON.stringify(field ?? null)
+  );
+  check(
+    String(field?.hint ?? "").includes(file),
+    `${key} 的说明写清它是什么、留空用自带的哪一份(提到 ${file})`,
+    String(field?.hint ?? "")
+  );
+  check(
+    !statusOf({}).missing.includes(key),
+    `${key} 留空不进缺失清单(可选字段不制造门禁)`
+  );
+}
+// 设置字段与提示段用的 TEMPLATE_FIELDS 必须一一对应:只加字段、忘了接进提示(或反过来),
+// 用户配的路径就石沉大海 —— 本轮给三个脚本模板补字段,防的就是这个。
+const templateGroupKeys = FIELDS.filter((field) => field.group === "模板").map((field) => field.key);
+const templateListKeys = TEMPLATE_FIELDS.map((template) => template.key);
+check(
+  templateGroupKeys.join(",") === templateListKeys.join(","),
+  "「模板」组每个字段都在提示段的模板表里(两边一一对应,不漏不重)",
+  `设置字段:${templateGroupKeys.join(",")} / 提示表:${templateListKeys.join(",")}`
+);
+
+/** 提示段里「模块模板」那一节(标题起、到空行止)。 */
+const templateSection = (text) => text.split("\n\n").find((block) => block.startsWith("模块模板")) ?? "";
+/** 那一节里列出的模板条数(每份一行,以 "- " 开头)。 */
+const templateBullets = (text) => templateSection(text).split("\n").filter((line) => line.startsWith("- "));
+
+const USER_SCRIPTS = {
+  runDoTemplatePath: "C:\\my-templates\\run.do",
+  synthScriptTemplatePath: "C:\\my-templates\\run_synth.tcl",
+  compScriptTemplatePath: "C:\\my-templates\\comp.py"
+};
+const scriptProbe = (path) => Object.values(USER_SCRIPTS).includes(path) || Object.values(prepared).includes(path);
+
+// 条数跟"配了几份"一致:三份写法规范模板永远播报(占三条),每配一份脚本模板才多一条。
+const noScriptText = describeEnv(prepared, () => true);
+check(
+  templateBullets(noScriptText).length === 3,
+  `没配脚本模板 → 模板那节还是三条(实际 ${templateBullets(noScriptText).length} 条)`,
+  templateSection(noScriptText)
+);
+// 留空不出现:连自带那份的路径都不该有 —— 那是"没配也不制造噪音/门禁"
+const bundledScriptNoise = SCRIPT_TEMPLATE_FIELDS.map(({ file }) => file)
+  .filter((file) => templateSection(noScriptText).includes(file));
+check(
+  bundledScriptNoise.length === 0,
+  "留空的脚本模板不出现在提示里(自带那份的路径也不播报)",
+  bundledScriptNoise.join("、")
+);
+const allScriptsText = describeEnv({ ...prepared, ...USER_SCRIPTS }, scriptProbe);
+const allScriptBullets = templateBullets(allScriptsText);
+check(
+  allScriptBullets.length === 6 &&
+    SCRIPT_TEMPLATE_FIELDS.every(({ key, label }) =>
+      allScriptBullets.some(
+        (line) => line.startsWith(`- ${label}(你提供的`) && line.includes("--template") && line.endsWith(USER_SCRIPTS[key])
+      )
+    ),
+  `六份全配齐 → 六条,脚本那三条标明"你提供的"、给出路径、并说清要传给 --template(实际 ${allScriptBullets.length} 条)`,
+  templateSection(allScriptsText)
+);
+const oneScriptText = describeEnv({ ...prepared, runDoTemplatePath: USER_SCRIPTS.runDoTemplatePath }, scriptProbe);
+check(
+  templateBullets(oneScriptText).length === 4 &&
+    templateSection(oneScriptText).includes(USER_SCRIPTS.runDoTemplatePath) &&
+    !templateSection(oneScriptText).includes("run_synth.tcl") &&
+    !templateSection(oneScriptText).includes("comp.py"),
+  `只配一份脚本模板 → 只多一条(实际 ${templateBullets(oneScriptText).length} 条)`,
+  templateSection(oneScriptText)
+);
+// 填了但文件不在:不列进模板表(它不是真的在生效),但必须点明已退回自带 —— 别让用户以为生效了
+const missingScriptText = describeEnv(
+  { ...prepared, runDoTemplatePath: "C:\\nope\\run.do" },
+  (path) => Object.values(prepared).includes(path)
+);
+check(
+  templateBullets(missingScriptText).length === 3 && templateSection(missingScriptText).includes("填的路径不存在"),
+  "脚本模板填了但找不到:不进模板表,但提示里点明已退回自带",
+  templateSection(missingScriptText)
+);
 
 // ── 语言与仿真器 ────────────────────────────────────────────────────────────
 const langText = describeEnv(prepared, () => true);

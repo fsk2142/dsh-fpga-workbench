@@ -11,8 +11,9 @@
    `标准 / 极简 / PTC / 创造` 并列地选它。
 2. 在「设置 → FPGA 开发模式」里收**三个必填路径**(Vivado / ModelSim / Verilator)
    + **一个可选的库映射文件**(ModelSim 的 `modelsim.ini`)+ 两个**可选**的运行时路径
-   (PowerShell 7 / Python 3)+ 两个语言与标准下拉,**外加三份可选模板文件**
-   (RTL / 测试平台 / 约束),并在**这个模式的会话里**把它们交给 agent 使用。
+   (PowerShell 7 / Python 3)+ 两个语言与标准下拉,**外加六份可选模板文件**
+   (RTL / 测试平台 / 约束 + 仿真脚本 / 综合脚本 / 比对脚本),并在**这个模式的会话里**
+   把它们交给 agent 使用。
 
 **它不注册任何主界面。** 没有侧边栏入口、没有面板、没有替换官方任何组件——你现有的
 界面一行都不动,只多一个设置分区。
@@ -65,7 +66,8 @@ presets/fpga-workbench/
     preset.yml                选择器里显示的名字与描述
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
-    templates/                自带模板:rtl.sv / tb.sv / constraints.xdc(写法规范的载体)
+    templates/                自带模板六份:rtl.sv / tb.sv / constraints.xdc,
+                              外加仿真 run.do / 综合 run_synth.tcl / 比对 comp.py(写法规范的载体)
     tools/                    自带命令,**按级别分目录**:module/ 只放模块级、project/ 只放工程级、
                               顶层是两级共用(setup-scaffold.mjs)、lib/ 是内部模块(不是命令)
 tools/                        8 个自检 + install.mjs + 依赖安全/锁文件比对
@@ -118,9 +120,10 @@ RTL 的文件头、九个小节块、端口对齐这些**格式**都是各自的
 
 - 插件自带一套默认模板(`presets/fpga-workbench/templates/`),来源是原先 FPGAWorkFlowKit
   的模块模板;用户不动它就一直用这套
-- 设置里的**模板路径是可选项**(RTL / 测试平台 / 约束各一个字段):填了就用你那份,
-  留空或找不到就用自带那份,并在会话提示里写清**最终用的是哪一份**
-- 会话提示里会给出每个模板的绝对路径,agent 写 RTL 之前先读它,照着写
+- 设置里的**模板路径是可选项**(RTL / 测试平台 / 约束 + 仿真脚本 / 综合脚本 / 比对脚本,
+  六份各一个字段):填了就用你那份,留空或找不到就用自带那份,并在会话提示里写清**最终用的是哪一份**
+- 会话提示里会给出 RTL / 测试平台 / 约束用的那一份的绝对路径,agent 写 RTL 之前先读它,照着写;
+  三个**脚本**模板只在你自己配了、且文件确实在时才出现(自带那份由命令的默认值起出来,不必播报)
 
 这样换一套模板 = 换写法规范,技能一个字都不用改。
 
@@ -341,7 +344,7 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
   | `fpga-project-release` | 发布归档:判据是"照着归档能重建同一版设计"(不是 bit 逐字节相同) | `project/release/` |
 
   工程级阶段文件夹统一在 `project/` 下——模块级与工程级都有 `spec`/`timing`,平铺会撞名。
-- ✅ 模板:自带 `rtl.sv` / `tb.sv` / `constraints.xdc`,设置里可换成自己的
+- ✅ 模板:自带 `rtl.sv` / `tb.sv` / `constraints.xdc` + 仿真 `run.do` / 综合 `run_synth.tcl` / 比对 `comp.py`,设置里可换成自己的
 - ⬜ 更强的能力接入:把某些阶段做成**这个模式能直接调用的工具**(由插件起进程)。
   现在命令仍由 agent 用 shell 工具跑 —— 走沙箱、可见、可中断;真做成工具就得接 subprocess
   服务并自己处理超时与日志

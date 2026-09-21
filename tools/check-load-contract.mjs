@@ -44,6 +44,7 @@ const manifest = JSON.parse(read("package.json"));
  */
 function createFakeReact() {
   const states = [];
+  const refs = [];
   const effects = [];
   let cursor = 0;
   return {
@@ -65,7 +66,14 @@ function createFakeReact() {
       },
       useMemo: (fn) => fn(),
       useCallback: (fn) => fn,
-      useRef: (initial) => ({ current: initial })
+      // 和 useState 一样**按槽位跨渲染保留**(真实 useRef 就是如此):客户端拿它存"代次",
+      // 若每次渲染给个新对象,自增与比对就落在两个不同的对象上 —— 代次保护会假通过。
+      useRef: (initial) => {
+        const index = cursor;
+        cursor += 1;
+        if (!(index in refs)) refs[index] = { current: initial };
+        return refs[index];
+      }
     },
     /** 每次渲染前重置 hook 游标(状态本身保留)。 */
     reset: () => {
@@ -285,15 +293,45 @@ const written = [];
  * 这里的 compilerPath 故意**不等于**浏览夹具里的那个文件:值一样时"改动"会被判成没改
  * (改回原值就不算脏,这是设计),那样就测不到"未保存"这条路了。
  */
-const hostValues = { compilerPath: "C:\\old\\verilator_bin.exe", simulator: "modelsim" };
+const hostValues = {
+  compilerPath: "C:\\old\\verilator_bin.exe",
+  simulator: "modelsim",
+  // 第三个可编辑字段的宿主值:用来验"这次确实存了、期间也没再被改过"的键会正常清掉
+  // (与"保存期间又被改过、必须留着"的那个键形成对照)。
+  modelsimIniPath: "C:\\modelsim\\modelsim.ini"
+};
 /** 模拟宿主拒收:mutate **正常结算**但值不进去(真实 SDK 就是这样:它 recover 一下就 return)。 */
 let hostAcceptsSave = true;
+/**
+ * 保存请求的"手动放行":非 null 时 mutate **不立刻结算**,由测试决定何时 resolve。
+ * 真实宿主是异步的,而"请求还在路上、用户接着改"这段窗口正是要复现的那段 —— 所以
+ * 结算时(drainDeferredSaves)才把值收下,和真实 mutate 的因果一致。
+ */
+let deferSaves = null;
+/** 把挂起的保存请求放行:宿主收下这批值,再让 mutate 的 Promise 结算。 */
+const drainDeferredSaves = () => {
+  const pending = deferSaves ?? [];
+  deferSaves = null;
+  for (const settle of pending) settle();
+  return pending.length;
+};
 const scope = {
   store: { getSnapshot: () => ({ status: "ready", value: { ...hostValues } }) },
   mutate: (ops) => {
     written.push(...ops);
-    if (hostAcceptsSave) for (const op of ops) hostValues[op.path[0]] = op.value;
-    return Promise.resolve();
+    const accept = () => {
+      if (hostAcceptsSave) for (const op of ops) hostValues[op.path[0]] = op.value;
+    };
+    if (deferSaves === null) {
+      accept();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      deferSaves.push(() => {
+        accept();
+        resolve();
+      });
+    });
   }
 };
 let captured;
@@ -307,12 +345,15 @@ const payload = {
     // (kind 挂在选项上,见 toolchain.js 的 SIMULATORS.xsim),所以目录分支在真实使用中可达,
     // 「用这个目录」那条路要继续被测到。detectable 是假值:夹具里没有管它的 `simulator` 下拉。
     { key: "simulatorPath", label: "仿真器路径", hint: "填目录", required: true, skips: [], path: "", configured: false, present: false, group: "仿真工具", control: "text", kind: "directory", detectable: false },
+    // 第三个可编辑字段(键/标签/组名照 lib/toolchain.js 的 FIELDS):一次保存提交**两个**键时,
+    // 才分得清"存下去且没人再动它"(该清)和"存下去但期间又被改过"(该留)。
+    { key: "modelsimIniPath", label: "库映射文件", hint: "填 modelsim.ini", required: false, skips: [], path: "", configured: true, present: true, group: "库映射", control: "text", kind: "file", detectable: false },
     { key: "verilatorPath", label: "旧键里的路径", hint: "", required: false, skips: [], path: "", configured: false, present: false, group: "旧键", control: "hidden" }
   ],
   missing: ["simulatorPath"],
   ok: false
 };
-const browsePayload = {
+let browsePayload = {
   path: "C:\\msys64\\mingw64\\bin",
   parent: "C:\\msys64\\mingw64",
   entries: [
@@ -331,17 +372,56 @@ const detectPayload = {
 let detectRequested = 0;
 /** 状态路由带查询串的请求次数 = 客户端为"未保存的改动"预演了几次状态。 */
 let previewRequested = 0;
+/**
+ * 状态路由的答复(预演那条路)。**每次请求发出时取当时的这一份** —— 所以测试可以给先后两次
+ * 预演安排不同的答复,用来分辨"最后落在界面上的是哪一次的结果"。
+ */
+let statusPayload = payload;
+/** 预演答复:只改一个字段,别处照旧。用来分辨乱序返回时是哪一次的结果落在界面上。 */
+const previewAnswer = (overrides, key = "compilerPath") => ({
+  tools: payload.tools.map((entry) => (entry.key === key ? { ...entry, ...overrides } : entry))
+});
+/** 列目录答复:一个只有一项的目录;路径本身用来分辨是哪一次请求列出来的。 */
+const listingOf = (path) => ({
+  path,
+  parent: "C:\\",
+  entries: [{ name: "one.exe", path: `${path}\\one.exe`, kind: "file" }],
+  truncated: false
+});
+/**
+ * 三条异步取数的"手动放行"(与上面的 deferSaves 同一套写法):非 null 时,对应的那条请求
+ * **不立刻结算**,由测试决定谁先 resolve。有了它,"先发出、后返回"这个乱序窗口就能**真的**造出来,
+ * 而不是靠墙钟凑时序 —— 代次保护要挡的正是这个窗口。
+ * 数组里每一项是一个 `() => void`:调用它就结算它那一笔(答复取的是**它发出时**的那份数据)。
+ */
+let deferPreview = null;
+let deferDetect = null;
+let deferBrowse = null;
 const fetchStub = (url) => {
   const target = String(url);
   if (target.includes("/browse")) {
     browserRequested += 1;
-    return Promise.resolve({ ok: true, json: () => Promise.resolve(browsePayload) });
+    const data = browsePayload;
+    if (deferBrowse !== null) {
+      return new Promise((resolve) => deferBrowse.push(() => resolve({ ok: true, json: () => Promise.resolve(data) })));
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
   }
   if (target.includes("/detect")) {
     detectRequested += 1;
+    if (deferDetect !== null) {
+      return new Promise((resolve) => deferDetect.push(() => resolve({ ok: true, json: () => Promise.resolve(detectPayload) })));
+    }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(detectPayload) });
   }
-  if (target.includes("?")) previewRequested += 1;
+  if (target.includes("?")) {
+    previewRequested += 1;
+    const data = statusPayload;
+    if (deferPreview !== null) {
+      return new Promise((resolve) => deferPreview.push(() => resolve({ ok: true, json: () => Promise.resolve(data) })));
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
+  }
   return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
 };
 const doc = createFakeDocument();
@@ -619,6 +699,267 @@ try {
   }
 } catch (error) {
   check(false, "目录字段的浏览面板能渲染", String(error));
+}
+
+// 保存**成功**也不能吞掉请求回来之前的新输入:成功后只清「这次确实存了、而且期间没再被改过」的键。
+// 保存期间控件并没有被锁住(下拉、输入框、浏览都还能用),用户接着改是完全可能的 —— 无条件清空
+// 会让那几笔静默消失,现象就是"提示保存成功,但刚敲的那几笔没了"。
+try {
+  written.length = 0;
+  // 从空白草稿开始:先把上一段留下的改动放弃掉(不然这次提交里会混进别的键)
+  fake.reset();
+  const discard = findButton(captured(), "放弃改动");
+  if (discard !== undefined && discard.props.disabled !== true) {
+    discard.props.onClick();
+    fake.reset();
+  }
+  // 顺手关掉浏览面板:字段行里的**第一个**文本框才是字段自己的输入框,不跟面板的过滤框抢
+  const closeBrowse = findButton(captured(), "关闭");
+  if (closeBrowse !== undefined) {
+    closeBrowse.props.onClick();
+    fake.reset();
+  }
+
+  /**
+   * 某个字段行里的输入框(按行的 key 取,不靠"树里第几个")。
+   * 自己重渲染一次:**每次渲染前必须 reset 游标**,连着重渲染两遍会把 hook 对错槽位
+   * (读到的 drafts 就是空的,保存直接 early-return —— 这条踩过一次)。
+   */
+  const inputOf = (key) => {
+    fake.reset();
+    return findByProp(
+      findByProp(captured(), (props) => props.key === key),
+      (props) => props.type === "text" && typeof props.onChange === "function"
+    );
+  };
+
+  // 1) 先改字段 A(编译器路径),外加一个这次一并提交的键 C(库映射文件)
+  const midA = "C:\\mid\\verilator_bin.exe";
+  const savedC = "C:\\lib\\modelsim.ini";
+  inputOf("compilerPath").props.onChange({ target: { value: midA } });
+  inputOf("modelsimIniPath").props.onChange({ target: { value: savedC } });
+  fake.reset();
+  check(JSON.stringify(captured() ?? {}).includes("有未保存的改动"), "保存前:A 与 C 都算未保存");
+
+  // 2) 点「保存改动」:**不让它结算**(替身停在路上)—— 这段窗口里界面并没有被锁住
+  deferSaves = [];
+  fake.reset();
+  findButton(captured(), "保存改动").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  check(
+    deferSaves.length === 1 && written.length === 2,
+    `保存请求发出去了、还停在路上(挂起 ${deferSaves.length} 次 / 提交 ${written.length} 个键)`
+  );
+
+  // 3) 保存进行中:改字段 B(仿真器路径),并把 A 再改成一个不同的新值
+  inputOf("simulatorPath").props.onChange({ target: { value: "C:\\sim\\modelsim" } });
+  inputOf("compilerPath").props.onChange({ target: { value: "C:\\late\\verilator_bin.exe" } });
+
+  // 4) 放行:宿主收下这批值(A 回读到的就是刚保存的那个中间值)
+  check(drainDeferredSaves() === 1, "按测试的节奏结算:宿主收下了这次提交");
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  const settledTree = captured();
+  const rowOf = (key) => findByProp(settledTree, (props) => props.key === key);
+
+  check(
+    !JSON.stringify(settledTree ?? {}).includes("没有确认这次改动生效"),
+    "这次保存被宿主接受了(走的确实是成功那条分支)"
+  );
+  // ① 保存期间新改的 B 还在
+  check(
+    findByProp(rowOf("simulatorPath"), (props) => props.value === "C:\\sim\\modelsim") !== undefined,
+    "保存成功不清掉期间新改的 B(仿真器路径还是刚敲的那份)"
+  );
+  // ② A 显示用户最后敲的新值,而且仍然标着「未保存」
+  check(
+    findByProp(rowOf("compilerPath"), (props) => props.value === "C:\\late\\verilator_bin.exe") !== undefined,
+    "保存期间又被改过的 A 显示用户最后敲的那个新值(不是刚保存的中间值)"
+  );
+  check(
+    JSON.stringify(rowOf("compilerPath") ?? {}).includes("未保存"),
+    "A 仍然带「未保存」标记(它和刚存下去的那份已经不一样了)"
+  );
+  // ③ 这次确实存了、期间也没人再动它的 C 正常清掉
+  check(
+    findByProp(rowOf("modelsimIniPath"), (props) => props.value === savedC) !== undefined,
+    "C 显示的就是刚保存下去的那份"
+  );
+  check(
+    !JSON.stringify(rowOf("modelsimIniPath") ?? {}).includes("未保存"),
+    "保存成功的 C 不再显示「未保存」"
+  );
+} catch (error) {
+  check(false, "保存成功不吞掉期间的新输入能走通", String(error));
+} finally {
+  // 万一挂在半路:别把挂起的保存请求留到后面
+  deferSaves = null;
+}
+
+// ── 代次保护:先发出、后返回的旧结果不许盖掉新结果 ──────────────────────────────
+//
+// 设置页有三处异步取数(状态预演 / 工具检测 / 列目录)。用户连点两下时,先发出的那次可能
+// **后**返回 —— 没有代次保护,它会把界面盖回上一个工具/上一个目录。下面的替身能控制
+// resolve 的顺序(deferPreview / deferDetect / deferBrowse),所以这几条测的确实是乱序返回,
+// 而不是靠墙钟凑出来的时序。
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** 一段文本在 JSON 文本里的样子(反斜杠会被转义,直接比字符串会永远不匹配)。 */
+const asJsonText = (text) => JSON.stringify(String(text)).slice(1, -1);
+/**
+ * 受控地开**一次**预演:先关着闸门把积压的 effect 与 250ms 防抖定时器放干净(那些请求正常结算),
+ * 再开闸门、渲染一次,让这一次的预演请求停在闸门上。测试自己决定何时放行。
+ *
+ * 连那棵渲染树一起交回去:测试可以直接在**已经渲染好的**树上点按钮,而不必再渲染一次 ——
+ * 多渲染一次就多排一个防抖 effect,会凭空多出一次预演请求(代次也就跟着动了)。
+ * @param answer - 这一次预演要用的状态答复。
+ * @returns `{ tree, held }`:`tree` 是这次渲染的树;`held` 是挂在闸门上的请求(每项一个 `() => void`)。
+ */
+const onePreview = async (answer) => {
+  deferPreview = null;
+  fake.runEffects();
+  await sleep(400);
+  deferPreview = [];
+  statusPayload = answer;
+  fake.reset();
+  const tree = captured();
+  fake.runEffects();
+  await sleep(300);
+  return { tree, held: deferPreview };
+};
+try {
+  // 先把之前积压的 effect 与 250ms 防抖定时器都放干净(闸门关着,让它们正常结算)——
+  // 下面"两次请求"才数得准。
+  fake.runEffects();
+  await sleep(400);
+
+  // ① 状态预演:两次请求乱序返回,先发那次的答复**最后**才 resolve
+  deferPreview = [];
+  statusPayload = previewAnswer({ present: false }); // 先发的那次:按"未就绪"答
+  fake.reset();
+  captured();
+  fake.runEffects();
+  await sleep(300);
+  statusPayload = previewAnswer({ present: true }); // 后发的那次:按"已就绪"答
+  fake.reset();
+  captured();
+  fake.runEffects();
+  await sleep(300);
+  check(deferPreview.length === 2, `两次预演请求都发出去了、都停在路上(实际 ${deferPreview.length} 次)`);
+  deferPreview[1](); // 最新那次先回
+  await tick();
+  deferPreview[0](); // 旧那次最后回 —— 没有代次保护时它会盖掉上面那份
+  await tick();
+  fake.reset();
+  const orderedRow = JSON.stringify(findByProp(captured(), (props) => props.key === "compilerPath") ?? {});
+  check(orderedRow.includes("已就绪"), "乱序返回:那一行是**后发**那次的结论(已就绪)");
+  check(!orderedRow.includes("未就绪"), "乱序返回:先发那次的旧结论(未就绪)被丢掉,没盖回来");
+  deferPreview = null;
+
+  // ② 工具检测:连着换两次工具,先发的那次(上一个工具)后回来
+  // 按"带 onChange 的下拉"取值 —— 光按 `props.value` 会先撞上 <option>(它没有 onChange)。
+  // 注意:**一棵树只渲染一次**(每次渲染前 reset 游标;连渲两遍 hook 就错位了)。
+  const selectIn = (tree, value) =>
+    findByProp(
+      tree,
+      (props) => props.className === "fpga-set-input" && props.value === value && typeof props.onChange === "function"
+    );
+  deferDetect = [];
+  fake.reset();
+  const beforeSwitch = captured();
+  check(selectIn(beforeSwitch, "verilator") !== undefined, "当前选中的工具是 Verilator(换工具的起点)");
+  selectIn(beforeSwitch, "verilator").props.onChange({ target: { value: "ghost" } }); // 请求 #1:没装的工具
+  fake.reset();
+  selectIn(captured(), "ghost").props.onChange({ target: { value: "other" } }); // 请求 #2:Icarus
+  check(deferDetect.length === 2, `两次检测请求都发出去了、都停在路上(实际 ${deferDetect.length} 次)`);
+  deferDetect[1](); // 最新那次(Icarus)先回
+  await tick();
+  deferDetect[0](); // 旧那次(ghost:没检测到)最后回
+  await tick();
+  fake.reset();
+  const detectRow = JSON.stringify(findByProp(captured(), (props) => props.key === "compilerPath") ?? {});
+  check(detectRow.includes("iverilog.exe"), "乱序返回:那一行报的是最新那次工具(Icarus)检测到的路径");
+  check(!detectRow.includes("没检测到"), "乱序返回:旧那次(ghost)的结论被丢掉,没盖回来");
+  deferDetect = null;
+
+  // ③ 「路径不可用(…)」这句说明必须按**页面上这一份**(预演)拼,不能按宿主那份已保存的值:
+  // 否则"状态按新值、说明按旧值",同一行自相矛盾。
+  const previewPath = "C:\\preview\\nothere.exe";
+  const savedPath = "C:\\msys64\\mingw64\\bin\\verilator_bin.exe";
+  const mixed = await onePreview(previewAnswer({ configured: true, present: false, path: previewPath }));
+  check(mixed.held.length === 1, `缺陷二的预演请求发出去了(实际 ${mixed.held.length} 次)`);
+  mixed.held[0]();
+  await tick();
+  fake.reset();
+  const mixedRow = JSON.stringify(findByProp(captured(), (props) => props.key === "compilerPath") ?? {});
+  check(
+    mixedRow.includes(`路径不可用(${asJsonText(previewPath)})`),
+    "说明按**页面上预演的那份**路径拼(状态与说明同一来源)"
+  );
+  check(
+    !mixedRow.includes(`路径不可用(${asJsonText(savedPath)})`),
+    "说明不再拿宿主那份已保存的路径来拼(改了路径还没保存也不会自相矛盾)"
+  );
+
+  // ④ 页面上这条路径**清空了**(未保存):那一行该说"未配置",而不是照宿主那份(配过)说"路径不可用"
+  const clearedRow = await onePreview(previewAnswer({ configured: false, present: false, path: "" }));
+  check(clearedRow.held.length === 1, `清空路径后的预演请求发出去了(实际 ${clearedRow.held.length} 次)`);
+  clearedRow.held[0]();
+  await tick();
+  fake.reset();
+  const clearedText = JSON.stringify(findByProp(captured(), (props) => props.key === "compilerPath") ?? {});
+  check(clearedText.includes("未配置,当前不可执行"), "页面上清空了就按页面这一份说「未配置」");
+  check(!clearedText.includes("路径不可用("), "不再按宿主那份已保存的值说「路径不可用(…)」");
+
+  // ⑤ 可选字段同理:预演说"没配"时,不该再按宿主那份(配过)报「路径不可用」
+  const optionalRow = await onePreview(previewAnswer({ configured: false, present: false }, "modelsimIniPath"));
+  check(optionalRow.held.length === 1, `可选字段的预演请求发出去了(实际 ${optionalRow.held.length} 次)`);
+  optionalRow.held[0]();
+  await tick();
+  fake.reset();
+  const optionalText = JSON.stringify(findByProp(captured(), (props) => props.key === "modelsimIniPath") ?? {});
+  check(!optionalText.includes("路径不可用"), "可选字段按页面上那一份判:预演说没配就不报「路径不可用」");
+
+  // ⑥ 列目录:快速切两次,先发的那次列表不许覆盖后发的那次
+  deferPreview = null;
+  deferBrowse = [];
+  browsePayload = listingOf("C:\\dir-first");
+  fake.reset();
+  findButton(captured(), "浏览…").props.onClick();
+  browsePayload = listingOf("C:\\dir-second");
+  fake.reset();
+  findButton(captured(), "浏览…").props.onClick();
+  check(deferBrowse.length === 2, `两次列目录请求都发出去了、都停在路上(实际 ${deferBrowse.length} 次)`);
+  deferBrowse[1](); // 后发的先回
+  await tick();
+  deferBrowse[0](); // 先发的最后回 —— 不许把面板退回上一个目录
+  await tick();
+  fake.reset();
+  const listed = JSON.stringify(captured() ?? {});
+  check(listed.includes(asJsonText("C:\\dir-second")), "面板显示的是**后发**那次列出来的目录");
+  check(!listed.includes(asJsonText("C:\\dir-first")), "先发那次的列表没有盖回来(代次保护挡掉了)");
+
+  // ⑦ 改动全部放弃后,还在路上的那次预演回来也不许塞回来(否则界面按一份过期预演显示状态)
+  const { tree, held } = await onePreview(previewAnswer({ present: false })); // 这次答复说"未就绪"
+  check(held.length === 1, `放弃改动前的预演请求停在路上(实际 ${held.length} 次)`);
+  deferPreview = null; // 闸门关掉:只把**这一笔**留到最后放行
+  findButton(tree, "放弃改动").props.onClick(); // 在**已经渲染好的**树上点,免得又排一次防抖
+  fake.reset();
+  captured();
+  fake.runEffects(); // 预演作废:代次推一格、状态清掉(就在这一步)
+  held[0](); // 过期的那笔现在才回来
+  await tick();
+  fake.reset();
+  const afterRevert = JSON.stringify(findByProp(captured(), (props) => props.key === "compilerPath") ?? {});
+  check(afterRevert.includes("已就绪"), "放弃改动后:那一行按宿主那份显示(已就绪)");
+  check(!afterRevert.includes("未就绪"), "放弃改动后:过期的预演回来也没塞回来");
+} catch (error) {
+  check(false, "异步取数的乱序返回与说明同源能走通", String(error));
+} finally {
+  // 万一挂在半路:别把挂起的请求留到后面
+  deferPreview = null;
+  deferDetect = null;
+  deferBrowse = null;
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

@@ -377,9 +377,10 @@ check(
 
 // ── CLI 退出码 ─────────────────────────────────────────────────────────────
 // setup-scaffold 是两级共用(在 tools/ 顶层、名字不带级别前缀);其余被调用的都是模块级命令
-const run = (script, args) => {
+// cwd 可选:验"落点"的断言要能规定"当前目录"在哪,否则相对路径落到哪看不出来(也脏了仓库根)。
+const run = (script, args, cwd) => {
   const path = existsSync(join(TOOLS, script)) ? join(TOOLS, script) : join(MODULE_TOOLS, script);
-  return spawnSync(process.execPath, [path, ...args], { stdio: "ignore" }).status;
+  return spawnSync(process.execPath, [path, ...args], { stdio: "ignore", cwd }).status;
 };
 
 
@@ -730,6 +731,102 @@ check(
   "CLI 真的把骨架建出来了"
 );
 check(run("setup-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复建同一目录也返回 0(幂等)");
+
+// ── 位置参数只取"第一个选项之前":写反了报参数错,不许把选项的值当成根目录 ─────────────
+//
+// 实测(修前):`--kind project <根>` 里 `argv.find(a => !a.startsWith("-"))` 拿到的是选项的**值**
+// `project`,于是在当前目录下建出一整套 `./project/` 还退 0 —— 用户以为建在他给的根上(写到错地方
+// 还不报错)。规矩照 `lib/stamp.mjs` 的 parseStampArgs:位置参数只取第一个选项之前的;其余算用法错误。
+// 所以三条一起验:① 写反 → 退 2;② 当前目录的 ./project 与他给的根**都什么都没建**;③ 根写在前面照旧生效。
+const argsCwd = join(SANDBOX, `args-cwd-${stamp}`);
+mkdirSync(argsCwd, { recursive: true });
+const reversedRoot = join(argsCwd, "realroot");
+const reversedCode = run("setup-scaffold.mjs", ["--kind", "project", reversedRoot], argsCwd);
+check(reversedCode === 2, `--kind project <根>(选项在前)→ 退出码 2(实际 ${reversedCode})`);
+check(
+  !existsSync(join(argsCwd, "project")) && !existsSync(reversedRoot),
+  "写反时 ./project 与那个根目录都没被创建(选项的值没被当成根目录)"
+);
+const argsRoot = join(SANDBOX, `args-root-${stamp}`);
+const argsOkCode = run("setup-scaffold.mjs", [argsRoot, "--kind", "project"]);
+check(
+  argsOkCode === 0
+    && existsSync(join(argsRoot, "project", "impl"))
+    && existsSync(join(argsRoot, ".fpga-workbench.json")),
+  `<根> --kind project(根在前)照旧退 0 且骨架真建在该根下(实际 ${argsOkCode})`
+);
+const posAfterOptRoot = join(SANDBOX, `args-stray-${stamp}`);
+const posAfterOptCode = run("setup-scaffold.mjs", [posAfterOptRoot, "foo", "--kind", "project"]);
+check(
+  posAfterOptCode === 2 && !existsSync(posAfterOptRoot),
+  `<根> foo --kind project(多一个位置参数)→ 退出码 2(实际 ${posAfterOptCode})`
+);
+check(
+  run("setup-scaffold.mjs", [posAfterOptRoot, "--kind", "project", "foo"]) === 2,
+  "位置参数出现在选项之后(<根> --kind project foo)→ 退出码 2"
+);
+
+// ── 模块名是"根目录下的一级子目录名":不许拿它把骨架建到根目录外面去 ──────────────
+//
+// 实测过(审查指出、这里复现过):不加判断的话 `--modules "..\..\evil"` 会真在根目录**之上**
+// 建出整套模块骨架,退出码还是 0;绝对路径则会被 join 拼成 `<根>\C:\...` 抛异常崩掉(退 1)。
+// 所以每个逃逸写法都要:① 退出码 2;② 那条逃逸路径**确实没被创建**(挡在写之前,不是写失败)。
+const escapeBase = join(SANDBOX, `mod-escape-${stamp}`);
+const moduleEscapeRoot = join(escapeBase, "b", "root");
+mkdirSync(moduleEscapeRoot, { recursive: true });
+const escapeMod = (name) => run("setup-scaffold.mjs", [moduleEscapeRoot, "--kind", "project", "--modules", name]);
+check(escapeMod("..\\..\\evil_bs") === 2, "模块名用 ..\\..\\ 逃出根目录 → 退出码 2");
+check(!existsSync(join(escapeBase, "evil_bs")), "反斜杠逃逸的模块目录没有落地(根目录之外什么都没建)");
+check(escapeMod("../evil_fs") === 2, "模块名用 ../ 逃出根目录 → 退出码 2");
+check(!existsSync(join(escapeBase, "b", "evil_fs")), "正斜杠逃逸的模块目录没有落地");
+check(escapeMod("..") === 2, "模块名就是一个 .. → 退出码 2");
+check(
+  !existsSync(join(escapeBase, "b", ".fpga-workbench.json")) && !existsSync(join(escapeBase, "b", "spec")),
+  ".. 没有把锚点 / 环节目录写到根目录的上一级"
+);
+check(escapeMod(join(SANDBOX, "abs-evil")) === 2, "模块名传绝对路径 → 退出码 2(不是崩掉退 1)");
+check(!existsSync(join(SANDBOX, "abs-evil")), "绝对路径的模块名没有写出任何东西");
+check(escapeMod("D:evil") === 2, "模块名带盘符 → 退出码 2");
+check(escapeMod(join("sub", "mod")) === 2, "模块名带路径分隔符(合法子目录写法)→ 退出码 2(模块名只收一段)");
+check(
+  escapeMod("uart_rx") === 0 && existsSync(join(moduleEscapeRoot, "uart_rx", "rtl")),
+  "合法的一级子目录名照样建(护栏不误伤)"
+);
+check(
+  escapeMod("a..b") === 0 && existsSync(join(moduleEscapeRoot, "a..b", "rtl")),
+  "名字里带 .. 但不是 .. 本身 → 照样建(护栏不误伤)"
+);
+
+// ── --force 的语义:只重写**类型一致**的锚点与工作区指令,不跨 kind 覆盖 ────────────
+//
+// 实测:同类型时 `--force` 真覆盖(改坏的锚点与 AGENTS.fpga.md 都被重写回来,退 0);
+// 跨 kind(module 根跑 --kind project --force)是硬拒绝退 1,目录与锚点都不动 ——
+// 提示文字因此不再让用户"再加 --force 重建"(那条路到不了 applyScaffold)。
+const forceRoot = join(SANDBOX, `scaffold-force-${stamp}`);
+const forceAnchor = join(forceRoot, ".fpga-workbench.json");
+const forceRules = join(forceRoot, "AGENTS.fpga.md");
+check(run("setup-scaffold.mjs", [forceRoot]) === 0, "先建一次模块骨架(供 --force 断言用)→ 退出码 0");
+writeFileSync(forceAnchor, `${JSON.stringify({ kind: "module", spec: "TAMPERED" }, null, 2)}\n`);
+writeFileSync(forceRules, "TAMPERED RULES\n");
+check(
+  run("setup-scaffold.mjs", [forceRoot]) === 0
+    && readFileSync(forceAnchor, "utf8").includes("TAMPERED")
+    && readFileSync(forceRules, "utf8").includes("TAMPERED"),
+  "不给 --force 时已有锚点与工作区指令都不动(用户改过的那份不会被覆盖)"
+);
+check(
+  run("setup-scaffold.mjs", [forceRoot, "--force"]) === 0
+    && !readFileSync(forceAnchor, "utf8").includes("TAMPERED")
+    && readFileSync(forceAnchor, "utf8").includes("spec/spec.md")
+    && !readFileSync(forceRules, "utf8").includes("TAMPERED"),
+  "--force 真覆盖已有锚点与工作区指令(不是只接受的空开关)"
+);
+check(
+  run("setup-scaffold.mjs", [forceRoot, "--kind", "project", "--force"]) === 1
+    && !existsSync(join(forceRoot, "project"))
+    && readFileSync(forceAnchor, "utf8").includes("\"module\""),
+  "跨 kind 是硬拒绝:带 --force 也退 1,project/ 与根锚点都没动"
+);
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;

@@ -4,7 +4,7 @@
 // 不同会话建出来的也不一致。这把"建骨架"变成一条命令:
 //   · 写锚点 `.fpga-workbench.json`(kind 与 spec 路径)—— 整套流程靠它定位
 //   · 建该级别全部环节目录,并给 spec/ 建 explore/(探索产物有地方放)
-//   · 幂等:已存在的目录不动;已有锚点不覆盖(除非 --force)
+//   · 幂等:已存在的目录不动;已有锚点不覆盖(除非 --force,且锚点类型与本次一致)
 //
 // 只建目录与锚点,**不生成空的 spec.md / flow.md** —— 报告要由讨论产出,不预置占位内容。
 //
@@ -12,7 +12,7 @@
 //   node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
 // 退出码:0 成功 / 1 出错 / 2 参数不对
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
@@ -150,14 +150,62 @@ export function applyScaffold(plan, options = {}) {
   return { created, skipped };
 }
 
-/** 解析命令行参数。 */
+/**
+ * 模块名必须是**单个目录段** —— 它会在根目录下当同名子目录用(`join(root, name)`)。
+ *
+ * 为什么必须挡:实测过 `--modules "..\..\evil"`,骨架真建到了根目录**之外**,退出码还是 0;
+ * 绝对路径会被 `join` 拼成 `<根>\C:\...` 这种废路径,抛异常崩掉。挡在拼路径之前,并说清合法范围。
+ * 根目录本身是用户显式指定的落点,不在此列 —— 这里只管拿模块名拼出来的子路径。
+ *
+ * @param name - `--modules` 里的一个名字(已 trim、空串已被滤掉)。
+ * @returns 不合法时返回给用户看的原因;合法返回 undefined。
+ */
+export function moduleNameError(name) {
+  if (isAbsolute(name)) return "这是绝对路径";
+  if (name.includes("/") || name.includes("\\")) return "带了路径分隔符";
+  if (name === "." || name === "..") return "`.` / `..` 指向根目录本身或它的上级";
+  if (name.includes(":")) return "带了盘符或冒号";
+  return undefined;
+}
+
+/** 会吃掉后一个参数的选项 —— 它们的值不是位置参数。 */
+const VALUE_FLAGS = ["--kind", "--modules"];
+
+/**
+ * 解析命令行参数。位置参数**只取第一个选项之前**的那些(与 `lib/stamp.mjs` 的 `parseStampArgs`、
+ * `module-verif-wave` 同一条规矩),其余一律算用法错误。
+ *
+ * 为什么不能"随便挑一个不像选项的当根目录":实测 `--kind project <根>` 会把选项的值(`project`)
+ * 当成根目录,于是在**当前目录**下建出一整套 `./project/` 还退 0 —— 用户以为建在了自己给的根上。
+ * 落点只能来自明确写在最前面的那个参数:少给、写反都报错,绝不猜、也绝不落到别处。
+ *
+ * @param argv - 去掉 node 与脚本路径后的参数。
+ * @returns 参数字典;写法不对时 `error` 是给用户看的原因(由调用方按用法错误退 2)。
+ */
 function parseArgs(argv) {
-  const root = argv.find((arg) => !arg.startsWith("-"));
+  const positional = [];
+  const stray = [];
+  let seenOption = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg.startsWith("-")) {
+      (seenOption ? stray : positional).push(arg);
+      continue;
+    }
+    seenOption = true;
+    if (VALUE_FLAGS.includes(arg)) index += 1;
+  }
+  const error = positional.length > 1
+    ? `根目录只能给一个(收到 ${positional.length} 个:${positional.map((arg) => JSON.stringify(arg)).join("、")})`
+    : stray.length > 0
+      ? `位置参数要写在选项前面 —— 选项后面这些得是选项:${stray.map((arg) => JSON.stringify(arg)).join("、")}`
+      : undefined;
+  const root = positional[0];
   const kind = argv.includes("--kind") ? argv[argv.indexOf("--kind") + 1] : "module";
   const modules = argv.includes("--modules")
     ? (argv[argv.indexOf("--modules") + 1] ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "")
     : [];
-  return { root, kind, modules, force: argv.includes("--force"), dryRun: argv.includes("--dry-run") };
+  return { root, error, kind, modules, force: argv.includes("--force"), dryRun: argv.includes("--dry-run") };
 }
 
 /**
@@ -178,12 +226,22 @@ function readAnchorKind(file) {
 /** 入口。 */
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.root === undefined) {
+  if (args.error !== undefined || args.root === undefined) {
+    if (args.error !== undefined) console.error(args.error);
     console.error("用法:node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]");
+    console.error("根目录写在最前面;写在选项后面的话,选项的值会被当成根目录(建到别处去)。");
     return 2;
   }
   if (args.kind !== "module" && args.kind !== "project") {
     console.error(`--kind 只接受 module 或 project(收到 ${args.kind})`);
+    return 2;
+  }
+  for (const name of args.modules) {
+    const reason = moduleNameError(name);
+    if (reason === undefined) continue;
+    console.error(`--modules 里的模块名不合法:${JSON.stringify(name)} —— ${reason}`);
+    console.error("模块名只能是根目录下的**单个目录段**(会在 `<根>/<模块名>/` 建一套模块骨架):");
+    console.error("  不能带 `/` 或 `\\`、不能是 `.` / `..`、不能带盘符或冒号、不能是绝对路径。");
     return 2;
   }
 
@@ -191,15 +249,17 @@ function main() {
   const plan = planScaffold(root, { kind: args.kind, modules: args.modules });
 
   // 一个根只能有一个锚点,而它的 `kind` 决定整套流程怎么找环节目录。
-  // 拿 module 的根去建工程(或反过来)、又不给 --force 的话,脚本只会"锚点已存在,未覆盖"
-  // 地把目录建一半:project/ 有了、锚点还是 kind: module —— 工程级技能照样找不到工程。
-  // 真事:实跑集成场景时这么踩过。所以这里明说冲突、给出办法,而不是留个半吊子状态。
+  // 拿 module 的根去建工程(或反过来)的话,脚本只会"锚点已存在,未覆盖"地把目录建一半:
+  // project/ 有了、锚点还是 kind: module —— 工程级技能照样找不到工程。
+  // 真事:实跑集成场景时这么踩过。所以这里明说冲突、给出迁移办法,而不是留个半吊子状态。
+  // `--force` 是**同类型**的重写开关(重写锚点与工作区指令),不跨类型覆盖 —— 所以这条冲突是
+  // 硬拒绝,提示文字也不再说"再加 --force 重建"(说了也到不了这里)。
   const rootAnchor = plan.anchors[0]?.file;
   if (rootAnchor !== undefined && existsSync(rootAnchor)) {
     const existing = readAnchorKind(rootAnchor);
     if (existing.error !== undefined) {
       console.error(`根目录已有锚点,但读不出它的内容:${rootAnchor}`);
-      console.error(`${existing.error} —— 不覆盖用户的文件;确认或修好它再跑,或者用 --force 重建。`);
+      console.error(`${existing.error} —— 不覆盖用户的文件;把它移走(或修好它)再跑。--force 也覆盖不了它:能覆盖的只有读得出、且类型一致的锚点。`);
       return 1;
     }
     if (existing.kind !== args.kind) {
@@ -207,7 +267,7 @@ function main() {
       console.error(`  锚点写的是 kind: ${existing.kind},本次要建 kind: ${args.kind}`);
       console.error("  一个根只能属于一种:模块根放模块自己的 spec/rtl/verif/synth,工程根放 project/ 与各模块子目录。");
       console.error(`  要建工程:先把现有模块目录(含它自己的锚点)整体移进 <根>/${args.modules[0] ?? "<模块名>"}/,根上只留工程级的,再跑一次本命令 —— 不要用 --force 覆盖,那会丢掉锚点里已有的内容。`);
-      console.error("  要重建:确认不需要旧锚点内容后再加 --force。");
+      console.error("  要重建:把根上的锚点移到一边(改名也算)再跑本命令 —— --force 只重写类型一致的锚点,不跨类型覆盖。");
       return 1;
     }
   }

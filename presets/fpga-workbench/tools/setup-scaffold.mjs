@@ -7,17 +7,24 @@
 //   · 幂等:已存在的目录不动;已有锚点不覆盖(除非 --force,且锚点类型与本次一致)
 //   · `--force` 的覆盖**可恢复**:旧内容先留一份同目录 `<文件>.bak-<时间戳>` 快照(路径会打印
 //     出来),新内容写临时文件核验过才替换 —— 理由见 `lib/stamp.mjs` 的 {@link writeFileRecoverable}
+//   · 落盘**前**先做**全量预检**:每个目标的**真实落点**(看穿 junction / 符号链接)必须仍在根里、
+//     目标必须可写;不过就在动手之前拒绝(理由见 `lib/stamp.mjs` 的 {@link realEscape})
 //
 // 只建目录与锚点,**不生成空的 spec.md / flow.md** —— 报告要由讨论产出,不预置占位内容。
 //
+// **失败不撒谎、也不回滚**:预检之后才动手,万一还是失败(目标被占用、路径上某一节是文件…),
+// 本脚本**不做删除式回滚**(用户定案:插件运行时绝不永久删除),而是把**已经发生的动作**
+// (建了哪些目录 / 写了哪些文件 / 留下了哪些快照)挂到错误信息上原样列出来,由使用者自己处置。
+//
 // 用法:
 //   node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
-// 退出码:0 成功 / 1 出错(含落盘失败:此时原有文件一个都没动)/ 2 参数不对
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+// 退出码:0 成功 / 1 出错(落盘失败:已经发生的动作会原样列出来)/ 2 参数不对,或目标经
+//         junction / 符号链接逃出了根目录
+import { accessSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { writeFileRecoverable } from "./lib/stamp.mjs";
+import { realEscape, writeFileRecoverable } from "./lib/stamp.mjs";
 
 /**
  * 本模式的工作区指令文件名。
@@ -78,8 +85,9 @@ export const PROJECT_STAGES = ["spec", "integrate", "constraints", "syssim", "im
  * @param root - 根目录:模块根,或工程的工作区根。
  * @param options - `{ kind, modules }`。`kind` 为 `module` 或 `project`;工程级可给 `modules`
  *   (每个模块建一套模块级骨架,模块目录取根目录下的同名子目录)。
- * @returns `{ dirs, anchors, instruction }`;`anchors` 每项 `{ file, value }`;
- *   `instruction` 是工作区指令文件的绝对路径(两级都落一份,模块根或工程根)。
+ * @returns `{ dirs, anchors, instruction, root }`;`anchors` 每项 `{ file, value }`;
+ *   `instruction` 是工作区指令文件的绝对路径(两级都落一份,模块根或工程根);
+ *   `root` 原样带回根目录 —— 落盘时的**真实路径边界**以它为基准({@link applyScaffold})。
  */
 export function planScaffold(root, options = {}) {
   const kind = options.kind ?? "module";
@@ -108,61 +116,150 @@ export function planScaffold(root, options = {}) {
     moduleAt(root);
   }
 
-  return { dirs, anchors, instruction: join(root, INSTRUCTION_FILE) };
+  return { dirs, anchors, instruction: join(root, INSTRUCTION_FILE), root };
+}
+
+/** 给错误挂一个机器可读的类别(入口按它决定退出码)。 */
+function coded(error, code) {
+  error.code = code;
+  return error;
+}
+
+/**
+ * 写前**全量预检**:把这次要建 / 要写的目标一次全过一遍 —— **只读探测,不建任何东西**。
+ *
+ * ① **真实落点**:词法检查挡不住 junction / 符号链接(纯字符串判断只看"路径长什么样"),
+ *    这里用目标**最近的已存在父路径**的真实路径再核一次(见 `lib/stamp.mjs` 的 {@link realEscape})。
+ * ② **可写**:已存在的目标探它自己(只读属性在这里露出来),还没建的目标探它**最近的已存在祖先**
+ *    (创建正是落在它里面)。提前失败,别建了一半才发现写不进去。
+ *
+ * 预检本身只读 —— 不过就抛,此时**一个字节都没动**。它挡不住的东西(TOCTOU、写入途中被别的进程
+ * 占住、路径某一节是文件)由下面的 `withActions` 如实报告,不假装能防住。
+ * @param plan - `{ dirs, anchors, instruction, root }`。
+ * @throws 逃逸给 `code: "FPGA_PATH_ESCAPE"`(含真实落点),不可写给 `"FPGA_UNWRITABLE"`。
+ */
+function preflight(plan) {
+  const targets = [...plan.dirs, ...plan.anchors.map((anchor) => anchor.file)];
+  if (plan.instruction !== undefined) targets.push(plan.instruction);
+  const escapes = [];
+  const unwritable = [];
+  for (const target of targets) {
+    const escape = realEscape(plan.root, target);
+    if (escape !== undefined) {
+      escapes.push({ target, escape });
+      continue;
+    }
+    let probe = target;
+    while (!existsSync(probe)) {
+      const up = dirname(probe);
+      if (up === probe) break;
+      probe = up;
+    }
+    try {
+      accessSync(probe, constants.W_OK);
+    } catch (error) {
+      // 原因也带上(`EPERM` 才是"只读";别的错误说明预检本身有问题,不能吞成"不可写")
+      unwritable.push({ target, probe, reason: `${error?.code ?? ""} ${error?.message ?? error}`.trim() });
+    }
+  }
+  if (escapes.length > 0) {
+    const lines = escapes.map(
+      ({ target, escape }) => `  ${target}\n    真实落点:${escape.landing}(根目录真实路径:${escape.realRoot})`
+    );
+    throw coded(new Error(`拒绝:目标经 junction / 符号链接逃出了根目录(预检不过,一个字节都没动):\n${lines.join("\n")}`), "FPGA_PATH_ESCAPE");
+  }
+  if (unwritable.length > 0) {
+    const lines = unwritable.map(({ target, probe, reason }) => `  ${target}(按可写性探的是:${probe};${reason})`);
+    throw coded(new Error(`写前预检不通过 —— 目标只读或不可写,提前失败(一个字节都没动):\n${lines.join("\n")}`), "FPGA_UNWRITABLE");
+  }
+}
+
+/**
+ * 失败时把**已经发生的动作**挂到错误信息上 —— **如实报告,不做删除式回滚**。
+ *
+ * 用户定案:插件运行时绝不永久删除,所以失败时不能"把建了一半的东西删掉"来假装没发生;
+ * 会让调用方以为"什么都没动"的那种说法(`原有文件没有改动`)在"先建了目录、再写锚点"的顺序下
+ * 就是**谎报**。这里改成把状态原样列出来,由使用者自己处置。
+ * @param error - 原错误。
+ * @param state - 已经记下的动作(`{ dirs, files, skipped, backups }`)。
+ * @param root - 根目录(把绝对路径缩成好读的相对路径);缺失时用绝对路径。
+ * @returns 带完整说明的新错误(保留原错误的 `code`)。
+ */
+function withActions(error, state, root) {
+  const short = (path) => (root === undefined ? path : relative(root, path) || ".");
+  const snapshots = state.backups.length === 0
+    ? ""
+    : `\n  覆盖前留下的快照(要恢复就把它的内容复制回目标):${state.backups.join("、")}`;
+  const detail = [
+    "已经发生的动作(**不做删除式回滚**,下面这些留在原地,请自行处置):",
+    `  新建目录 ${state.dirs.length} 个:${state.dirs.map(short).join("、") || "(无)"}`,
+    `  新建 / 覆盖文件 ${state.files.length} 个:${state.files.map(short).join("、") || "(无)"}`,
+    `  跳过已存在 ${state.skipped.length} 个:${state.skipped.map(short).join("、") || "(无)"}${snapshots}`
+  ].join("\n");
+  const wrapped = new Error(`${error instanceof Error ? error.message : String(error)}\n${detail}`);
+  wrapped.code = error?.code;
+  return wrapped;
 }
 
 /**
  * 落盘(幂等)。已有目录不重建;已有锚点不覆盖,除非 `force`。
  *
  * 覆盖走 {@link writeFileRecoverable}:旧内容先留同目录 `.bak-<时间戳>` 快照,新内容核验过才替换。
- * 快照或替换失败**抛错**(原文件不动),由入口报错退出 —— 这里不吞异常,免得留下半吊子骨架。
- * @param plan - {@link planScaffold} 的结果。
+ * 动手之前先过一遍 {@link preflight}(真实路径边界 + 可写性),不过就**在动手之前**拒绝。
+ * 预检之后万一仍然失败,**不回滚、也不吞异常**(用户定案:绝不永久删除),而是把**已经发生的动作**
+ * 一起抛出去(见 {@link withActions}),由入口原样打印。
+ * @param plan - {@link planScaffold} 的结果(带 `root`)。
  * @param options - `{ dryRun, force }`。
  * @returns `{ created, skipped, backups }`,元素是绝对路径;`backups` 是本次留下的快照。
  */
 export function applyScaffold(plan, options = {}) {
   const dryRun = options.dryRun === true;
-  const created = [];
-  const skipped = [];
-  const backups = [];
+  const state = { dirs: [], files: [], skipped: [], backups: [] };
 
-  for (const dir of plan.dirs) {
-    if (existsSync(dir)) {
-      skipped.push(dir);
-      continue;
+  try {
+    // dry-run 只报告不落盘,所以不预检(预检的意义是"别建到一半才发现写不进去")
+    if (!dryRun) preflight(plan);
+
+    for (const dir of plan.dirs) {
+      if (existsSync(dir)) {
+        state.skipped.push(dir);
+        continue;
+      }
+      if (!dryRun) mkdirSync(dir, { recursive: true });
+      state.dirs.push(dir);
     }
-    if (!dryRun) mkdirSync(dir, { recursive: true });
-    created.push(dir);
+
+    // 覆盖前的快照单独记一份:它不参与"建了什么"的计数,只用来告诉用户旧内容在哪
+    const write = (file, text) => {
+      if (!dryRun) {
+        const snapshot = writeFileRecoverable(file, text);
+        if (snapshot !== undefined) state.backups.push(snapshot);
+      }
+      state.files.push(file);
+    };
+
+    for (const { file, value } of plan.anchors) {
+      if (existsSync(file) && options.force !== true) {
+        state.skipped.push(file);
+        continue;
+      }
+      write(file, `${JSON.stringify(value, null, 2)}\n`);
+    }
+
+    // 工作区指令:两级各落一份(模块根 / 工程根),同样"已存在就跳过" —— 用户按项目改过的那份
+    // 不能被我们覆盖掉。`--force` 才重写。
+    if (plan.instruction !== undefined) {
+      if (existsSync(plan.instruction) && options.force !== true) {
+        state.skipped.push(plan.instruction);
+      } else {
+        write(plan.instruction, readModeRules());
+      }
+    }
+  } catch (error) {
+    throw withActions(error, state, plan.root);
   }
 
-  // 覆盖前的快照单独记一份:它不参与"建了什么"的计数,只用来告诉用户旧内容在哪
-  const write = (file, text) => {
-    if (!dryRun) {
-      const snapshot = writeFileRecoverable(file, text);
-      if (snapshot !== undefined) backups.push(snapshot);
-    }
-    created.push(file);
-  };
-
-  for (const { file, value } of plan.anchors) {
-    if (existsSync(file) && options.force !== true) {
-      skipped.push(file);
-      continue;
-    }
-    write(file, `${JSON.stringify(value, null, 2)}\n`);
-  }
-
-  // 工作区指令:两级各落一份(模块根 / 工程根),同样"已存在就跳过" —— 用户按项目改过的那份
-  // 不能被我们覆盖掉。`--force` 才重写。
-  if (plan.instruction !== undefined) {
-    if (existsSync(plan.instruction) && options.force !== true) {
-      skipped.push(plan.instruction);
-    } else {
-      write(plan.instruction, readModeRules());
-    }
-  }
-
-  return { created, skipped, backups };
+  return { created: [...state.dirs, ...state.files], skipped: state.skipped, backups: state.backups };
 }
 
 /**
@@ -171,6 +268,9 @@ export function applyScaffold(plan, options = {}) {
  * 为什么必须挡:实测过 `--modules "..\..\evil"`,骨架真建到了根目录**之外**,退出码还是 0;
  * 绝对路径会被 `join` 拼成 `<根>\C:\...` 这种废路径,抛异常崩掉。挡在拼路径之前,并说清合法范围。
  * 根目录本身是用户显式指定的落点,不在此列 —— 这里只管拿模块名拼出来的子路径。
+ *
+ * **这里只挡字面**(名字本身长什么样)。名字合法、但 `<根>/<名字>` 已经是一个指向根外的
+ * junction / 符号链接时,挡它的是落盘前的真实路径预检({@link applyScaffold} → `preflight`)。
  *
  * @param name - `--modules` 里的一个名字(已 trim、空串已被滤掉)。
  * @returns 不合法时返回给用户看的原因;合法返回 undefined。
@@ -291,10 +391,12 @@ function main() {
   try {
     applied = applyScaffold(plan, { dryRun: args.dryRun, force: args.force });
   } catch (error) {
-    // 落盘失败(快照失败 / 替换失败)时原有文件一个都没动 —— 说清这一点,别让人以为写坏了一半
-    console.error("落盘失败,原有文件没有改动:");
+    // 失败**不一定是"什么都没发生"**(可能已经建了目录、写了前几个锚点),所以这里不撒"原有文件没动"
+    // 的谎、也不做删除式回滚:`已经发生的动作`就在错误信息里(见 withActions),原样打出来。
+    // 退出码按类别分:预检发现逃逸 = 路径边界问题(2),其余落盘失败 = 1。
+    console.error("落盘失败(没有做删除式回滚,已经发生的动作见下):");
     console.error(`  ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
+    return error?.code === "FPGA_PATH_ESCAPE" ? 2 : 1;
   }
   const { created, skipped, backups } = applied;
 

@@ -8,15 +8,19 @@
 //   node C:\Work\dsh-fpga-workbench\tools\install.mjs --check  只校验,不动任何东西
 //
 // 安全设计(踩过坑之后定的):
-//   1. 先校验。一致就什么都不做 —— 避免无谓的删除。
-//   2. 不一致才"移除旧副本 + 重装"。
-//   3. 任何一步失败都**明确打印恢复命令**,绝不把"删了但没装回去"当成功 ——
-//      那种状态会让 profile 的 bundles 列着一个不存在的包,DSH 启动会直接失败。
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+//   1. 先校验。一致就什么都不做 —— 避免无谓的改动。
+//   2. 不一致才"把旧副本**改名**成备份 + 重装"。**绝不先删**:删了再装,中间失败会让 profile 的
+//      bundles 指着一个不存在的包目录,DSH 启动直接失败(实测过)。改名是原子的、可回滚。
+//   3. 安装成功 → 备份**保留**并报告路径(处置交给用户,本脚本不删)。
+//      安装失败 → 把备份改回原名、恢复原状,退出码非零并说明原因。
+//   4. **零删除**:本脚本不调用任何删除 API(用户定案:插件运行时绝不永久删除)。
+//      静态守卫见 tools/check-toolchain.mjs —— 以后有人加回删除调用,自检会红。
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cleanupEntry, formatCleanup } from "../lib/toolchain.js";
 import { compareTree } from "./shipped.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -30,6 +34,23 @@ const checkOnly = process.argv.includes("--check");
 
 /** 恢复命令:无论在哪一步失败,用户都可以靠这一条把状态修回来。 */
 const RECOVERY = `dsh plugin --profile ${PROFILE_NAME} add file:${ROOT}`;
+
+/** 文件名安全的时间戳(备份 / 半成品改名用)。 */
+const timestamp = () => new Date().toISOString().replace(/[:.]/gu, "-");
+
+/**
+ * 本脚本留下的、**不删除**的东西(探针文件、备份、安装失败留下的半成品)。
+ * 用户定案:绝不永久删除,所以连自己造的临时文件也只报出来,由使用者处置。
+ */
+const pendingCleanup = [];
+
+/** 打印"没删掉的遗留物"清单,并说清怎么处置。 */
+function reportLeftovers() {
+  if (pendingCleanup.length === 0) return;
+  console.log("\n未删除的遗留物(本脚本不删任何文件,请自行处置):");
+  for (const line of formatCleanup(pendingCleanup)) console.log(line);
+  console.log("确认新副本正常之后,把它们移进回收站即可。");
+}
 
 /** 校验已装副本与源是否一致。@returns 失败项标签数组 */
 function verify() {
@@ -67,12 +88,44 @@ function runAdd() {
   return true;
 }
 
+/**
+ * 安装失败时把备份改名回原位 —— **只改名,不删**。
+ *
+ * 失败可能留下两种东西:pnpm 建了一半的目录(INSTALLED 又出现了)、以及我们的备份。两个都不能删,
+ * 所以先把半成品改名移开(带 `.failed-<时间戳>` 后缀),再把备份改回 INSTALLED;恢复后 INSTALLED
+ * 里就是**原来那份旧副本**,与运行本脚本之前的状态一致。
+ * @param backup - 备份目录路径;本来没有旧副本时为 undefined。
+ * @returns 是否恢复成功。
+ */
+function restore(backup) {
+  if (backup === undefined) {
+    console.log("本来就没有旧副本(首次安装),不涉及回滚。");
+    return true;
+  }
+  try {
+    if (existsSync(INSTALLED)) {
+      const stray = `${INSTALLED}.failed-${timestamp()}`;
+      renameSync(INSTALLED, stray);
+      console.log(`安装失败留下的半成品已改名移开(**未删除**):${stray}`);
+      pendingCleanup.push(cleanupEntry("partial", stray));
+    }
+    renameSync(backup, INSTALLED);
+    const at = pendingCleanup.findIndex((item) => item.path === backup);
+    if (at >= 0) pendingCleanup.splice(at, 1);
+    console.log(`已把备份改回原名,状态恢复:${INSTALLED}`);
+    return true;
+  } catch (error) {
+    console.error(`回滚失败:${error.message}\n备份仍在原处(**没有删除**):${backup}`);
+    return false;
+  }
+}
+
 if (checkOnly) {
   const failures = verify();
   console.log(failures.length === 0 ? "已装副本与源一致。" : `不一致:\n - ${failures.join("\n - ")}`);
   process.exitCode = failures.length === 0 ? 0 : 1;
 } else {
-  // 1. 先看有没有必要动。一致就直接结束 —— 不做无谓的删除。
+  // 1. 先看有没有必要动。一致就直接结束 —— 不做无谓的改动。
   const before = verify();
   if (before.length === 0) {
     console.log("已装副本与源一致,无需重装。");
@@ -80,23 +133,22 @@ if (checkOnly) {
   }
   console.log(`需要刷新(${before.join("；")})`);
 
-  // 2. 删除前检查路径形状 —— 只允许删 <...>/profiles/<name>/node_modules/<pkg>
+  // 2. 改名/安装前检查路径形状 —— 只允许动 <...>/profiles/<name>/node_modules/<pkg>
   const expectedTail = ["profiles", PROFILE_NAME, "node_modules", PACKAGE_NAME].join(sep);
   if (!INSTALLED.endsWith(expectedTail)) {
-    console.error(`拒绝删除:路径形状不符合预期\n  实际: ${INSTALLED}\n  期望结尾: ${expectedTail}`);
+    console.error(`拒绝改动:路径形状不符合预期\n  实际: ${INSTALLED}\n  期望结尾: ${expectedTail}`);
     process.exit(1);
   }
 
-  // 3. 可写性预检:先往 profile 目录写一个临时文件再删掉。
+  // 3. 可写性预检:先往 profile 目录写一个探针文件。
   //
   // 这一步是为了堵住一个真实事故:pnpm 需要在 profile 目录里建临时文件,而受限沙箱
-  // (例如由别的 agent 进程代跑)会以 EPERM 拒绝 —— 于是"删掉旧副本"成功、"装回去"
-  // 失败,profile 的 bundles 就列着一个不存在的包目录,DSH 启动直接失败。
-  // 写不了就什么都不做,让用户在自己的终端里跑。
-  const probe = join(PROFILE_DIR, `_fpga_install_probe_${String(process.pid)}`);
+  // (例如由别的 agent 进程代跑)会以 EPERM 拒绝 —— 于是重装失败。写不了就什么都不做,
+  // 让用户在自己的终端里跑。
+  // 探针文件**不删除**(零删除):名字固定,每次覆盖同一个文件,不会越攒越多;路径在末尾报出来。
+  const probe = join(PROFILE_DIR, "_fpga_install_probe.txt");
   try {
-    writeFileSync(probe, "probe");
-    rmSync(probe, { force: true });
+    writeFileSync(probe, `probe ${timestamp()}\n`);
   } catch (error) {
     console.error(
       [
@@ -110,41 +162,55 @@ if (checkOnly) {
         ""
       ].join("\n")
     );
-    try {
-      rmSync(probe, { force: true });
-    } catch {
-      /* 清不掉也无所谓,名字带 pid、不影响加载 */
-    }
     process.exit(1);
   }
+  pendingCleanup.push(cleanupEntry("temp", probe));
 
+  // 4. 先把现有副本**改名**成备份(同目录改名,原子;不删)。
+  let backup;
   if (existsSync(INSTALLED)) {
-    console.log(`移除旧副本:${INSTALLED}`);
+    backup = `${INSTALLED}.bak-${timestamp()}`;
     try {
-      rmSync(INSTALLED, { recursive: true, force: true });
+      renameSync(INSTALLED, backup);
     } catch (error) {
-      console.error(`移除失败:${error.message}\n未做任何改动,状态仍然可用。`);
+      console.error(
+        [
+          `旧副本改名备份失败:${error.message}`,
+          `  源:   ${INSTALLED}`,
+          `  目标: ${backup}`,
+          "",
+          "**没有删除任何东西**,状态未动 —— 本脚本不会「删掉再装」。",
+          "常见原因:目录被别的进程占着(正在跑的 DSH 或编辑器),或者当前进程没有写权限。",
+          "处理办法:关掉占用它的进程后重试;或手动执行:",
+          `  ${RECOVERY}`,
+          ""
+        ].join("\n")
+      );
+      reportLeftovers();
       process.exit(1);
     }
+    console.log(`旧副本已改名备份(**未删除**):${backup}`);
+    pendingCleanup.push(cleanupEntry("backup", backup));
   }
 
-  // 3. 重装。失败时必须让用户知道现在处于"副本已移除"的状态。
+  // 5. 重装。失败就把备份改回原名 —— 恢复成运行前的状态。
   if (!runAdd()) {
     console.error(
       [
         "",
-        "失败:旧副本已移除,但重装没有成功 —— profile 的 bundles 仍然列着这个包,",
-        "而它的目录不存在,DSH 启动会直接失败。",
+        "失败:重装没有成功。已尝试把备份改回原名,恢复运行前的状态。",
         "",
-        "请在你的终端里跑这一条修复:",
+        "如果上面显示回滚失败,请在你自己的终端里手动跑这一条:",
         `  ${RECOVERY}`,
         ""
       ].join("\n")
     );
+    restore(backup);
+    reportLeftovers();
     process.exit(1);
   }
 
-  // 4. 校验
+  // 6. 校验
   console.log("");
   const after = verify();
   if (after.length === 0) {
@@ -159,9 +225,12 @@ if (checkOnly) {
       console.log("\n冒烟测试没过 —— 先别重启,把上面的 FAIL 发出来。");
       process.exitCode = 1;
     }
+    reportLeftovers();
   } else {
     console.log(`FAIL: ${after.join(" | ")}`);
     console.log(`pnpm 又跳过了拷贝 —— 再跑一次本脚本,或手动:${RECOVERY}`);
+    console.log("旧副本仍完整保留在备份目录里,需要时可以改名回去。");
+    reportLeftovers();
     process.exitCode = 1;
   }
 }

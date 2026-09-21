@@ -12,7 +12,12 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { TextDecoder } from "node:util";
 
-const FILE = "C:/Work/dsh-fpga-workbench/cordis.patch.yml";
+// 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),
+// 这里保留同样的默认值,好让本文件被单独调用时也能跑。
+const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
+// 补丁文件按**本文件的位置**定位(仓库根 = 本文件的上一级)—— 写死本机绝对路径的话,
+// 仓库克隆到别处、或从别的目录调用就断。`readFileSync` 直接收 URL,不用再拼字符串路径。
+const FILE = new URL("../cordis.patch.yml", import.meta.url);
 const bytes = readFileSync(FILE);
 
 const failures = [];
@@ -36,16 +41,21 @@ if (text !== null) {
   console.log(`文件 ${bytes.length} 字节,${text.split("\n").length} 行`);
 }
 
-// 2. 用宿主解析补丁时用的同一个 schema
+// 2. 用宿主解析补丁时用的同一个 schema(所以整个文件属于「需要宿主」那一层:
+//    check-all 在宿主目录不在时对它记 SKIP,而不是让源码层报 FAIL)
 let rows = null;
-const require = createRequire("file:///C:/Program Files/DSH Desktop/resources/app/package.json");
+const require = createRequire(`${APP}/package.json`);
 try {
   const yaml = require("js-yaml");
   const { entryListSchema } = require("@deepseek-ai/cordis-plugin-include");
   rows = yaml.load(text, { schema: entryListSchema });
   check(true, "用宿主同一套 schema 解析成功(含 !!js 标签)");
 } catch (error) {
-  check(false, "解析失败 —— 启动会崩", error.message);
+  check(
+    false,
+    `解析失败 —— 启动会崩(宿主目录:${APP};装在别处就用 DSH_APP_DIR 指过去)`,
+    error.message
+  );
 }
 
 if (rows !== null) {

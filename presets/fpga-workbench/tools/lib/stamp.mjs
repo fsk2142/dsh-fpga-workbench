@@ -14,26 +14,78 @@
 // 故意不做的事:不猜模板、不改模板内容、不覆盖已有文件(除非 --force)。
 // **`--force` 覆盖是可恢复的**:旧内容先复制成同目录的 `<目标>.bak-<时间戳>`(路径会打印出来),
 // 新内容先写临时文件、读回来核验过才改名替换 —— 见 {@link writeFileRecoverable}。
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, extname, isAbsolute, join, relative as relativePath, resolve } from "node:path";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 
 /** 取一个错误的可读文字(非 Error 的抛出物也要能报出来)。 */
 function errorText(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 丢掉临时文件(失败路径专用):先恢复可写再删,免得只读属性把临时文件留在地上。 */
-function discardTemporary(file) {
-  try {
-    chmodSync(file, 0o666);
-  } catch {
-    // 改不动权限也接着删:删不掉只是留个临时文件,不该盖过真正的失败原因
+/**
+ * `relative` 的结果是不是"根之外"。
+ *
+ * 不用 `startsWith("../")` 那一类写法:名字以 `..` 开头(`..foo`)的目录是**根里面**的合法路径,
+ * 老写法会把它误判成逃逸。这里只认三种:正好是 `..`、以 `..<分隔符>` 开头、解析到了别的盘。
+ * @param relative - {@link relativePath} 的结果。
+ * @returns 指向根之外时 true。
+ */
+function outsideOf(relative) {
+  return relative === ".." || relative.startsWith(`..${sep}`) || isAbsolute(relative);
+}
+
+/**
+ * 取一个路径的**真实**路径(不递归、不枚举):路径不存在就下探到**最近的已存在祖先**,
+ * 只对那个祖先做**一次** `realpathSync`,剩下的段按字面接回去。
+ * @param path - 任意路径(可以还不存在)。
+ * @returns 真实路径。
+ */
+function realPathOf(path) {
+  let probe = path;
+  const tail = [];
+  while (!existsSync(probe)) {
+    const up = dirname(probe);
+    if (up === probe) return resolve(path);
+    tail.unshift(basename(probe));
+    probe = up;
   }
-  try {
-    rmSync(file, { force: true });
-  } catch {
-    // 同上
-  }
+  const real = realpathSync(probe);
+  return tail.length === 0 ? real : join(real, ...tail);
+}
+
+/**
+ * 词法判断之外的第二道:**看穿 junction / 符号链接**的真实落点。
+ *
+ * 为什么必须有:纯字符串判断只看"路径长什么样"。Windows 上一个 junction(或符号链接)能让
+ * `mkdirSync(..., {recursive:true})` 与写文件的**真实落点**跑到根目录**外面**去,而词法上
+ * 一切正常(实测形状:`<根>\sub` 指向别处,`--out sub/x.sv` 与模块子目录都会照写不误)。
+ *
+ * 只做**两次** `realpathSync` —— 一次**目标根**、一次目标**最近的已存在父路径** ——
+ * 不做全量 realpath、不递归 lstat(O(1))。目的是"能识破 junction 逃逸",**不是**穷举 TOCTOU:
+ * 检查与写入之间仍可能有竞态,这里不假装能防住。
+ * @param root - 真实根目录的词法路径(可以还不存在)。
+ * @param target - 要写入 / 建目录的目标路径(词法上已在根里,由调用方先挡一层)。
+ * @returns 逃出根时给 `{ realRoot, landing }`(`landing` 是真实落点,打印给用户看);没逃出给 `undefined`。
+ */
+export function realEscape(root, target) {
+  const realRoot = realPathOf(root);
+  const realParent = realPathOf(dirname(target));
+  if (!outsideOf(relativePath(realRoot, realParent))) return undefined;
+  return { realRoot, landing: join(realParent, basename(target)) };
+}
+
+/**
+ * 失败路径上留下的临时/半成品文件 —— **留在原处,不删**。
+ *
+ * 用户定案(2026-09):本插件的脚本**绝不永久删除**任何文件。这里不 shell、也不加原生依赖,
+ * 而 Windows 上把文件送进回收站需要其中之一,所以失败时我们不改权限、也不删,只把路径报出来
+ * (写进给使用者看的错误信息),由他自己处置。留着的最坏后果是一个几十字节的临时文件,
+ * 比"悄悄删掉、事后无法追查"轻得多。
+ * @param file - 留在原处的文件路径。
+ * @returns 一句可拼进错误信息的说明。
+ */
+function leftoverNote(file) {
+  return `留下的文件未删除,请自行处置:${file}`;
 }
 
 /**
@@ -47,6 +99,7 @@ function discardTemporary(file) {
  *   · 新内容先落到临时文件,并**读回来逐字节核验**;核验不过就报错,目标一个字节都不动
  *   · 核验通过才 `rename` 到目标(同目录改名;不会出现"半截文件")
  * 快照与替换失败都保留原文件,把原因(含快照路径)抛给调用方去报错退出。
+ * **失败路径不再删除临时/半成品文件**(用户定案:绝不永久删除),路径会写进错误信息,由使用者处置。
  *
  * @param target - 目标文件。已存在就留快照;不存在则是一次普通落盘。
  * @param text - 要写入的正文(UTF-8)。
@@ -61,8 +114,7 @@ export function writeFileRecoverable(target, text) {
       throw new Error("写进去的内容与要写的对不上");
     }
   } catch (error) {
-    discardTemporary(temporary);
-    throw new Error(`写临时文件失败,目标未动:${target} —— ${errorText(error)}`);
+    throw new Error(`写临时文件失败,目标未动:${target} —— ${errorText(error)}(${leftoverNote(temporary)})`);
   }
 
   let snapshot;
@@ -74,10 +126,10 @@ export function writeFileRecoverable(target, text) {
       copyFileSync(target, snapshot);
       if (!readFileSync(snapshot).equals(readFileSync(target))) throw new Error("复制出来的内容与原文对不上");
     } catch (error) {
-      // 半成品快照要清掉:留着它比没有更坏(看着像一份能恢复的备份,其实是断的)
-      discardTemporary(temporary);
-      discardTemporary(snapshot);
-      throw new Error(`快照失败(半成品已清掉),原文件未动:${target} —— ${errorText(error)}`);
+      // 半成品快照与临时文件都**不留白**:路径报出来,别让人以为"备份没做成、东西也没了"
+      throw new Error(
+        `快照失败,原文件未动:${target} —— ${errorText(error)}(${leftoverNote(snapshot)};${leftoverNote(temporary)})`
+      );
     }
   }
 
@@ -92,9 +144,8 @@ export function writeFileRecoverable(target, text) {
   try {
     renameSync(temporary, target);
   } catch (error) {
-    discardTemporary(temporary);
     throw new Error(
-      `替换失败,原文件保留${snapshot === undefined ? "" : `(快照:${snapshot})`}:${target} —— ${errorText(error)}`
+      `替换失败,原文件保留${snapshot === undefined ? "" : `(快照:${snapshot})`}:${target} —— ${errorText(error)}(${leftoverNote(temporary)})`
     );
   }
   return snapshot;
@@ -238,6 +289,7 @@ export function stampFile(options) {
   // `--out` 是**相对根目录**的路径,不许拿它写到根目录外面去。
   // 实测过:不挡的话 `--out "..\x.sv"` 会真把文件落在模块根之外(绝对路径在 Windows 上会被
   // join 拼坏、退 1,属于另一种"没写出去",不必单独处理)。挡在写之前,并说清合法范围。
+  // **词法只挡得住字面**:下一道用真实路径看穿 junction / 符号链接(见 {@link realEscape})。
   if (isAbsolute(relative)) {
     console.error(`--out 要写相对路径(相对根目录),收到绝对路径:${relative}`);
     return 2;
@@ -245,9 +297,16 @@ export function stampFile(options) {
   const rootResolved = resolve(root);
   const target = resolve(rootResolved, relative);
   const inside = relativePath(rootResolved, target);
-  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) {
+  if (inside === "" || outsideOf(inside)) {
     console.error(`--out 指向根目录之外,已拒绝:${relative}`);
     console.error(`合法范围只能是根目录(及其子目录)里面:${rootResolved}`);
+    return 2;
+  }
+  const escape = realEscape(rootResolved, target);
+  if (escape !== undefined) {
+    console.error(`--out 经 junction / 符号链接的真实落点在根目录之外,已拒绝:${relative}`);
+    console.error(`  词法上看着在根里:${target}`);
+    console.error(`  真实落点:${escape.landing}(根目录真实路径:${escape.realRoot})`);
     return 2;
   }
   const targetExists = existsSync(target);

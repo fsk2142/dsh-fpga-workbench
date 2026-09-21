@@ -12,12 +12,12 @@
 // 只 import lib/toolchain.js:它只用 node 内置模块,而 lib/index.js 要 schemastery,
 // 后者只在 profile 的 node_modules 里,从仓库 import 会解析失败。
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   FIELDS,
   NS,
-  SWEEP_GRACE_MS,
+  TEMP_GRACE_MS,
   DETECT_TARGETS,
   EXPECTED_PWSH_VERSION,
   TEMPLATE_FIELDS,
@@ -29,32 +29,33 @@ import {
   isMissing,
   legacyMigrationPatch,
   listDirectory,
+  listEmptySkillDirs,
   listFiles,
+  listTempLeftovers,
   presetFileDiff,
   presetSyncNeeded,
   probeFilesystem,
-  pruneEmptySkillDirs,
   queryVersion,
   readdirNames,
   resolveTemplates,
   staleShippedFiles,
   statusOf,
-  sweepTempEntries,
   toolLevelPrefix,
   toolPath
 } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // fixture 名带进程号:`npm test` 与 `npm run test:installed` 跑的是**同一批检查**,并行执行时
-// 同名目录会互相踩(一个正在写、另一个开头把它扫掉)—— 现象是随机假失败。
+// 同名目录会互相踩(一个正在写、另一个把它当成上一轮的残留)。
 const RUN_ID = String(process.pid);
-// 自检自己收尾:这些前缀是本次跑出来的 fixture(含列目录用的 browse-fixture),
-// 跑到最后要把它们扫干净 —— 开头也扫一次,清掉上次异常退出留下的残留;
-// 开头那次带宽限期,免得删掉并行那次正在用的目录。
+// .tmp/ 里的 fixture **不再删除**(用户定案:绝不永久删除)—— 只列出来报给使用者处置。
+// 代价是 `.tmp/` 会一直增长,所以开头把上次留下的列一次,让人看得见它有多少。
 const TMP_ROOT = join(ROOT, ".tmp");
 const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture", "preset-sync-", "sweep-check-"];
-sweepTempEntries(TMP_ROOT, FIXTURE_PREFIXES, SWEEP_GRACE_MS);
-
+const leftoversAtStart = listTempLeftovers(TMP_ROOT, FIXTURE_PREFIXES);
+if (leftoversAtStart.length > 0) {
+  console.log(`(.tmp/ 里有 ${leftoversAtStart.length} 项上次留下的 fixture,按用户定案不删除、只报告)`);
+}
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -479,6 +480,49 @@ check(
   "填了但探不到的运行时不出现在提示里(可选字段不报未就绪、也不当可用)"
 );
 
+// ── F-05:版本是执行约束的字段,状态里必须带上**要求版本** ────────────────────────
+//
+// 状态路由只探文件在不在(它不起进程,见 lib/toolchain.js 的长注释),所以"版本对不对"它答不了。
+// 但要求本身必须跟着状态发出去 —— 否则消费方只能拿"文件在"冒充"版本达标":手填一个 7.4.2 的
+// pwshPath,状态那一行说"已就绪"、旁边那行检测结论说"版本不匹配",同屏自相矛盾,用户不知道信谁。
+// 设置页那句"已就绪"的降级渲染在 check-load-contract.mjs 里行为验证(那里能真跑渲染)。
+// statusOf 用的是真实文件系统探测,所以这里填一个**本机一定存在**的文件(node 自己的可执行文件),
+// 只为让 present 真的是 true —— 要验的是"文件在 + 带版本要求"这两件事一起出现。
+const pwshStatus = statusOf({ pwshPath: process.execPath }).tools.find((tool) => tool.key === "pwshPath");
+check(
+  pwshStatus?.versionExpected === EXPECTED_PWSH_VERSION && pwshStatus?.present === true,
+  `状态载荷带上版本要求(pwshPath → ${EXPECTED_PWSH_VERSION}),文件在照样如实报 present`,
+  JSON.stringify(pwshStatus)
+);
+check(
+  statusOf({}).tools.filter((tool) => tool.versionExpected !== undefined).length === 1,
+  "只有版本敏感的那一个字段带要求版本(别的字段没有版本约束,不该凭空多一个标记)"
+);
+// 反向:python 只如实报版本、本模式对它没有统一要求 —— 状态里带上要求就变成假门禁了
+check(
+  statusOf({ pythonPath: "C:\\y\\python.exe" }).tools.find((tool) => tool.key === "pythonPath")?.versionExpected === undefined,
+  "python 没有版本要求,状态里不带 versionExpected(带了就是拿要求冒充约束)"
+);
+// 只探文件的那条路同样不许把"文件在"读成版本达标(会话提示里由宿主写清"未核验 + 要求几")
+const versionPrompt = describeEnv(
+  { ...prepared, pwshPath: "C:\\p\\pwsh.exe" },
+  probeWith([...Object.values(prepared), "C:\\p\\pwsh.exe"])
+);
+check(
+  versionPrompt.includes("版本未核验") && versionPrompt.includes(EXPECTED_PWSH_VERSION) &&
+    !/PowerShell 7[^\n]*已就绪/u.test(versionPrompt),
+  "会话提示对版本敏感的路径写出「版本未核验 + 本模式要求 X」,不说成已就绪",
+  versionPrompt.split("\n").filter((line) => line.includes("版本未核验") || line.includes("PowerShell 7")).join("\n")
+);
+const pythonOnlyPrompt = describeEnv(
+  { ...prepared, pythonPath: "C:\\y\\python.exe" },
+  probeWith([...Object.values(prepared), "C:\\y\\python.exe"])
+);
+check(
+  pythonOnlyPrompt.includes("C:\\y\\python.exe") && !pythonOnlyPrompt.includes("版本未核验"),
+  "python(没有版本约束)照常显示路径,但不带「版本未核验」标注"
+);
+
 const halfText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith([]));
 check(halfText.includes("路径不可用(C:\\vivado.bat)"), "填了但用不了:说清原因(不存在,或类型不对)");
 check(halfText.includes("编译器路径:未配置"), "没填的项:说成未配置(要去填)");
@@ -683,6 +727,36 @@ check(
   realMissing.version === undefined && typeof realMissing.error === "string",
   `可执行文件不存在时如实报 error、不抛不猜(实际 ${JSON.stringify(realMissing)})`
 );
+
+// ── F-14:命令**没有正常结束**时,输出里那个版本号不算数 ──────────────────────────
+//
+// 实测踩到的用例:`pwsh -Command 'Write-Error "needs PowerShell 7.6.6"; exit 1'` —— 命令明明失败,
+// stderr 里却有一个看着完全合法的版本号。照旧"取输出里第一个版本号"就会得到假匹配
+// (`{version:"7.6.6"}`,而真相是这个程序根本没答话)。判据必须先是**命令成没成**。
+// 三条都要咬人:失败 / 超时 / 输出形状不对(截断或被噪声污染也是这一类)。
+const failedQuery = queryVersion(process.execPath, {
+  args: ["-e", 'console.error("needs PowerShell 7.6.6"); process.exit(1)'],
+  pattern: /(\d+\.\d+(?:\.\d+)*)/u
+});
+check(
+  failedQuery.version === undefined && /退出码 1/u.test(String(failedQuery.error)),
+  `退出码非 0 → 一律当"查不出":stderr 里那个 7.6.6 不许被当成版本(实际 ${JSON.stringify(failedQuery)})`
+);
+const shapedWrong = queryVersion(process.execPath, {
+  // 退出码 0,但输出**不是**这条命令该有的形状(真实查询只会打印一行 7.6.6)
+  args: ["-e", 'console.log("needs PowerShell 7.6.6")'],
+  pattern: /^\s*(\d+\.\d+\.\d+)\s*$/mu
+});
+check(
+  shapedWrong.version === undefined,
+  `输出不是该工具的真实形状(行不对齐 / 被别的话盖住)→ 报"查不出",不取其中随便一个版本号(实际 ${JSON.stringify(shapedWrong)})`
+);
+// 超时:spawnSync 到点杀掉子进程(status 为 null)。实测约 5 秒(VERSION_PROBE_TIMEOUT_MS)。
+const timedOut = queryVersion(process.execPath, { args: ["-e", "setTimeout(function () {}, 8000)"], pattern: /(\d+)/u });
+check(
+  timedOut.version === undefined && /ETIMEDOUT/u.test(String(timedOut.error)),
+  `查询超时 → 当"查不出"(实际 ${JSON.stringify(timedOut)})`
+);
 // 本机真跑一次整条路(默认探针 + 真实版本查询)。断言的是"结论与报出的版本自洽",
 // 不钉死这台机器的版本 —— 换台机器跑不该红,但两台机器都不许出现"没版本还判匹配"。
 const realPwsh = detectTools().find((hit) => hit.field === "pwshPath");
@@ -838,11 +912,11 @@ check(
   "目标不存在时不做备份"
 );
 
-// 我们从包里删掉的文件,用户预设目录里那份要跟着删 —— 否则"删掉的技能"照样在被加载
-// (技能是从用户预设目录扫的;cpSync 只合并不删多余的)。
+// 我们从包里删掉的文件,用户预设目录里那份会**留在原地** —— 但必须被列出来(过期技能/模板)。
+// 技能是从用户预设目录扫的,包里删掉的旧技能照样在被加载,所以这件事必须报,不能沉默。
 //
 // 但**判据只能是"上次同步清单里记过没有"**:以前还有一半是"只要在 skills/ 这种行为目录下,
-// 包里没有就删" —— 那会连**用户自己写的技能**一起删掉(这个目录本来就是他的地盘)。
+// 包里没有就删" —— 那会连**用户自己写的技能**一起算进去(这个目录本来就是他的地盘)。
 const staleRoot = join(TMP_ROOT, `stale-check-${RUN_ID}-${String(Date.now())}`);
 const staleSource = join(staleRoot, "source");
 const staleTarget = join(staleRoot, "user");
@@ -859,12 +933,12 @@ writeFileSync(join(staleTarget, "用户自己的笔记.md"), "用户加的\n");
 
 const shippedBefore = ["skills/keep-me/SKILL.md", "skills/gone/SKILL.md"];
 const diff = presetFileDiff(staleSource, staleTarget, shippedBefore);
-check(diff.stale.includes("skills/gone/SKILL.md"), "上次是我们写的、包里已删的文件会被清掉", JSON.stringify(diff.stale));
-check(!diff.stale.includes("skills/keep-me/SKILL.md"), "包里还提供的文件不动");
-check(!diff.stale.includes("用户自己的笔记.md"), "用户自己加的文件不在清单里 → 不删");
+check(diff.stale.includes("skills/gone/SKILL.md"), "上次是我们写的、包里已删的文件进「待清理」清单", JSON.stringify(diff.stale));
+check(!diff.stale.includes("skills/keep-me/SKILL.md"), "包里还提供的文件不进清单");
+check(!diff.stale.includes("用户自己的笔记.md"), "用户自己加的文件不在清单里 → 既不清理也不报成待清理");
 check(
   !diff.stale.includes("skills/my-own-skill/SKILL.md"),
-  "**用户自己放进 skills/ 的技能不得列为待删**(行为目录不是我们的地盘 —— R-01 的核心边界)",
+  "**用户自己放进 skills/ 的技能不得列为待清理**(行为目录不是我们的地盘 —— R-01 的核心边界)",
   JSON.stringify(diff.stale)
 );
 check(
@@ -878,29 +952,44 @@ check(
 check(listFiles(staleSource).join(",") === "skills/keep-me/SKILL.md", "listFiles 给出相对路径且用 / 分隔");
 
 // 清单丢了(第一次升级 / 清单被删)时就**分不清**"我们的旧技能"与"用户写的技能" ——
-// 那种情况下宁可一个都不删、只报告:留着最多是多加载一个技能,删错了是删用户的东西。
+// 那种情况下一个都不列:列错了会让人去清用户的东西。留着最多是多加载一个技能。
 const noManifest = presetFileDiff(staleSource, staleTarget, undefined);
-check(noManifest.stale.length === 0, "没有清单时一律不删(分不清是谁写的)", JSON.stringify(noManifest.stale));
+check(noManifest.stale.length === 0, "没有清单时一律不列为待清理(分不清是谁写的)", JSON.stringify(noManifest.stale));
 check(
   noManifest.foreign.includes("skills/gone/SKILL.md") &&
     noManifest.foreign.includes("skills/my-own-skill/SKILL.md"),
   `没有清单时两者都报成「非本插件文件,已保留」(实际 ${JSON.stringify(noManifest.foreign)})`
 );
-// 清单里记过、但位于 skills/ 之外的(比如旧模板):按清单删
+// 清单里记过、但位于 skills/ 之外的(比如旧模板):按清单列进待清理
 writeFileSync(join(staleTarget, "旧模板.sv"), "包里已经没有的模板\n");
 const withManifest = staleShippedFiles(staleSource, staleTarget, [...shippedBefore, "旧模板.sv"]);
-check(withManifest.includes("旧模板.sv"), "清单里记过、位于 skills/ 之外的文件按清单删");
+check(withManifest.includes("旧模板.sv"), "清单里记过、位于 skills/ 之外的文件进待清理清单");
 check(!staleShippedFiles(staleSource, staleTarget, undefined).includes("旧模板.sv"), "没有清单时不动 skills/ 之外的文件");
-// 宿主那半侧也得按这套走:按清单删 + 把保留数量报进返回值(设置页那条事实)。
+// 宿主那半侧也得按这套走:按清单列出待清理 + 把保留数量报进返回值(设置页那条事实)。
 // lib/index.js 要 schemastery,这里 import 不了,所以断言源码 —— "行为目录那一半"不许复活。
 check(
   /const \{ stale, foreign \} = presetFileDiff\(source, destination, manifest\)/u.test(hostSource) &&
     !/behaviorDirs/u.test(hostSource),
-  "宿主按清单删,且不再有「行为目录下就算我们的」这半(源码级)"
+  "宿主按清单列出待清理,且不再有「行为目录下就算我们的」这半(源码级)"
 );
 check(
   hostSource.includes("个非本插件文件,已保留") && /keptForeign/u.test(hostSource),
   "宿主把「发现非本插件文件,已保留」写进日志与 presetSync() 返回值(不是静默保留)"
+);
+// 待清理清单必须**真的**进返回值:只写日志的话设置页看不见,用户也就不会去处置。
+// (lib/index.js import 不了 schemastery,所以这条是源码级断言;行为验证在 .tmp 沙箱里另跑。)
+check(
+  /cleanupEntry\("stale", join\(destination, rel\)\)/u.test(hostSource) &&
+    /cleanupEntry\("emptyDir", dir\)/u.test(hostSource),
+  "宿主的待清理清单分两类:过期技能/模板 + 空技能目录(源码级)"
+);
+check(
+  (hostSource.match(/recordPresetSync\(\{[^}]*pendingCleanup/gu) ?? []).length >= 2,
+  "「无需同步」与「已同步」两条路径都把 pendingCleanup 带进 presetSync() 返回值"
+);
+check(
+  /pendingCleanup/u.test(hostSource),
+  "宿主侧用 pendingCleanup 报告待清理(源码级;零删除由本文件末尾的静态守卫把住)"
 );
 
 // 用户自己往预设目录里放的东西(不在 skills/ 下的普通文件)**不参与"要不要同步"的判定** ——
@@ -931,87 +1020,81 @@ writeFileSync(join(syncTarget, "preset.yml"), "包内新版\n");
 mkdirSync(join(syncTarget, "skills", "gone"), { recursive: true });
 writeFileSync(join(syncTarget, "skills", "gone", "SKILL.md"), "包内已删的旧技能\n");
 check(
-  presetSyncNeeded(syncSource, syncTarget, [...syncManifest, "skills/gone/SKILL.md"]) === true,
-  "包内已删的旧技能还在 → 要同步(否则弃用技能照样被加载)"
+  presetSyncNeeded(syncSource, syncTarget, [...syncManifest, "skills/gone/SKILL.md"]) === false,
+  "包内已删的旧技能还在 → **不算「需要同步」**:零删除之后同步清不掉它,算进去只会每次启动白备份 + 白复制一遍",
+  "它改由 pendingCleanup 报出来(见上面 presetFileDiff 那组断言)"
 );
 
-// 删完文件还要收掉空目录:只 unlink 会在用户预设里留下一串空壳技能目录(实测遇到过 9 个),
-// 列表里看着像"技能还在"。只删 skills/ 下的空目录,用户自己建的东西不碰。
+// 空技能目录(被删技能腾出来的壳)也**不删**,只列出来:技能按目录扫,空目录不会被加载,
+// 但留着会让人误判"技能还在"。只处理 skills/ 下的那一层,用户自己建的东西不碰。
 const pruneRoot = join(TMP_ROOT, `prune-skills-${RUN_ID}-${String(Date.now())}`);
 mkdirSync(join(pruneRoot, "旧技能"), { recursive: true });
 mkdirSync(join(pruneRoot, "有内容的技能"), { recursive: true });
 writeFileSync(join(pruneRoot, "有内容的技能", "SKILL.md"), "还在用\n");
-const removedDirs = pruneEmptySkillDirs(pruneRoot);
-check(removedDirs === 1 && !existsSync(join(pruneRoot, "旧技能")), `空技能目录被删掉(实际删了 ${removedDirs} 个)`);
-check(existsSync(join(pruneRoot, "有内容的技能", "SKILL.md")), "有内容的技能目录不动");
-check(pruneEmptySkillDirs(join(ROOT, ".tmp", "根本没有这个目录")) === 0, "目录不存在时返回 0(不抛)");
+const emptyDirs = listEmptySkillDirs(pruneRoot);
+check(
+  emptyDirs.length === 1 &&
+    emptyDirs[0].endsWith("旧技能") &&
+    existsSync(join(pruneRoot, "旧技能")),
+  `空技能目录被**列出**且仍留在原地(实际列出 ${emptyDirs.length} 个:${JSON.stringify(emptyDirs)})`
+);
+check(existsSync(join(pruneRoot, "有内容的技能", "SKILL.md")), "有内容的技能目录不进清单");
+check(
+  listEmptySkillDirs(join(ROOT, ".tmp", "根本没有这个目录")).length === 0,
+  "目录不存在时返回空数组(不抛)"
+);
 
-// ── 临时项清理:只碰"确属我们"的条目,拿不准就保留 + 报告(R-01) ────────────────
+// ── 临时残留:只列"确属我们"的条目,**一个都不删** ──────────────────────────
 //
-// 这条要守的是"删"这一步本身:归属靠**前缀**确认(那是我们这次运行自己建的名字),
-// 前缀不命中的一律不碰;没有前缀 = 没有归属依据 → 一个都不删;拿不准(读不到时间)
-// 或删失败 → 保留并报告,**不许换一种更狠的办法删**;而且能整个关掉(remove:false)。
+// 归属靠**前缀**确认(那是我们这次运行自己建的名字):前缀不命中 → 不列、不碰;
+// 没有前缀 = 没有归属依据 → 连列都不列(空数组)。宽限期内的标成 pending:false
+// (那可能是并行那次正在用的 fixture);读不到时间的按待清理列出并写明原因。
 const sweepRoot = join(TMP_ROOT, `sweep-check-${RUN_ID}`);
 mkdirSync(join(sweepRoot, "keep-me"), { recursive: true });
 mkdirSync(join(sweepRoot, "ours-1"), { recursive: true });
 mkdirSync(join(sweepRoot, "ours-young"), { recursive: true });
 // 老 fixture:把时间推回到宽限期之外
-const oldTime = new Date(Date.now() - SWEEP_GRACE_MS - 60 * 1000);
+const oldTime = new Date(Date.now() - TEMP_GRACE_MS - 60 * 1000);
 utimesSync(join(sweepRoot, "ours-1"), oldTime, oldTime);
 writeFileSync(join(sweepRoot, "keep-me", "用户的.txt"), "别动\n");
 
-const sweepReport = [];
+const sweepReport = listTempLeftovers(sweepRoot, ["ours-"], TEMP_GRACE_MS);
 check(
-  sweepTempEntries(sweepRoot, ["ours-"], SWEEP_GRACE_MS, { report: sweepReport }) === 1 && !existsSync(join(sweepRoot, "ours-1")),
-  "只删命中我们前缀、且过了宽限期的条目(实际删了 1 个)"
+  sweepReport.filter((item) => item.pending).length === 1 &&
+    sweepReport.find((item) => item.pending)?.name === "ours-1" &&
+    existsSync(join(sweepRoot, "ours-1")),
+  "只把命中我们前缀、且过了宽限期的条目列为待清理 —— 而且**它还在原地**(实际没删)",
+  JSON.stringify(sweepReport)
 );
-check(existsSync(join(sweepRoot, "keep-me")), "前缀不命中的条目一律不碰(用户的东西)");
-check(existsSync(join(sweepRoot, "ours-young")), "宽限期内的条目不删(并行那次正在用的 fixture 不会被踩)");
+check(existsSync(join(sweepRoot, "keep-me")), "前缀不命中的条目一律不碰、不列(用户的东西)");
 check(
-  sweepReport.some((item) => item.name === "ours-young" && /宽限/u.test(item.reason)),
-  `保留的条目连同原因报出来(实际 ${JSON.stringify(sweepReport)})`
+  sweepReport.some((item) => item.name === "ours-young" && item.pending === false && /宽限/u.test(item.reason)),
+  `宽限期内的条目算「不算待清理」并写明原因(实际 ${JSON.stringify(sweepReport)})`
 );
 
-// 拿不准的条目(读不到时间)→ 保留 + 报告。用**悬空 junction** 构造:readdir 列得出来,
-// stat 失败(ENOENT)—— 正是"无法确认安全"的那种条目。
+// 拿不准的条目(读不到时间)→ 照样列出、写明原因。用**悬空 junction** 构造:readdir 列得出来,
+// stat 失败(ENOENT)—— 正是"无法确认"的那种条目。
 const dangling = join(sweepRoot, "ours-dangling");
 try {
   symlinkSync(join(sweepRoot, "no-such-target"), dangling, "junction");
-  const danglingReport = [];
+  const danglingReport = listTempLeftovers(sweepRoot, ["ours-"], TEMP_GRACE_MS);
   check(
-    sweepTempEntries(sweepRoot, ["ours-"], SWEEP_GRACE_MS, { report: danglingReport }) === 0 &&
-      // 悬空 junction 用 existsSync 看是 false(它跟着链接走),得看目录里还在不在
-      readdirSync(sweepRoot).includes("ours-dangling") &&
-      danglingReport.some((item) => item.name === "ours-dangling"),
-    `读不到时间的条目不删、只报告(实际 ${JSON.stringify(danglingReport)})`
+    // 悬空 junction 用 existsSync 看是 false(它跟着链接走),得看目录里还在不在
+    readdirSync(sweepRoot).includes("ours-dangling") &&
+      danglingReport.some((item) => item.name === "ours-dangling" && /读不到时间/u.test(item.reason)),
+    `读不到时间的条目照样列出、写明原因(实际 ${JSON.stringify(danglingReport)})`
   );
 } catch (error) {
-  check(false, "能造出「读不到时间」的条目来验备份式保留(建 junction 失败)", String(error));
+  check(false, "能造出「读不到时间」的条目来验保留式报告(建 junction 失败)", String(error));
 }
 
-// remove:false = 只报告不删:归属确认不了时的退化路径(不是"删不掉就换成永久删除")
-mkdirSync(join(sweepRoot, "ours-dry"), { recursive: true });
-const dryReport = [];
+// 没有前缀 = 没有归属依据 → 连列都不列(这条防的是"传空数组就把整个目录报成待清理")
 check(
-  sweepTempEntries(sweepRoot, ["ours-"], SWEEP_GRACE_MS, { remove: false, report: dryReport }) === 0 &&
-    existsSync(join(sweepRoot, "ours-dry")),
-  "remove:false 时一个都不删(把「删」这一步做成可关闭)"
-);
-check(
-  dryReport.some((item) => item.name === "ours-dry" && /只报告/u.test(item.reason)),
-  `关掉删除时把候选连同原因报出来,不是静默什么都不做(实际 ${JSON.stringify(dryReport)})`
-);
-// 没有前缀 = 没有归属依据 → 一个都不删(这条防的是"传空数组就把整个目录扫了")
-const emptyPrefixReport = [];
-check(
-  sweepTempEntries(sweepRoot, [], 0, { report: emptyPrefixReport }) === 0 &&
+  listTempLeftovers(sweepRoot, [], 0).length === 0 &&
     existsSync(join(sweepRoot, "keep-me")) &&
-    existsSync(join(sweepRoot, "ours-young")),
-  "没给前缀时一个都不删(无从确认归属)"
-);
-check(
-  emptyPrefixReport.length > 0,
-  `没给前缀时也报告「没有归属依据」,不是静默返回(实际 ${JSON.stringify(emptyPrefixReport)})`
+    existsSync(join(sweepRoot, "ours-young")) &&
+    existsSync(join(sweepRoot, "ours-1")),
+  "没给前缀时一个都不列(无从确认归属),目录里什么都没被删"
 );
 
 // ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
@@ -1319,16 +1402,103 @@ check(
   "verif-new 的说明写明落点:verif/ 下、模块名转下划线(不是 sim/tb_<模块名>.sv)"
 );
 
+// ── 静态守卫:生产代码里不许再出现任何"永久删除"调用(用户定案) ──────────────
+//
+// 为什么用静态守卫而不是行为测试:这是一条**全局**约束,而行为测试只能覆盖被走到的那几条路径
+// —— 以后有人在一条新路径里加回删除调用,行为测试照样全绿。这里扫生产代码的源码文本
+// (`lib/**`、`presets/*/tools/**`、`tools/install.mjs`、`tools/sync-installed.mjs`),
+// 出现删除类调用就红。
+//
+// 注释会被剥掉(注释里解释"不再删除"不该把自己扫红),字符串里的调用仍会被扫到 —— 那正是
+// 想要的严格程度。确需保留的"其实不是删除"的用法,加进白名单并写清理由。
+// 扫不到的:第三方进程/包自己的临时文件行为(控制不了,也不该假装扫得到)。
+const DELETION_CALL = /\b(?:unlinkSync|unlink|rmSync|rmdirSync|rmdir|rm)\s*\(/u;
+const SHELL_DELETION = /\b(?:Remove-Item|rmtree|DeleteDirectory|DeleteFile)\b/u;
+/**
+ * 白名单:文件 + 该文件的哪一行算正当。
+ *
+ * 目前只有一条 —— `tools/check-install-safety.mjs` 拿它的 `.tmp/install-mirror` 当**重建**用途
+ * (那个镜像里装着整棵依赖树,留着会越攒越大,而它是开发期脚本、只跑 `--safety`、不进生产路径)。
+ * 注意它**不在**生产范围里,这里显式登记只是把例外写在明面上,免得以后被当成漏网。
+ */
+const DELETION_ALLOWLIST = [
+  {
+    file: "tools/check-install-safety.mjs",
+    pattern: /rmSync\(MIRROR/u,
+    reason: "开发期脚本自管 .tmp/install-mirror(重建镜像;整棵依赖树不能留)"
+  }
+];
+
+/** 剥掉注释(块注释 + 行注释),保留字符串 —— 字符串里的删除调用也该扫出来。 */
+const stripComments = (text) =>
+  text
+    .replace(/\/\*[\s\S]*?\*\//gu, " ")
+    .split("\n")
+    .map((line) => line.replace(/(^|[^:"'`])\/\/.*$/u, "$1"))
+    .join("\n");
+
+/** 生产代码里"绝不永久删除"这条约束要覆盖的文件。 */
+function guardedFiles() {
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(?:js|mjs)$/u.test(entry.name)) out.push(full);
+    }
+  };
+  const libDir = join(ROOT, "lib");
+  if (existsSync(libDir)) walk(libDir);
+  const presetsDir = join(ROOT, "presets");
+  for (const preset of existsSync(presetsDir) ? readdirSync(presetsDir, { withFileTypes: true }) : []) {
+    const toolsDir = join(presetsDir, preset.name, "tools");
+    if (preset.isDirectory() && existsSync(toolsDir)) walk(toolsDir);
+  }
+  for (const file of ["install.mjs", "sync-installed.mjs"]) {
+    const full = join(ROOT, "tools", file);
+    if (existsSync(full)) out.push(full);
+  }
+  return out;
+}
+
+const guarded = guardedFiles();
+const deletionHits = [];
+for (const file of [...guarded, join(ROOT, "tools", "check-install-safety.mjs")]) {
+  const rel = relative(ROOT, file).split(sep).join("/");
+  stripComments(readFileSync(file, "utf8"))
+    .split("\n")
+    .forEach((line, index) => {
+      if (!DELETION_CALL.test(line) && !SHELL_DELETION.test(line)) return;
+      const allowed = DELETION_ALLOWLIST.some((rule) => rule.file === rel && rule.pattern.test(line));
+      if (allowed) return;
+      deletionHits.push(`${rel}:${index + 1}: ${line.trim()}`);
+    });
+}
+check(
+  guarded.length > 0 && deletionHits.length === 0,
+  `生产代码(${guarded.length} 个文件)里没有任何永久删除调用 —— 用户定案:零删除 + 如实报告`,
+  deletionHits.join("\n        ")
+);
+check(
+  guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "lib/toolchain.js") &&
+    guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "tools/install.mjs") &&
+    guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "tools/sync-installed.mjs") &&
+    guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "presets/fpga-workbench/tools/lib/stamp.mjs"),
+  `守卫真扫到了那四个关键文件(守卫本身不许空转:实际 ${guarded.map((file) => relative(ROOT, file).split(sep).join("/")).join("、")})`
+);
+check(
+  DELETION_ALLOWLIST.every((rule) => existsSync(join(ROOT, rule.file))),
+  "白名单里登记的文件都存在(名字写错等于白名单永远不生效)"
+);
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");
 if (failures.length > 0) process.exitCode = 1;
 
-// 收尾:把本次的 fixture 目录扫掉,并且**必须扫干净** —— 只提示不删就等于没做,
-// 下次跑还会看到一堆残留(这个自检的临时目录以前就是这么攒到上百个的)。
-sweepTempEntries(TMP_ROOT, FIXTURE_PREFIXES);
-const leftOver = readdirSync(TMP_ROOT, { withFileTypes: true })
-  .filter((entry) => FIXTURE_PREFIXES.some((prefix) => entry.name.startsWith(prefix)))
-  .map((entry) => entry.name);
+// 收尾:fixture **不删**(用户定案:绝不永久删除),只把这次留在 .tmp/ 里的列出来。
+// 代价是 .tmp/ 会一直增长 —— 所以这里把清单和处置办法打出来,不假装已经清干净。
+const leftOver = listTempLeftovers(TMP_ROOT, FIXTURE_PREFIXES);
 if (leftOver.length > 0) {
-  console.log(`FAIL: 收尾没清干净,还剩 ${leftOver.length} 项:${leftOver.join("、")}`);
-  process.exitCode = 1;
+  console.log(`\n.tmp/ 里现有 ${leftOver.length} 项本次/上次留下的 fixture(按用户定案不删除,请自行处置):`);
+  for (const item of leftOver.filter((entry) => entry.pending).slice(0, 20)) console.log(`  [临时项] ${item.path}`);
+  if (leftOver.filter((entry) => entry.pending).length > 20) console.log("  …(更多条目略)");
 }

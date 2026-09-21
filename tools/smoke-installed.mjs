@@ -13,6 +13,9 @@ import { pathToFileURL } from "node:url";
 const PROFILE = process.env.DSH_PROFILE_DIR
   ?? `${process.env.USERPROFILE ?? process.env.HOME ?? ""}\\.dsh\\profiles\\desktop`;
 const INSTALLED = `${PROFILE}\\node_modules\\dsh-fpga-workbench`;
+// 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),这里的默认值
+// 只为单独调用(`node tools/smoke-installed.mjs`)兜底。
+const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -52,7 +55,7 @@ if (mode !== undefined) {
 }
 
 // ── 3. 真设置跑一遍:设置页载荷 + 会话提示段 ─────────────────────────────────
-const require = createRequire("C:/Program Files/DSH Desktop/resources/app/package.json");
+const require = createRequire(`${APP}/package.json`);
 const yaml = require("js-yaml");
 let values = {};
 try {

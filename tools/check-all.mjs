@@ -8,7 +8,7 @@
 // 四层分开记,收尾也分四行说 —— 不然"npm test 绿了"很容易被概括成"已安装、已实测兼容",
 // 而实际上后两层可能**根本没跑**:
 //   · 源码检查:只依赖本仓库 + Node,任何机器上都该跑(跑不了就是真问题)
-//   · 宿主检查:依赖本机装好的 DSH(安装目录的 loader、profile 的 node_modules)
+//   · 宿主检查:依赖本机装好的 DSH(安装目录的 loader 与 @deepseek-ai/* 包、profile 的 node_modules)
 //     —— 缺环境记 SKIP 而不是 FAIL,否则换台机器就一片红,红了就没人看了
 //   · 安装副本检查(--installed):profile 里那份已装副本与源是否逐字节一致、能否加载
 //   · 真实客户端集成:目前**没有**自动化检查,永远记"未检",并在摘要里写清人工怎么检
@@ -19,17 +19,20 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TOOLS = dirname(fileURLToPath(import.meta.url));
-const APP = "C:/Program Files/DSH Desktop/resources/app";
+
+// 宿主安装目录的**唯一来源**:DSH 装在别处时用 `DSH_APP_DIR` 指过去(默认值不变,向后兼容)。
+// 子检查是各自独立的 Node 进程,所以 run() 会用**同一个**环境变量把它传下去 —— 那几个文件里
+// 同名的兜底默认值只在被单独调用(`node tools/check-xxx.mjs`)时才生效。
+const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
 
 /** 源码级检查:不依赖本机 DSH 安装与 profile。 */
-const SOURCE_CHECKS = [
-  "check-toolchain.mjs",
-  "check-fpga-tools.mjs",
-  "check-patch-file.mjs"
-];
+const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs"];
 
-/** 环境级检查:需要本机装好的 DSH(缺了就 SKIP)。 */
+/** 环境级检查:需要本机装好的 DSH(缺了就 SKIP)。
+ *  check-patch-file 用的是**宿主那份** js-yaml 与 cordis-plugin-include schema,
+ *  所以它属于这一层:宿主不在时该记 SKIP,而不是让「源码检查」报 FAIL。 */
 const HOST_CHECKS = [
+  { file: "check-patch-file.mjs", needs: APP },
   { file: "check-load-contract.mjs", needs: APP },
   { file: "check-preset-root.mjs", needs: APP },
   { file: "check-preset-sync.mjs", needs: APP }
@@ -51,7 +54,11 @@ const CLIENT_INTEGRATION_HOWTO =
   " → 设置页能读能写 → 会话提示带上本机工具路径";
 
 const run = (file) => {
-  const result = spawnSync(process.execPath, [join(TOOLS, file)], { stdio: "inherit" });
+  const result = spawnSync(process.execPath, [join(TOOLS, file)], {
+    stdio: "inherit",
+    // 子检查是独立进程:把上面解析好的宿主目录传下去,它们才和这里找的是**同一个**目录。
+    env: { ...process.env, DSH_APP_DIR: APP }
+  });
   return result.status === null ? 1 : result.status;
 };
 
@@ -87,9 +94,10 @@ function main() {
 
   for (const item of plan) {
     if (item.needs !== undefined && !existsSync(item.needs)) {
-      console.log(`SKIP  ${item.file}(本机没有 ${item.needs})`);
+      // 打印**实际找过的路径** —— 装到别处时这一行就是线索(README 那种换机器场景)。
+      console.log(`SKIP  ${item.file}(宿主目录不存在:${item.needs};装在别处就用 DSH_APP_DIR 指过去)`);
       tiers[item.tier].skipped.push(item.file);
-      tiers[item.tier].skipReason = `本机没有 ${item.needs}`;
+      tiers[item.tier].skipReason = `宿主目录不存在:${item.needs}`;
       continue;
     }
     console.log(`\n=== ${item.file} ===`);

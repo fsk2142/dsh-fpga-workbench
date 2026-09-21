@@ -18,7 +18,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const APP = "C:/Program Files/DSH Desktop/resources/app";
+// 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),这里的默认值
+// 只为单独调用(`node tools/check-preset-sync.mjs`)兜底。
+const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
 const SHIPPED = join(APP, "node_modules", "@deepseek-ai", "dsh-agent-presets", "presets", "standard", "agent.cordis.yml");
 
 /** 本插件在 standard 之上自己加的行(有意为之,不是漂移)。 */

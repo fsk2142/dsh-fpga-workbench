@@ -13,7 +13,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const APP = "C:/Program Files/DSH Desktop/resources/app";
+// 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),这里的默认值
+// 只为单独调用(`node tools/check-preset-root.mjs`)兜底。
+const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -566,8 +568,30 @@ check(
   "验证技能列出文件比对之外的手段(独立 scoreboard / 协议检查等)"
 );
 check(
-  /没有 golden 但有[\s\S]{0,60}不是不适用|既没有文件比对[\s\S]{0,40}可独立检查/u.test(verifSkillText),
+  /没有 golden 但有[\s\S]{0,60}不是不适用/u.test(verifSkillText),
   "验证技能写明:没有 golden 不等于本环节不适用(两者都拿不出来才算)"
+);
+// F-07(第二轮复审):光说"没有手段也不算不适用"不够 —— 得说清"那算什么"。拿不出判据/手段是
+// UNVERIFIED,N/A 只留给"本来就不适用(有设计依据)"。旧文案"两者都拿不出来才算 N/A"读起来像
+// 把"没法验"记成 N/A,与状态表那行直接打架,所以连旧写法一起钉住。
+// 断言要**分两处**钉(开头引子 + 判据那条):只查全文的话,状态表自己那句"有明确的设计依据说明
+// 确实不适用"会把断言喂饱 —— 判据那条仍然可以继续跟表打架。
+const verifIntro = verifSkillText.split("\n## ")[0];
+check(
+  /拿不出(判据|手段)[\s\S]{0,40}UNVERIFIED/u.test(verifIntro) &&
+    /确实(本来就不适用|不适用)[\s\S]{0,40}设计依据|设计依据[\s\S]{0,40}确实不适用/u.test(verifIntro),
+  "验证技能开头把 N/A 与'拿不出手段'分开(有设计依据才记 N/A,拿不出判据记 UNVERIFIED)"
+);
+const naBullet = /- `NOT_APPLICABLE`:([\s\S]*?)(?=\r?\n\r?\n)/u.exec(verifSkillText)?.[1] ?? "";
+check(naBullet !== "", "验证技能的判据节能定位到 NOT_APPLICABLE 那一条");
+check(
+  /拿不出(判据|手段)[\s\S]{0,60}(UNVERIFIED|不是 ?N\/A)/u.test(naBullet) &&
+    /设计依据[\s\S]{0,40}确实不适用|确实不适用[\s\S]{0,40}设计依据/u.test(naBullet),
+  "NOT_APPLICABLE 那一条与状态表同口径(有设计依据才记 N/A,拿不出手段记 UNVERIFIED)"
+);
+check(
+  !/都拿不出来[\s\S]{0,40}才算/u.test(verifSkillText),
+  "验证技能没有留下旧的'两种手段都拿不出来才算 N/A'口径"
 );
 // 比对口径上确实拿不准时(读不出样本 / 容差 / golden 来路)要**回去问用户**,
 // 不许自己改比对口径把结论凑过去 —— 判据一松,后面所有结论都不作数。
@@ -938,6 +962,68 @@ for (const skill of verdictRefSkills) {
 }
 check(/fpga-module-verif[\s\S]{0,30}状态表/u.test(rulesBody), "工作区规则提到判定词时也指向那张状态表");
 check(/fpga-module-verif[\s\S]{0,30}状态表/u.test(persona), "人设提到判定词时也指向那张状态表");
+
+// ── F-07 / F-08 / F-09 / F-16(第二轮复审:状态表写对了,别处还有旧文字与它打架)──────
+//
+// F-07:PASS 的权威定义要写全 —— 独立判据(文件比对,或 scoreboard / 断言 / 定向用例)真的执行过且
+// 覆盖充分;走文件比对时样本数 > 0。少写"样本数 > 0",comp.py 那句"两边都空也算相等、退 0"就
+// 会被读成通过。
+const passBullet = /- `PASS`:([\s\S]*?)\n- `FAIL`:/u.exec(verifSkillText)?.[1] ?? "";
+check(passBullet !== "", "验证技能的判据节能定位到 PASS 那一条");
+check(
+  /独立判据/u.test(passBullet) && /文件比对/u.test(passBullet) && /scoreboard/u.test(passBullet) &&
+    /定向用例/u.test(passBullet),
+  "PASS 的定义写明独立判据的两种形态(文件比对,或 scoreboard / 断言 / 定向用例)"
+);
+check(
+  /已执行且覆盖充分/u.test(passBullet) && /样本数 ?[>＞] ?0/u.test(passBullet),
+  "PASS 的定义写明:独立判据已执行且覆盖充分,走文件比对时样本数 > 0"
+);
+
+// F-08:发布的准入与集成的正式验收是同一条口径 —— 上游"都是 PASS,或是有依据的 NOT_APPLICABLE"。
+// 旧文案"上游都有结论、而且不是 FAIL"把 BLOCKED / UNVERIFIED 也放进了"有结论",比集成那篇松。
+const releaseText2 = readFileSync(join(skillDir, "fpga-project-release", "SKILL.md"), "utf8");
+check(
+  /都是 `PASS`[\s\S]{0,40}有依据的 `NOT_APPLICABLE`/u.test(releaseText2),
+  "发布技能的前置与集成同口径(上游都是 PASS,或是有依据的 NOT_APPLICABLE)"
+);
+check(!/不是 FAIL/u.test(releaseText2), "发布技能没有留下旧的'上游不是 FAIL 就行'口径");
+check(
+  /fpga-project-integrate/u.test(releaseText2),
+  "发布技能把这条口径指回集成技能的正式验收(两处不各自解释)"
+);
+
+// F-09:技能开头声明了两条路径,正文就得真的分流,B 路径不许再按"新建文件 + 完整规格"叙述。
+check(
+  /路径 B 跳过[\s\S]{0,20}起文件|跳过第一步的「起文件」/u.test(lintText),
+  "rtl 技能写明路径 B 跳过'起文件'这一步"
+);
+check(
+  /仅新建文件时/u.test(lintText),
+  "rtl 技能写明'用模板起文件'只在新建文件时适用"
+);
+check(
+  /找不到锚点不阻塞/u.test(lintText),
+  "rtl 技能写明:B 路径找不到 .fpga-workbench.json 锚点不阻塞、不作为问用户的理由"
+);
+const onlyAPath = (lintText.match(/仅路径 A/gu) ?? []).length;
+check(
+  onlyAPath >= 3,
+  `rtl 技能逐条标出 A 路径专属要求(接口照 spec / 路径照 flow / 参数照参考资料;实际标了 ${onlyAPath} 处)`
+);
+check(
+  /`always_ff`[\s\S]{0,40}新代码照模板/u.test(lintText) && /`always_ff`[\s\S]{0,60}已有工程/u.test(lintText),
+  "rtl 技能的 always_ff 口径与'已有工程按现有约定'一致(新代码照模板)"
+);
+
+// F-16:删除边界要有一句话 —— 第三方工具自管的可再生物由工具自己清理;用户的源码与产物不得由
+// 代理主动永久删除;清库/擦除前先取得确认。写在工作区规则(唯一出处)那一块里。
+check(
+  /第三方工具自管的可再生物[\s\S]{0,40}工具自己清理/u.test(rulesBody) &&
+    /用户的源码与产物不得由代理主动永久删除/u.test(rulesBody) &&
+    /清库 ?\/ ?擦除[\s\S]{0,20}确认/u.test(rulesBody),
+  "工作区规则写明删除边界(工具自管产物归工具清理 / 不得主动永久删除用户源码与产物 / 清库前先确认)"
+);
 
 console.log(
   failures.length > 0

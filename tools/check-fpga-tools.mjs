@@ -7,7 +7,12 @@
 //   · Tab / 代码行非英文 / 行尾混用 只算警告,不能阻塞门禁(与旧包 WARN_CHECKS 一致)
 //   · 测试平台不要求九个小节块与设计断言(模板里的 tb.sv 本来就没有)
 //   · 状态汇总要认得 结论 / spec_state,认得出"有产物没结论",找不到约定文件时退 2
-//   · `--force` 覆盖**可恢复**:旧内容留同目录 `.bak-<时间戳>` 快照,失败时原文件不动
+//   · `--force` 覆盖**可恢复**:旧内容留同目录 `.bak-<时间戳>` 快照,失败时原文件不动,
+//     且**失败路径不再删除**临时/半成品文件(零删除:路径写进错误信息,由使用者处置)
+//   · 路径边界**不是只看词法就算完**:junction / 符号链接的真实落点必须仍在根里(用**真 junction**
+//     定向验证,造不出来就明说跳过),拒绝时把**真实落点**打出来
+//   · 骨架失败时**如实说已经发生了什么**(建了哪些目录 / 写了哪些文件 / 留下哪些快照),
+//     不谎报"原有文件没有改动";落盘前先做一次全量可写性预检(只读目标提前失败)
 //   · run.do 不替用户猜:多 TB 无 TOP / 同名文件内容不同 → 退出码 1(有 ModelSim 时真跑夹具;
 //     这台机器没有仿真器就明确跳过 —— 源码自检不该因为没装 ModelSim 变红)
 //
@@ -15,14 +20,14 @@
 // spawnSync(stdio:"ignore") 验(不开管道,能拿到 status)。要点 run.do 的 `[ME]` 输出时,
 // 把 stdout 重定向到**文件句柄**再读文件(那不是管道)。
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, copyFileSync, mkdirSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, copyFileSync, mkdirSync, openSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
 import { INSTRUCTION_FILE, applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
-import { SWEEP_GRACE_MS, sweepTempEntries } from "../lib/toolchain.js";
+import { TEMP_GRACE_MS, listTempLeftovers } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
@@ -30,10 +35,12 @@ const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
 const MODULE_TOOLS = join(TOOLS, "module");
 const TEMPLATES = join(ROOT, "presets", "fpga-workbench", "templates");
 const SANDBOX = join(ROOT, ".tmp", `fpga-tools-check-${String(process.pid)}`);
-// 自检自己收尾:这个沙箱每次跑都重建(内容用时间戳区分),跑完整个删掉 —— 否则它会一直涨。
-// 沙箱名带进程号、开头这次清理带宽限期:两个自检(`npm test` 与 `npm run test:installed`)
-// 并行跑同一批检查时,别把对方正在用的沙箱删掉。
-sweepTempEntries(join(ROOT, ".tmp"), ["fpga-tools-check"], SWEEP_GRACE_MS);
+// 沙箱名带进程号。**开头/结尾都不再删沙箱**(用户定案:绝不永久删除)—— 只把上次留下的列出来。
+// 代价是 `.tmp/` 会一直增长,清单打出来供人工处置;别为了"干净"在这里加回删除调用。
+const staleSandboxes = listTempLeftovers(join(ROOT, ".tmp"), ["fpga-tools-check"], TEMP_GRACE_MS);
+if (staleSandboxes.length > 0) {
+  console.log(`(.tmp/ 里有 ${staleSandboxes.length} 项上次留下的自检沙箱,按用户定案不删除、只报告)`);
+}
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -747,17 +754,38 @@ check(
   "替换没有留下临时文件(先写临时文件、核验后改名,收尾要干净)"
 );
 
-// 快照/替换失败时:`保留原文件` + 报错退出。夹具:让 `verif/run.do` 这个位置被一个**目录**占着 ——
-// 快照那一步就失败(复制不了目录),此时目标一个字节都不该动。
+// 快照/替换失败时:`保留原文件` + 报错退出 + **不删**留下的临时/半成品。夹具:让 `verif/run.do`
+// 这个位置被一个**目录**占着 —— 快照那一步就失败(复制不了目录),此时目标一个字节都不该动,
+// 而临时文件必须**还在**(零删除:路径写进错误信息,由使用者自己处置)。
+//
+// stdio 不能开管道(沙箱限制,见文件头):stderr 也重定向到**文件句柄**再读。
+const runStderr = (script, args) => {
+  const path = existsSync(join(MODULE_TOOLS, script)) ? join(MODULE_TOOLS, script) : join(TOOLS, script);
+  const log = join(SANDBOX, `stderr-${script}-${String(Date.now())}.log`);
+  const fd = openSync(log, "w");
+  const code = spawnSync(process.execPath, [path, ...args], { stdio: ["ignore", "ignore", fd] }).status;
+  closeSync(fd);
+  return { code, output: readFileSync(log, "utf8") };
+};
 const dirTargetMod = join(SANDBOX, `backup-dir-${stamp}`);
 const dirTarget = join(dirTargetMod, "verif", "run.do");
 mkdirSync(dirTarget, { recursive: true });
 writeFileSync(join(dirTarget, "keep.txt"), "keep\n");
-const dirForceCode = run("module-verif-new.mjs", [dirTargetMod, "--kind", "run-do", "--force"]);
-check(dirForceCode === 2, `快照失败(目标位置是目录)→ 退出码 2(落盘失败;实际 ${String(dirForceCode)})`);
+const dirForce = runStderr("module-verif-new.mjs", [dirTargetMod, "--kind", "run-do", "--force"]);
+check(dirForce.code === 2, `快照失败(目标位置是目录)→ 退出码 2(落盘失败;实际 ${String(dirForce.code)})`);
+const dirLeftovers = readdirSync(join(dirTargetMod, "verif")).filter(
+  (name) => name.includes(".tmp-") || name.includes(".bak-")
+);
 check(
-  existsSync(join(dirTarget, "keep.txt")) && readdirSync(join(dirTargetMod, "verif")).join("、") === "run.do",
-  "失败时原有内容原样保留,也没留下快照 / 临时文件的半成品"
+  existsSync(join(dirTarget, "keep.txt")) &&
+    readdirSync(join(dirTargetMod, "verif")).includes("run.do") &&
+    dirLeftovers.length > 0,
+  `失败时原有内容原样保留,临时/半成品**留在原地不删**(实际留下:${dirLeftovers.join("、") || "无"})`
+);
+check(
+  dirLeftovers.length > 0 && dirLeftovers.every((name) => dirForce.output.includes(name)),
+  "留下的临时/半成品文件路径都写进了错误信息(不是悄悄丢在原地没人知道)",
+  dirForce.output.slice(-400)
 );
 // 漏给根目录时必须报参数错,不能把 `--kind` 的值当成根目录去写(实测踩过:会在 ./run-do/ 下起文件还退 0)
 check(
@@ -1018,11 +1046,127 @@ check(
   "跨 kind 是硬拒绝:带 --force 也退 1,project/ 与根锚点都没动"
 );
 
+// ── F-13:路径边界不能只看词法 —— junction 的真实落点必须被识破 ───────────────
+//
+// 纯字符串判断只看"路径长什么样";一个 junction(或符号链接)能让 `--out` 与模块子目录的**真实落点**
+// 跑到根目录**外面**去,而词法上一切正常。这里用**真 junction** 定向验证(node 的
+// `symlinkSync(..., "junction")` 在 Windows 上不需要管理员权限;造不出来就明确跳过,不假装通过):
+//   · `--out` 落在"根里的 junction 子目录"下 → 真实落点在根外 → 退 2,一个文件都不落
+//   · 骨架的 `--modules` 给一个 junction 的模块名 → 退 2,外面什么都没建、里面也没动
+// 两条都验"拒绝时把**真实落点**打出来了" —— 不然用户只知道被拒、不知道东西本来会落到哪。
+const junctionBase = join(SANDBOX, `junction-${stamp}`);
+const junctionOutside = join(junctionBase, "outside");
+mkdirSync(junctionOutside, { recursive: true });
+/** 造一个真 junction;本机造不出来(权限/文件系统)时明说并返回 false。 */
+const makeJunction = (parent, name) => {
+  try {
+    symlinkSync(junctionOutside, join(parent, name), "junction");
+    return true;
+  } catch (error) {
+    console.log(`(本机造不出 junction:${error.code ?? ""} ${error.message} -> F-13 的 junction 定向验证跳过,不假装通过)`);
+    return false;
+  }
+};
+const stampJunctionRoot = join(junctionBase, "mod");
+mkdirSync(stampJunctionRoot, { recursive: true });
+if (makeJunction(stampJunctionRoot, "escape")) {
+  const junctionOutFile = join(junctionOutside, "escaped.sv");
+  const junctionStamp = runStderr("module-rtl-new.mjs", [
+    stampJunctionRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--out", join("escape", "escaped.sv")
+  ]);
+  check(junctionStamp.code === 2, `--out 经 junction 的真实落点在根外 → 退出码 2(实际 ${String(junctionStamp.code)})`);
+  check(!existsSync(junctionOutFile), "junction 逃逸请求没有真的写出文件(挡在写之前)");
+  check(
+    junctionStamp.output.includes(junctionOutside) && junctionStamp.output.includes("真实落点"),
+    `拒绝时打出了真实落点(期望提到 ${junctionOutside})`,
+    junctionStamp.output.slice(-300)
+  );
+}
+const junctionRoot = join(junctionBase, "proj");
+mkdirSync(junctionRoot, { recursive: true });
+if (makeJunction(junctionRoot, "uart")) {
+  const junctionScaffold = runStderr("setup-scaffold.mjs", [junctionRoot, "--kind", "project", "--modules", "uart"]);
+  check(junctionScaffold.code === 2, `--modules 给 junction 的模块名 → 退出码 2(实际 ${String(junctionScaffold.code)})`);
+  check(!existsSync(join(junctionOutside, "spec")), "junction 逃逸的模块骨架没有落到根目录外面");
+  check(!existsSync(join(junctionRoot, "project")), "预检挡在任何落盘之前(根里的 project/ 都没建)");
+  check(
+    junctionScaffold.output.includes(junctionOutside) && junctionScaffold.output.includes("真实落点"),
+    `骨架拒绝时也打出了真实落点(期望提到 ${junctionOutside})`,
+    junctionScaffold.output.slice(-300)
+  );
+}
+// junction 造不出来的机器上,至少钉住"真拿真实路径核过"(不是靠字符串就完事)
+const stampSource = readFileSync(join(TOOLS, "lib", "stamp.mjs"), "utf8");
+const scaffoldSource = readFileSync(join(TOOLS, "setup-scaffold.mjs"), "utf8");
+check(
+  /realpathSync/u.test(stampSource) && /realEscape/u.test(scaffoldSource),
+  "F-13:stamp.mjs 用 realpathSync 核真实落点,骨架的预检复用它(不只查字符串)"
+);
+
+// ── F-04:骨架失败时不许谎报"原有文件没有改动" ────────────────────────────────
+//
+// 复现:`<根>/uart/.fpga-workbench.json` 这个锚点位置被一个**目录**占着 —— 覆盖时"先留快照"那一步
+// 失败(EISDIR,复制不了目录)。而在此之前,工程级与模块级的**目录已经全建出来了**、根锚点也**已经
+// 写好了**。修前那句"落盘失败,原有文件没有改动"就是谎报;现在错误信息里必须如实列出**已经发生的
+// 动作**(零删除:不回滚,只报告),留在盘上的东西也要真在。
+const halfRoot = join(SANDBOX, `half-fail-${stamp}`);
+mkdirSync(join(halfRoot, "uart", ".fpga-workbench.json"), { recursive: true });
+const halfFail = runStderr("setup-scaffold.mjs", [halfRoot, "--kind", "project", "--modules", "uart", "--force"]);
+check(halfFail.code === 1, `骨架建到一半失败 → 退出码 1(实际 ${String(halfFail.code)})`);
+check(
+  !halfFail.output.includes("原有文件没有改动") && /已经发生的动作[^]*新建目录 \d+ 个:/u.test(halfFail.output),
+  "失败信息带着「已经发生的动作」**及其明细**,不再谎报「原有文件没有改动」",
+  halfFail.output.slice(-400)
+);
+const actionLine = (prefix) => halfFail.output.split(/\r?\n/u).map((line) => line.trim()).find((line) => line.startsWith(prefix)) ?? "";
+const halfDirs = actionLine("新建目录 ");
+const halfFiles = actionLine("新建 / 覆盖文件 ");
+check(
+  /新建目录 \d+ 个:/u.test(halfDirs) && !halfDirs.includes("(无)") && halfFiles.includes(".fpga-workbench.json"),
+  "如实列出一半的活:建了哪些目录、写好了哪个锚点(不回滚、不谎报)",
+  `${halfDirs} | ${halfFiles}`
+);
+check(
+  existsSync(join(halfRoot, "project", "impl")) && existsSync(join(halfRoot, "uart", "rtl"))
+    && readFileSync(join(halfRoot, ".fpga-workbench.json"), "utf8").includes("project"),
+  "留下的那些**确实在盘上**(零删除:不删、不回滚,处置交给使用者)"
+);
+
+// 写前全量可写性预检:只读的目标要在**动手之前**发现(不然就是建了一半才发现写不进去)
+const roRoot = join(SANDBOX, `preflight-ro-${stamp}`);
+mkdirSync(roRoot, { recursive: true });
+const roAnchor = join(roRoot, ".fpga-workbench.json");
+writeFileSync(roAnchor, `${JSON.stringify({ kind: "module", spec: "spec/spec.md" }, null, 2)}\n`);
+chmodSync(roAnchor, 0o444);
+const roFail = runStderr("setup-scaffold.mjs", [roRoot, "--force"]);
+check(roFail.code === 1, `只读锚点 + --force → 退出码 1(实际 ${String(roFail.code)})`);
+check(
+  roFail.output.includes("写前预检不通过") && roFail.output.includes(roAnchor),
+  "只读目标在「写前预检」就被发现(不是建到一半才报)",
+  roFail.output.slice(-300)
+);
+check(!existsSync(join(roRoot, "verif")), "预检不过时一个环节目录都没建(真正提前失败)");
+
+// ── F-03:check-patch-file.mjs 不许写死仓库绝对路径 ───────────────────────────
+//
+// 写死 `C:/Work/dsh-fpga-workbench/cordis.patch.yml` 的后果是"克隆到别处就断"。改成按
+// `import.meta.url` 相对定位 —— 这里同时钉住两件事:不再有绝对路径、用的是 import.meta.url。
+const patchCheckSource = readFileSync(join(ROOT, "tools", "check-patch-file.mjs"), "utf8");
+check(
+  !/[A-Za-z]:[\\/][^"'\n]*cordis\.patch\.yml/u.test(patchCheckSource),
+  "check-patch-file.mjs 里没有写死的仓库绝对路径(克隆到别处也找得到补丁)"
+);
+check(
+  /import\.meta\.url/u.test(patchCheckSource) && /cordis\.patch\.yml/u.test(patchCheckSource),
+  "check-patch-file.mjs 按 import.meta.url 相对定位补丁文件"
+);
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;
 
-// 收尾:只删自己这个沙箱(名字带进程号,别把并行那次的删了)。残留会让"这次到底跑没跑"看不出来。
-if (sweepTempEntries(join(ROOT, ".tmp"), [`fpga-tools-check-${String(process.pid)}`]) === 0 && existsSync(SANDBOX)) {
-  console.log("FAIL: 收尾没清掉沙箱");
-  process.exitCode = 1;
+// 收尾:沙箱**不删**(用户定案:绝不永久删除),只报一次。残留会一直涨 —— 这是零删除的代价,
+// 所以清单要打出来让人能处置;别为了"干净"在这里加回删除调用(生产代码的静态守卫也会拦)。
+const sandboxLeftover = listTempLeftovers(join(ROOT, ".tmp"), [`fpga-tools-check-${String(process.pid)}`]);
+if (sandboxLeftover.length > 0 && existsSync(SANDBOX)) {
+  console.log(`\n自检沙箱留在原处(按用户定案不删除):${SANDBOX}`);
 }

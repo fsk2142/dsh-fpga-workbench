@@ -9,8 +9,9 @@ description: 在给 FPGA 工程做发布归档时用:把 bit/bin/mcs、时序与
 
 ## 前置
 
-1. 上游环节都有结论,而且不是 FAIL:实现(`project/impl/`)、时序(`project/timing/`)、
-   要上板的还有上板(`project/board/`)
+1. 上游环节**都是 `PASS`,或是有依据的 `NOT_APPLICABLE`**(与 `fpga-project-integrate` 的正式验收
+   同一条口径;`BLOCKED` / `UNVERIFIED` / `FAIL` 都不算"有结论"):实现(`project/impl/`)、
+   时序(`project/timing/`)、要上板的还有上板(`project/board/`)
 2. 有产出的 bit / bin / mcs,且知道它是哪一次实现出的
 3. 模块版本能从各模块文件头读到(读不到就不算齐,见「版本怎么定」)
 
@@ -43,7 +44,8 @@ description: 在给 FPGA 工程做发布归档时用:把 bit/bin/mcs、时序与
 
 - **PASS**:上面六类齐;工程脚本能重建工程;版本号对得上;已知问题写清楚了
 - **FAIL**:缺产物或缺可复现脚本;版本号与文件头不一致
-- **BLOCKED**:上游有环节没有结论(时序没过、上板没过)→ 那就**不是发布**,不得强行发布
+- **BLOCKED**:上游有环节不是 `PASS`、也不是有依据的 `NOT_APPLICABLE`(`BLOCKED` / `UNVERIFIED` /
+  `FAIL` 都算)→ 那就**不是发布**,不得强行发布
 - **NOT_APPLICABLE**:这次不做发布
 
 ## 产物

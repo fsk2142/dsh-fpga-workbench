@@ -356,7 +356,11 @@ const scope = {
 };
 let captured;
 let browserRequested = 0;
-const payload = {
+/**
+ * 状态路由的答复(不带查询串那条 = 初次取字段定义)。`let`:末段要给它换上带 `versionExpected`
+ * 的字段表与带 `pendingCleanup` 的 preset,验那两段渲染。
+ */
+let payload = {
   tools: [
     { key: "compiler", label: "用哪个编译器", hint: "选一个", required: false, skips: [], path: "verilator", configured: true, present: true, group: "编译器", control: "select", options: [{ value: "verilator", label: "Verilator", needs: "compilerPath" }, { value: "other", label: "其他", needs: "compilerPath" }, { value: "ghost", label: "没装的工具", needs: "compilerPath" }], default: "verilator", detectable: true },
     { key: "compilerPath", label: "编译器路径", hint: "填 exe", required: true, skips: ["快速 lint"], path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", configured: true, present: true, group: "编译器", control: "text", kind: "file", detectable: true },
@@ -401,6 +405,11 @@ let previewRequested = 0;
  * 预演安排不同的答复,用来分辨"最后落在界面上的是哪一次的结果"。
  */
 let statusPayload = payload;
+/**
+ * 状态路由答复里的 `preset`(预设同步那一行 + 待清理清单)。默认 undefined = 拿不到 ——
+ * 那条路径上"整行不显示"也是要验的行为之一;末段再给它一份带 `pendingCleanup` 的。
+ */
+let statusPreset;
 /** 预演答复:只改一个字段,别处照旧。用来分辨乱序返回时是哪一次的结果落在界面上。 */
 const previewAnswer = (overrides, key = "compilerPath") => ({
   tools: payload.tools.map((entry) => (entry.key === key ? { ...entry, ...overrides } : entry))
@@ -449,7 +458,7 @@ const fetchStub = (url) => {
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
   }
-  return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
+  return Promise.resolve({ ok: true, json: () => Promise.resolve({ ...payload, preset: statusPreset }) });
 };
 const doc = createFakeDocument();
 /** 可切换的外壳:空 UA = 普通浏览器;带 Electron = 桌面壳。客户端在点击时读它。 */
@@ -1242,82 +1251,89 @@ try {
 // 夹具说明:假字段表里只有 compilerPath 参与检测(真实载荷里版本字段挂在 pwshPath / pythonPath 上),
 // 所以版本键搭在 compilerPath 那条结果上 —— 这一段渲染与字段键无关。
 // 每次渲染前 fake.reset();检测请求走已有的 deferDetect 闸门,resolve 的时机由测试决定。
-try {
-  /** 一条检测结果(路径、来源、选项都照假状态表里那份写,只让版本键可变)。 */
-  const versionHit = (extra) => ({
-    field: "compilerPath",
-    option: "verilator",
-    label: "Verilator",
-    path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe",
-    source: "known",
-    ...extra
-  });
-  /**
-   * 在渲染树里找节点,**数组也要下钻** —— 检测结论那一段是 `hits.map(...)` 的产物,
-   * 在 children 里占一层数组(现成的 findByProp 不下钻数组,取不到里面的东西)。
-   * 判断拿到的是**节点**而不是 props:`children` 在替身里挂在节点上(不在 props 上)。
-   * @param node - createElement 的产物(或它的 children 里的一层数组)。
-   * @param predicate - 对一个节点的判断。
-   * @returns 找到的节点,或 undefined。
-   */
-  const findDeep = (node, predicate) => {
-    if (Array.isArray(node)) {
-      for (const child of node) {
-        const found = findDeep(child, predicate);
-        if (found !== undefined) return found;
-      }
-      return undefined;
-    }
-    if (node === null || typeof node !== "object") return undefined;
-    if (predicate(node)) return node;
-    for (const child of node.children ?? []) {
+//
+// 下面这几条辅助提取到 try **外面**:文件末尾那一段(版本期望 / 候选采用 / 待清理清单)也要用
+// 它们 —— 埋在 try 里就只有这一节能看见。
+/** 一条检测结果(路径、来源、选项都照假状态表里那份写,只让版本键可变)。 */
+const versionHit = (extra) => ({
+  field: "compilerPath",
+  option: "verilator",
+  label: "Verilator",
+  path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe",
+  source: "known",
+  ...extra
+});
+/**
+ * 在渲染树里找节点,**数组也要下钻** —— 检测结论那一段是 `hits.map(...)` 的产物,
+ * 在 children 里占一层数组(现成的 findByProp 不下钻数组,取不到里面的东西)。
+ * 判断拿到的是**节点**而不是 props:`children` 在替身里挂在节点上(不在 props 上)。
+ * @param node - createElement 的产物(或它的 children 里的一层数组)。
+ * @param predicate - 对一个节点的判断。
+ * @returns 找到的节点,或 undefined。
+ */
+const findDeep = (node, predicate) => {
+  if (Array.isArray(node)) {
+    for (const child of node) {
       const found = findDeep(child, predicate);
       if (found !== undefined) return found;
     }
     return undefined;
+  }
+  if (node === null || typeof node !== "object") return undefined;
+  if (predicate(node)) return node;
+  for (const child of node.children ?? []) {
+    const found = findDeep(child, predicate);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+};
+/** 那一行检测结论(按字段行的 key 取,不靠"树里第几个")。 */
+const detectRowOf = (tree, key) =>
+  findDeep(findByProp(tree, (props) => props.key === key), (node) => node.props?.className === "fpga-set-detect-row");
+/** 那一行里文本恰好是某句话、且带某个 class 的节点(找不到就是 undefined)。 */
+const nodeWithText = (row, className, text) =>
+  findDeep(row, (node) => node.props?.className === className && (node.children ?? []).includes(text));
+/**
+ * 受控地跑一次检测:先把积压的 effect 与闸门放干净,再开闸门、渲染一次并触发检测,让这一笔
+ * **停在闸门上**;然后放行它,返回**结论落地后**那棵渲染树里对应的一行。
+ * @param found - 这一轮 detect 路由的答复。
+ * @param label - 这一条的标签(失败时看清是哪一条)。
+ * @param key - 取哪一行字段(默认 compilerPath;末段验"版本敏感的另一个字段"时要换)。
+ * @returns `{ tree, row, text, fieldText }`:`tree` 是结论落地后那棵渲染树;`row` 是那一行的
+ *   检测结论节点,`text` 是它的 JSON,`fieldText` 是**整个字段行**的 JSON(就绪与否写在
+ *   这一行的标签上,"版本没验到不等于未就绪"要对着整行看)。
+ */
+const detectRowWith = async (found, label, key = "compilerPath") => {
+  deferDetect = null;
+  fake.runEffects();
+  await tick();
+  deferDetect = [];
+  detectPayload = { found };
+  fake.reset();
+  captured();
+  fake.runEffects();
+  await tick();
+  check(deferDetect.length === 1, `${label}检测请求发出去了、停在闸门上(实际 ${deferDetect.length} 次)`);
+  deferDetect[0]();
+  await tick();
+  fake.reset();
+  const tree = captured();
+  const row = detectRowOf(tree, key);
+  return {
+    tree,
+    row,
+    text: JSON.stringify(row ?? {}),
+    fieldText: JSON.stringify(findByProp(tree, (props) => props.key === key) ?? {})
   };
-  /** 那一行检测结论(按字段行的 key 取,不靠"树里第几个")。 */
-  const detectRowOf = (tree, key) =>
-    findDeep(findByProp(tree, (props) => props.key === key), (node) => node.props?.className === "fpga-set-detect-row");
-  /** 那一行里文本恰好是某句话、且带某个 class 的节点(找不到就是 undefined)。 */
-  const nodeWithText = (row, className, text) =>
-    findDeep(row, (node) => node.props?.className === className && (node.children ?? []).includes(text));
-  /**
-   * 受控地跑一次检测:先把积压的 effect 与闸门放干净,再开闸门、渲染一次并触发检测,让这一笔
-   * **停在闸门上**;然后放行它,返回**结论落地后**那棵渲染树里对应的一行。
-   * @param found - 这一轮 detect 路由的答复。
-   * @param label - 这一条的标签(失败时看清是哪一条)。
-   * @returns `{ row, text, fieldText }`:那一行的检测结论节点、它的 JSON,以及**整个字段行**
-   *   的 JSON(就绪与否写在这一行的标签上,"版本没验到不等于未就绪"要对着整行看)。
-   */
-  const detectRowWith = async (found, label) => {
-    deferDetect = null;
-    fake.runEffects();
-    await tick();
-    deferDetect = [];
-    detectPayload = { found };
-    fake.reset();
-    captured();
-    fake.runEffects();
-    await tick();
-    check(deferDetect.length === 1, `${label}检测请求发出去了、停在闸门上(实际 ${deferDetect.length} 次)`);
-    deferDetect[0]();
-    await tick();
-    fake.reset();
-    const tree = captured();
-    const row = detectRowOf(tree, "compilerPath");
-    return {
-      row,
-      text: JSON.stringify(row ?? {}),
-      fieldText: JSON.stringify(findByProp(tree, (props) => props.key === "compilerPath") ?? {})
-    };
-  };
+};
 
-  // 宿主会给的三种 note(照 lib/toolchain.js 里那三句话的措辞,不要另编)
-  const okNote = "版本 7.6.6(符合本模式的 7.6.6 要求)";
-  const mismatchNote = '实际版本 5.1.26100 —— 本模式要求 7.6.6,版本不匹配(这条路径不会被当成"已就绪")';
-  const brokenNote = "PowerShell 路径可用,但版本查不出来(spawn pwsh.exe ENOENT) —— 本模式要求 7.6.6,请自己确认";
+// 宿主会给的三种 note(照 lib/toolchain.js 里那三句话的措辞,不要另编)。同样放 try 外面 ——
+// 末尾那一段也要用「版本不匹配」那一句。
+const okNote = "版本 7.6.6(符合本模式的 7.6.6 要求)";
+const mismatchNote = '实际版本 5.1.26100 —— 本模式要求 7.6.6,版本不匹配(不会被当成"已就绪",也不会被「用这个」采用)';
+const brokenNote = "PowerShell 路径可用,但版本查不出来(spawn pwsh.exe ENOENT) —— 本模式要求 7.6.6,请自己确认";
 
+try {
   // ① 有 versionNote:显示出来(hint 样式 —— 版本对得上不是问题)
   const noted = await detectRowWith(
     [versionHit({ version: "7.6.6", versionExpected: "7.6.6", versionOk: true, versionNote: okNote })],
@@ -1375,6 +1391,258 @@ try {
   check(false, "检测结论里的版本信息能走通", String(error));
 } finally {
   // 这一段在文件末尾:别把闸门或那份假答复留给后面的人
+  deferDetect = null;
+  detectPayload = { found: [] };
+}
+
+// ── 版本期望进状态(F-05)、不采用版本不匹配的候选(F-06)、待清理清单可见(第 4 件) ──────
+//
+// 三件都是"事实报了、但没人看见"那一类:
+//   F-05:状态只探文件在不在,却让这一行读成"已就绪" —— 手填一个 7.4.2 的 pwshPath,
+//         状态说已就绪、旁边检测行说版本不匹配,同屏自相矛盾,用户不知道信哪条;
+//   F-06:版本不匹配的候选照样被「用这个」与自动填充采用 —— 等于替用户接受了不合规的运行时;
+//   第 4 件:待清理清单只躺在宿主日志里,设置页一个字都不显示 —— 用户不知道该清什么(而且
+//         插件零删除,他不处置就永远留着)。
+// 夹具说明:真实载荷里"版本敏感"的字段是 pwshPath(见 lib/toolchain.js 的 DETECT_TARGETS),
+// 这里把 versionExpected 搭在夹具已有的 compilerPath 上 —— 这一段渲染与字段键无关。
+try {
+  /**
+   * 那一行左边那个**状态标记**的文本(JSON)。
+   *
+   * 必须只取这个 span,不能拿整行去 includes:**检测结论那句话里也引用了"已就绪"**
+   * (宿主写的是"不会被当成「已就绪」"),拿整行判就会假失败 —— 断言要打靶在那个标记上。
+   * @param tree - 渲染树。
+   * @param key - 字段行的 key。
+   * @returns 标记节点的 children 的 JSON 文本。
+   */
+  const badgeOf = (tree, key) => {
+    const label = findDeep(findByProp(tree, (props) => props.key === key), (node) => node.props?.className === "fpga-set-label");
+    const badge = (label?.children ?? []).find((child) => child !== null && typeof child === "object" && child.type === "span");
+    return JSON.stringify(badge?.children ?? []);
+  };
+
+  // ① 版本敏感的字段:没有实测版本 → 状态那行标"版本未核验",绝不说光"已就绪"(F-05)
+  payload = {
+    ...payload,
+    tools: payload.tools.map((entry) => (entry.key === "compilerPath" ? { ...entry, versionExpected: "7.6.6" } : entry))
+  };
+  const unverified = await detectRowWith([], "F-05①");
+  const unverifiedBadge = badgeOf(unverified.tree, "compilerPath");
+  check(
+    unverifiedBadge.includes("版本未核验") && unverifiedBadge.includes("7.6.6"),
+    `F-05①版本敏感的字段标出"未核验 + 本模式要求 7.6.6"(实际那个标记:${unverifiedBadge})`
+  );
+  check(
+    !unverifiedBadge.includes("已就绪"),
+    `F-05①没有实测版本时**不许**说"已就绪"(文件在不能证明版本;实际那个标记:${unverifiedBadge})`
+  );
+
+  // ② 同一个字段、同一条路径,检测已经报过"版本不匹配":状态那行也必须跟着变,不能说已就绪
+  fake.reset();
+  const shownInput = findByProp(
+    findByProp(captured(), (props) => props.key === "compilerPath"),
+    (props) => props.type === "text" && typeof props.onChange === "function"
+  );
+  const shown = String(shownInput?.props?.value ?? "");
+  check(shown !== "", `F-05②夹具前提:编译器路径那一行显示着一条路径(实际 ${JSON.stringify(shown)})`);
+  const samePath = await detectRowWith(
+    [versionHit({ path: shown, version: "7.4.2", versionExpected: "7.6.6", versionOk: false, versionNote: mismatchNote })],
+    "F-05②"
+  );
+  const samePathBadge = badgeOf(samePath.tree, "compilerPath");
+  check(
+    samePathBadge.includes("版本不匹配") && !samePathBadge.includes("已就绪"),
+    `F-05②实测版本不匹配时,状态那个标记也不许说已就绪(实际那个标记:${samePathBadge})`
+  );
+  check(
+    samePath.row !== undefined && samePath.row !== null,
+    "F-05②不匹配的候选仍然列出来(不采用 ≠ 不告诉你)"
+  );
+
+  // ③ 实测版本**符合要求**:这时候才可以说"已就绪",而且要把实测版本一起说出来
+  //(少了这条,"一律只说未核验"那种过度纠正也能全绿)
+  const verified = await detectRowWith(
+    [versionHit({ path: shown, version: "7.6.6", versionExpected: "7.6.6", versionOk: true, versionNote: okNote })],
+    "F-05③"
+  );
+  const verifiedBadge = badgeOf(verified.tree, "compilerPath");
+  check(
+    verifiedBadge.includes("已就绪") && verifiedBadge.includes("7.6.6") && !verifiedBadge.includes("未核验"),
+    `F-05③版本核验且匹配时才说已就绪,并带上实测版本(实际那个标记:${verifiedBadge})`
+  );
+
+  // ④ 版本不匹配的候选:「用这个」禁用 + 按钮上给出原因,而且**真点下去也不采用**(F-06a)
+  const rejectedPath = "C:\\other\\verilator_bin.exe";
+  const rejected = await detectRowWith(
+    [versionHit({ path: rejectedPath, version: "5.0.0", versionExpected: "7.6.6", versionOk: false, versionNote: mismatchNote })],
+    "F-06①"
+  );
+  const rejectButton = findButton(rejected.row, "用这个");
+  check(rejectButton !== undefined, "F-06①版本不匹配的候选仍然给出「用这个」按钮(不悄悄消失)");
+  check(rejectButton?.props?.disabled === true, "F-06①「用这个」被禁用");
+  check(
+    typeof rejectButton?.props?.title === "string" && rejectButton.props.title.includes("版本"),
+    `F-06①禁用时把原因写在按钮上(实际 ${JSON.stringify(rejectButton?.props?.title ?? null)})`
+  );
+  rejectButton?.props?.onClick?.();
+  fake.reset();
+  const afterClick = findByProp(
+    findByProp(captured(), (props) => props.key === "compilerPath"),
+    (props) => props.type === "text" && typeof props.onChange === "function"
+  );
+  check(
+    String(afterClick?.props?.value ?? "") === shown,
+    `F-06①就算点下去也绝不采用这一条(输入框仍是 ${shown},实际 ${String(afterClick?.props?.value)})`
+  );
+
+  // ④ 自动填充跳过版本不匹配的候选(F-06b):加一个"没配过、可检测、版本敏感"的字段当靶子
+  payload = {
+    ...payload,
+    tools: [
+      ...payload.tools,
+      {
+        key: "pythonPath",
+        label: "Python 3",
+        hint: "填 exe",
+        required: false,
+        skips: [],
+        path: "",
+        configured: false,
+        present: false,
+        group: "脚本工具",
+        control: "text",
+        kind: "file",
+        detectable: true,
+        versionExpected: "7.6.6"
+      }
+    ]
+  };
+  const autoPath = "C:\\py\\python.exe";
+  const auto = await detectRowWith(
+    [
+      {
+        field: "pythonPath",
+        label: "Python 3",
+        path: autoPath,
+        source: "known",
+        version: "2.7.18",
+        versionExpected: "7.6.6",
+        versionOk: false,
+        versionNote: mismatchNote
+      }
+    ],
+    "F-06②",
+    "pythonPath"
+  );
+  const autoInput = findByProp(
+    findByProp(auto.tree, (props) => props.key === "pythonPath"),
+    (props) => props.type === "text" && typeof props.onChange === "function"
+  );
+  check(
+    String(autoInput?.props?.value ?? "") === "",
+    `F-06②唯一的候选版本不匹配:自动填充跳过它(输入框保持为空,实际 ${JSON.stringify(autoInput?.props?.value)})`
+  );
+  check(auto.fieldText.includes("版本不匹配"), "F-06②那一行照旧把版本不匹配说清楚(跳过 ≠ 不说)");
+
+  // ⑤ 强制换工具那条路(runDetect 的 force)同样不采用版本不匹配的候选(F-06b 的另一半):
+  // 新工具只有一个候选、而它版本不对 —— 那一栏必须清空,而不是把**上一个工具**的路径留在框里
+  // ("框里是 A、下拉是 B"正是 force 这条规则存在的理由)。
+  const forcedPath = "C:\\iverilog\\bin\\iverilog.exe";
+  fake.reset();
+  const beforeSwitch = captured();
+  const selectNode = findByProp(
+    beforeSwitch,
+    (props) => props.className === "fpga-set-input" && props.value === "verilator" && typeof props.onChange === "function"
+  );
+  const valueBeforeSwitch = String(
+    findByProp(findByProp(beforeSwitch, (props) => props.key === "compilerPath"), (props) => props.type === "text" && typeof props.onChange === "function")?.props?.value ?? ""
+  );
+  check(selectNode !== undefined && valueBeforeSwitch !== "", `F-06③夹具前提:下拉停在 Verilator、那一栏有路径(实际 ${JSON.stringify(valueBeforeSwitch)})`);
+  deferDetect = [];
+  detectPayload = {
+    found: [
+      {
+        field: "compilerPath",
+        option: "other",
+        label: "Icarus Verilog",
+        path: forcedPath,
+        source: "known",
+        version: "5.0.0",
+        versionExpected: "7.6.6",
+        versionOk: false,
+        versionNote: mismatchNote
+      }
+    ]
+  };
+  selectNode?.props?.onChange?.({ target: { value: "other" } });
+  check(deferDetect.length === 1, `F-06③换工具的检测请求发出去了、停在闸门上(实际 ${deferDetect.length} 次)`);
+  deferDetect[0]();
+  await tick();
+  fake.reset();
+  const forcedTree = captured();
+  const forcedValue = String(
+    findByProp(
+      findByProp(forcedTree, (props) => props.key === "compilerPath"),
+      (props) => props.type === "text" && typeof props.onChange === "function"
+    )?.props?.value ?? ""
+  );
+  check(
+    forcedValue !== forcedPath && forcedValue !== valueBeforeSwitch,
+    `F-06③强制换工具时不采用版本不匹配的候选,也不把上一个工具的路径留下(实际 ${JSON.stringify(forcedValue)})`
+  );
+
+  // ⑥ 待清理清单要在设置页看得见(第 4 件):路径 + 类别 + "只是提示,不会自动删",且没有删除按钮
+  const stalePath = "C:\\home\\.agent-presets\\fpga-workbench\\skills\\gone\\SKILL.md";
+  const emptyDirPath = "C:\\home\\.agent-presets\\fpga-workbench\\skills\\旧技能";
+  statusPreset = {
+    state: "synced",
+    dir: "C:\\home\\.agent-presets\\fpga-workbench",
+    pendingCleanup: [
+      { kind: "stale", label: "过期技能/模板", path: stalePath },
+      { kind: "emptyDir", label: "空技能目录", path: emptyDirPath }
+    ]
+  };
+  fake.reset();
+  captured();
+  fake.runEffects();
+  await tick();
+  fake.reset();
+  const cleanupTree = captured();
+  const cleanupText = JSON.stringify(cleanupTree ?? {});
+  check(
+    cleanupText.includes(asJsonText(stalePath)) && cleanupText.includes(asJsonText(emptyDirPath)),
+    `第 4 件:两条待清理路径都渲染出来(实际 ${cleanupText.slice(0, 240)})`
+  );
+  check(cleanupText.includes("过期技能/模板") && cleanupText.includes("空技能目录"), "第 4 件:每条带上类别");
+  check(/不会自动删/u.test(cleanupText), "第 4 件:说清这只是提示、不会自动删");
+  check(countButtons(cleanupTree, "删除") === 0, "第 4 件:没有任何删除按钮(零删除,不做一键删除)");
+
+  // 条目多时只给条数(不把一屏清单铺出来);前几条照旧全列
+  statusPreset = {
+    ...statusPreset,
+    pendingCleanup: Array.from({ length: 8 }, (_, index) => ({
+      kind: "temp",
+      label: "临时项",
+      path: `C:\\tmp\\leftover-${String(index)}.tmp`
+    }))
+  };
+  fake.reset();
+  captured();
+  fake.runEffects();
+  await tick();
+  fake.reset();
+  const manyText = JSON.stringify(captured() ?? {});
+  check(
+    manyText.includes("另有") && !manyText.includes(asJsonText("C:\\tmp\\leftover-7.tmp")),
+    "第 4 件:条目多时给条数,不把一屏清单全铺出来"
+  );
+  check(
+    manyText.includes("临时项") && manyText.includes(asJsonText("C:\\tmp\\leftover-0.tmp")),
+    "第 4 件:少量时全列(前几条路径照旧显示)"
+  );
+} catch (error) {
+  check(false, "版本期望 / 候选采用 / 待清理清单这几段渲染能走通", String(error));
+} finally {
   deferDetect = null;
   detectPayload = { found: [] };
 }

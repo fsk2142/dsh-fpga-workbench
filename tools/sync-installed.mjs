@@ -6,16 +6,22 @@
 // (`file:C:/Work/dsh-fpga-workbench`),内容更新不会让它们失效。
 //
 // 它**不碰**:profile 的 package.json、pnpm-lock.yaml、pnpm-workspace.yaml、settings.yaml,
-// 也不联网、不装任何新依赖。
+// 也不联网、不装任何新依赖。**也不删除任何文件**(用户定案):已装副本里多出来的旧文件只列出来。
 //
 // 用法(在你自己的终端里跑):
 //   node C:\Work\dsh-fpga-workbench\tools\sync-installed.mjs            同步并校验
 //   node C:\Work\dsh-fpga-workbench\tools\sync-installed.mjs --check    只看差异,不动
-//   node C:\Work\dsh-fpga-workbench\tools\sync-installed.mjs --prune    顺带删掉已装多出的旧文件
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+//   node C:\Work\dsh-fpga-workbench\tools\sync-installed.mjs --prune    也列出已装多出的旧文件
+//     ↑ `--prune` 原本是"顺带删掉",现已改为**只列不删**(用户定案:插件运行时绝不永久删除)。
+//       开关保留,免得既有流程按老写法调用时报"未知参数";两种写法的行为现在一样。
+//
+// 退出码:内容差异(缺文件 / 内容不一致)算失败(那正是本脚本要来修的);**"已装多出"只报告、
+// 不算失败** —— 它已经不可能由本脚本处置了(不删除),拿它报红只会逼人去恢复删除。
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cleanupEntry, formatCleanup } from "../lib/toolchain.js";
 import { compareTree, hashOf, shippedFiles } from "./shipped.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,10 +66,42 @@ console.log(`源:   ${ROOT}`);
 console.log(`已装: ${INSTALLED}`);
 console.log(`应装 ${files.length} 个文件,当前差异 ${before.length} 项。\n`);
 
+/** compareTree 里"已装多出"的那一类 —— 只报告,不算失败(见文件头的退出码说明)。 */
+const isExtra = (item) => item.startsWith("已装多出 ");
+const blockingOf = (list) => list.filter((item) => !isExtra(item));
+const extrasOf = (list) => list.filter(isExtra);
+
+/** 已装副本里"源里没有"的相对路径(= compareTree 的「已装多出」那一类)。 */
+const extraFiles = () => shippedFiles(INSTALLED).filter((rel) => !files.includes(rel));
+
+/**
+ * 列出"已装副本里多出来"的文件 —— **只列不删**(用户定案:零删除 + 如实报告)。
+ * @param list - 相对路径数组;空数组时什么都不打印。
+ */
+function reportExtras(list) {
+  if (list.length === 0) return;
+  console.log(`\n已装副本里有 ${list.length} 个源里没有的文件(旧版本残留,**只列不删**):`);
+  for (const line of formatCleanup(list.map((rel) => cleanupEntry("installedExtra", join(INSTALLED, rel))))) {
+    console.log(line);
+  }
+  console.log("本插件不删除文件:要处置请自己把它们移到回收站(或在资源管理器里删除)。");
+  console.log(
+    prune
+      ? "(你加了 --prune:它现在只表示「把这份清单列出来」,**不再删除**。)"
+      : "(加 --prune 看到的也是同一份清单 —— 它不再删除任何东西。)"
+  );
+  console.log("注意:`presets/` 下多出来的旧技能**照样会被预设加载**,别把它当成已清理。");
+}
+
 if (checkOnly) {
-  for (const item of before) console.log(`  ${item}`);
-  console.log(before.length === 0 ? "\n已一致,无需同步。" : "\n去掉 --check 即执行同步。");
-  process.exitCode = before.length === 0 ? 0 : 1;
+  for (const item of blockingOf(before)) console.log(`  ${item}`);
+  reportExtras(extraFiles());
+  console.log(
+    blockingOf(before).length === 0
+      ? "\n已一致,无需同步(「已装多出」只报告,不影响这条判断)。"
+      : "\n去掉 --check 即执行同步。"
+  );
+  process.exitCode = blockingOf(before).length === 0 ? 0 : 1;
 } else {
   // 只写真正有差异的文件:既少做无用功,也避免去动那些本来就一致的文件
   // (实测:对"内容已相同"的文件写入会被拦,而真正需要改的那些能写)。
@@ -78,29 +116,17 @@ if (checkOnly) {
   }
   console.log(`\n已写入 ${targets.length} 个文件(共 ${files.length} 个,其余一致、跳过)。`);
 
-  // 已装多出来的文件:默认只报不动手(删除要人点头)
-  const stale = shippedFiles(INSTALLED).filter((rel) => !files.includes(rel));
-  if (stale.length > 0) {
-    if (prune) {
-      for (const rel of stale) {
-        rmSync(join(INSTALLED, rel), { force: true });
-        console.log(`  删除旧文件 ${rel}`);
-      }
-    } else {
-      console.log(`\n注意:已装副本里有 ${stale.length} 个源里没有的文件(旧版本残留):`);
-      for (const rel of stale) console.log(`  ${rel}`);
-      console.log("要清掉就加 --prune 再跑一次。");
-    }
-  }
-
   const after = compareTree(ROOT, INSTALLED);
-  if (after.length === 0) {
-    console.log("\nPASS: 已装副本与源逐字节一致。重启 DSH Desktop 生效。");
+  const remaining = blockingOf(after);
+  if (remaining.length === 0) {
+    const extras = extrasOf(after).length;
+    console.log(`\nPASS: 已装副本与源逐字节一致${extras === 0 ? "" : `(另有 ${extras} 个源里没有的旧文件,只报告不删除)`}。重启 DSH Desktop 生效。`);
     console.log("(这不是 pnpm 安装:依赖声明与锁文件本来就有这个包,只是内容旧了。");
     console.log(" 下次正常 pnpm 操作会用同源内容重链一次,无害。)");
   } else {
-    console.log(`\nFAIL: 同步后仍有 ${after.length} 项差异:`);
-    for (const item of after) console.log(`  ${item}`);
+    console.log(`\nFAIL: 同步后仍有 ${remaining.length} 项内容差异:`);
+    for (const item of remaining) console.log(`  ${item}`);
     process.exitCode = 1;
   }
+  reportExtras(extraFiles());
 }

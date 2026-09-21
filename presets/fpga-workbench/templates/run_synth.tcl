@@ -119,13 +119,13 @@ foreach xci $XCIS {
     continue
   }
   if {![string equal -nocase $xpart $PART]} {
-    fail "part mismatch: IP and project target different devices\n\
-          xci      : $xci\n\
-          xci part : $xpart\n\
-          project  : $PART\n\
-          IP built for another part/family blows up only at synthesis time and the error does\
-          not point at the root cause.\n\
-          Re-generate the IP for '$PART', or fix PART here (spec/spec.md is the single source)."
+    fail "part mismatch: IP and project target different devices
+         xci      : $xci
+         xci part : $xpart
+         project  : $PART
+         IP built for another part/family blows up only at synthesis time and the error does\
+         not point at the root cause.
+         Re-generate the IP for '$PART', or fix PART here (spec/spec.md is the single source)."
   }
   puts "\[run_synth\] OK: [file tail $xci] part = $xpart"
 }
@@ -169,8 +169,8 @@ step "launch_runs synth_1" {
 set status   [get_property STATUS   [get_runs synth_1]]
 set progress [get_property PROGRESS [get_runs synth_1]]
 if {$progress ne "100%" || ![string match "*Complete!*" $status]} {
-  fail "synthesis did not complete: status='$status' progress='$progress'\n\
-        run log: $RUN_LOG"
+  fail "synthesis did not complete: status='$status' progress='$progress'
+         run log: $RUN_LOG"
 }
 if {![file exists $RUN_LOG]} {
   fail "run log not found: $RUN_LOG -- cannot judge the run, refusing to pass"

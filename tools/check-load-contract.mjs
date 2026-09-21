@@ -37,7 +37,8 @@ const manifest = JSON.parse(read("package.json"));
  * useEffect 收集起来由调用方决定何时执行、createElement 返回可遍历的普通对象
  * (于是能在渲染树里找到某个按钮并"点"它)。
  *
- * **盲区(如实记下,不打算修)**:这个替身**不执行 useEffect 返回的清理函数**,所以客户端那处
+ * **盲区(如实记下,不打算修)**:这个替身**不自动执行 useEffect 返回的清理函数** —— `runEffects()`
+ * 把它们**交回给调用方**,由测试自己决定何时调(主题那一段就靠它模拟卸载)。所以客户端那处
  * 250ms 防抖的 `clearTimeout` 不会生效(旧定时器照跑)。下面那些"等 400ms"是用墙钟时间凑合出来的,
  * 也就是说**防抖本身没被验证**,只验证了"延迟之后确实问了一次状态"。
  * @returns `{ react, reset, runEffects, tree }`。
@@ -79,9 +80,18 @@ function createFakeReact() {
     reset: () => {
       cursor = 0;
     },
-    /** 执行这一轮收集到的 effect。 */
+    /**
+     * 执行这一轮收集到的 effect,**并把它们的清理函数交回去**(不自动执行 —— 这个替身没有真正的
+     * 卸载,要验"卸载时把改动还回去 / 退订"就得由调用方自己调,见下面主题那一段)。
+     * @returns 这一轮 effect 返回的清理函数。
+     */
     runEffects: () => {
-      for (const fn of effects.splice(0)) fn();
+      const cleanups = [];
+      for (const fn of effects.splice(0)) {
+        const cleanup = fn();
+        if (typeof cleanup === "function") cleanups.push(cleanup);
+      }
+      return cleanups;
     }
   };
 }
@@ -145,7 +155,7 @@ const FILTER_BOX = (props) => typeof props.placeholder === "string" && props.pla
  * @returns `{ id, factory }` 或 undefined。
  */
 /**
- * 假的 document:够让客户端注入样式表,并**记下最后建出来的元素** ——
+ * 假的 document:够让客户端注入样式表、按主题改根元素,并**记下最后建出来的元素** ——
  * 测试要拿它模拟"浏览器的文件框里选中了文件"。
  * @returns document 替身。
  */
@@ -169,7 +179,10 @@ function createFakeDocument() {
       stub.lastCreated = element;
       return element;
     },
-    head: { append() {} }
+    head: { append() {} },
+    // 客户端会把判出来的主题写到根元素的内联样式上(<select> 的弹层按它渲染),卸载时再还回去。
+    // 这里给一个真的 style 对象,那两步才有地方落,断言也才有东西可查。
+    documentElement: { style: {} }
   };
   return stub;
 }
@@ -182,7 +195,11 @@ function runBundle(source, options) {
       load: (spec) => {
         registered = spec;
       }
-    }
+    },
+    // 主题判定要读的两个浏览器 API,由测试注入(真浏览器里它们就在 window 上):
+    // 一个给"实际底色",一个给系统偏好。
+    getComputedStyle: options.getComputedStyle,
+    matchMedia: options.matchMedia
   };
   const run = new Function(
     "window",
@@ -427,7 +444,63 @@ const fetchStub = (url) => {
 const doc = createFakeDocument();
 /** 可切换的外壳:空 UA = 普通浏览器;带 Electron = 桌面壳。客户端在点击时读它。 */
 const nav = { userAgent: "" };
-const registered = runBundle(read("lib/client.js"), { fetch: fetchStub, react: fake.react, document: doc, navigator: nav });
+
+/**
+ * 主题的夹具:**元素 → 它的"计算样式"背景色**。
+ *
+ * 真浏览器里这份映射由 `getComputedStyle` 提供;替身里由测试自己摆 —— 于是"暗底 / 浅底 /
+ * 透明(要向上找祖先)/ 读不到"这几种情形都能直接造出来,不必真有一个浏览器,也不必等系统主题。
+ */
+const backgrounds = new Map();
+/**
+ * 造一个只带背景色的假元素(挂在 `parentElement` 上,模拟祖先链)。
+ * @param background - 它的计算样式背景色(`rgb(…)` / `rgba(…)` / `transparent` / 空串)。
+ * @param parent - 祖先;null = 到头了。
+ * @returns 假元素(`style` 是真的,客户端要往上面写 colorScheme)。
+ */
+const boxWith = (background, parent = null) => {
+  const node = { parentElement: parent, style: {} };
+  backgrounds.set(node, background);
+  return node;
+};
+/** 模拟系统偏好的当前值 + 订阅者(客户端要在偏好变化时重新判定)。 */
+const preference = { matches: false, listeners: [] };
+/**
+ * 模拟系统偏好切换:先摆好新值,再通知订阅者(与真 matchMedia 的因果一致)。
+ * @param matches - 新的偏好值。
+ */
+const flipPreference = (matches) => {
+  preference.matches = matches;
+  for (const fn of [...preference.listeners]) fn();
+};
+/** 一个"一问计算样式就炸"的元素:验异常兜底那一层。 */
+const brokenBox = { parentElement: null, style: {} };
+const getComputedStyleStub = (node) => {
+  if (node === brokenBox) throw new Error("拿不到计算样式");
+  return { backgroundColor: backgrounds.get(node) ?? "" };
+};
+/** matchMedia 替身:`matches` 是**读的时候**取当前偏好(真 matchMedia 也是随时可读的)。 */
+const matchMediaStub = (query) => ({
+  media: String(query),
+  get matches() {
+    return preference.matches;
+  },
+  addEventListener: (type, fn) => {
+    if (type === "change") preference.listeners.push(fn);
+  },
+  removeEventListener: (type, fn) => {
+    if (type === "change") preference.listeners = preference.listeners.filter((entry) => entry !== fn);
+  }
+});
+
+const registered = runBundle(read("lib/client.js"), {
+  fetch: fetchStub,
+  react: fake.react,
+  document: doc,
+  navigator: nav,
+  getComputedStyle: getComputedStyleStub,
+  matchMedia: matchMediaStub
+});
 check(registered?.id === manifest.name, `客户端 bundle 注册的 id = 包名(实际 ${String(registered?.id)})`);
 const clientExports = registered?.factory((id) => (id === "react" ? fake.react : undefined));
 check(typeof clientExports?.apply === "function", "客户端工厂能执行并导出 apply");
@@ -960,6 +1033,82 @@ try {
   deferPreview = null;
   deferDetect = null;
   deferBrowse = null;
+}
+
+// ── 主题跟随:原生下拉的弹层必须跟着**实际**主题,而不是系统偏好 ────────────────
+//
+// 用户实测:页面是暗色,`<select>` 展开的原生下拉却是白底浅字。给容器加 `color-scheme: light dark`
+// **没用** —— 那等于把选择权交给浏览器偏好,而宿主 DSH 的暗色是它自己的主题开关,不走
+// `prefers-color-scheme`(浏览器眼里的偏好仍然是浅色)。所以改成:读**实际渲染出来的**底色,
+// 把结论显式声明到**容器**和**根元素**上(弹层按根元素渲染,只设容器不生效),卸载时还回去。
+// 下面几条分别盯:判定函数本身、这两处声明、卸载恢复、主题变化跟随。
+try {
+  const themeOf = clientExports.__themeOf;
+  check(typeof themeOf === "function", "bundle 导出了主题判定函数(自检要直接打靶)");
+
+  // ① 判定函数:暗底 / 浅底 / 边界 / 透明向上找祖先 / 读不到回退偏好 / 异常兜底
+  preference.matches = false;
+  check(themeOf(boxWith("rgb(24, 26, 32)")) === "dark", "判定:暗背景 → dark");
+  check(themeOf(boxWith("rgb(250, 250, 250)")) === "light", "判定:浅背景 → light");
+  check(themeOf(boxWith("rgb(127, 127, 127)")) === "dark", "判定:亮度 127(卡在 128 下面)→ dark");
+  check(themeOf(boxWith("rgb(128, 128, 128)")) === "light", "判定:亮度 128 → light(阈值与用户给的口径一致)");
+  check(themeOf(boxWith("rgba(0, 0, 0, 0)", boxWith("rgb(20, 20, 20)"))) === "dark", "判定:alpha=0 的层跳过,按暗祖先 → dark");
+  check(themeOf(boxWith("transparent", boxWith("rgb(255, 255, 255)"))) === "light", "判定:transparent 跳过,按浅祖先 → light");
+  check(themeOf(boxWith("rgb(20, 20, 20)", boxWith("rgb(255, 255, 255)"))) === "dark", "判定:最近那层不透明背景说了算(不看更远的祖先)");
+  preference.matches = true;
+  check(themeOf(boxWith("")) === "dark", "判定:一路都读不到背景 → 回退系统偏好(dark)");
+  preference.matches = false;
+  check(themeOf(boxWith("")) === "light", "判定:回退到的偏好是浅色 → light");
+  check(themeOf(undefined) === "light" && themeOf(null) === "light", "判定:没有元素也不抛错(回退 light)");
+  check(themeOf(brokenBox) === "light", "判定:读计算样式抛异常也不抛错(回退 light)—— 设置页不能因此崩");
+
+  // ② 挂载:容器与**根元素**都要按判出来的主题显式声明 color-scheme
+  //
+  // 前面每一轮 runEffects 都跑过这条 effect、却从没有跑过清理函数(替身不自动卸载),所以先收尾:
+  // 让根元素上那些旧值还回去、订阅者退掉,下面才数得准、断言才有意义。
+  fake.reset();
+  captured();
+  for (const cleanup of fake.runEffects()) cleanup();
+  doc.documentElement.style.colorScheme = "light"; // 宿主页面原本声明的值(改动前)
+  preference.matches = false; // 系统偏好故意与**实际底色**相反 —— 靠偏好判就会判错
+
+  const rootBox = boxWith("rgb(20, 22, 28)"); // 暗色主题下容器实际的底色
+  fake.reset();
+  const mounted = captured();
+  mounted.props.ref.current = rootBox; // 替身不会替我们挂 ref(真 React 挂载时自己会挂),手动接上
+  const unmount = fake.runEffects();
+  check(
+    rootBox.style.colorScheme === "dark",
+    `挂载后容器声明了判出来的主题(实际 ${String(rootBox.style.colorScheme)})`
+  );
+  check(
+    doc.documentElement.style.colorScheme === "dark",
+    `挂载后**根元素**也声明了同一份(实际 ${String(doc.documentElement.style.colorScheme)})` +
+      " —— <select> 的弹层按根元素渲染,只设容器它不跟"
+  );
+
+  // ③ 卸载:根元素上那个值必须原样还回去(不许插件把宿主页面留在我们设的状态里)
+  for (const cleanup of unmount) cleanup();
+  check(
+    doc.documentElement.style.colorScheme === "light",
+    `卸载后根元素恢复成改动前的值(实际 ${String(doc.documentElement.style.colorScheme)})`
+  );
+
+  // ④ 主题**变化**时跟得上:订阅 matchMedia 的 change,重新判定(不轮询、不引依赖)
+  preference.listeners.length = 0;
+  fake.reset();
+  const remounted = captured();
+  remounted.props.ref.current = rootBox;
+  const unmountAgain = fake.runEffects();
+  check(preference.listeners.length === 1, `订阅了偏好变化(实际 ${preference.listeners.length} 个订阅者)`);
+  backgrounds.set(rootBox, "rgb(245, 245, 245)"); // 主题切成浅色
+  flipPreference(false);
+  check(rootBox.style.colorScheme === "light", "偏好变化后重新判定:容器跟着变浅");
+  check(doc.documentElement.style.colorScheme === "light", "偏好变化后重新判定:根元素也跟着变浅");
+  for (const cleanup of unmountAgain) cleanup(); // 收尾:还原 + 退订
+  check(preference.listeners.length === 0, "卸载时退订(不留悬挂的监听)");
+} catch (error) {
+  check(false, "主题跟随能走通", String(error));
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

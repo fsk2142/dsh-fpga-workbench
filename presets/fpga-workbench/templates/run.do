@@ -12,6 +12,8 @@
 # 都是实测踩出来的,别删:
 #   * 收两处 HDL(rtl/ 递归 + verif/ 递归),只跳 rtl/ip/ 下的 *_stub.* —— 见「收集 HDL」
 #   * 编译失败、仿真失败都必须拿到非零退出码 —— 见「编译」与「run-level gate」
+#   * **不替用户猜**:TB_PATTERN 命中多个而没给 TOP_OVERRIDE、或两个同名文件内容不一致
+#     —— 一律报错退出 1(列出全部候选),而不是"挑一个跑完打印成功"
 #
 # **控制台/日志里的消息一律用英文**:ModelSim 的输出按本地代码页落盘,写中文会变乱码
 # (实测),而 gate 要读这些行。注释用中文没关系(不会被打印)。
@@ -40,12 +42,16 @@ onerror { quit -f -code 1 }
 set RTL_DIR      {../rtl}
 # 2) TB_PATTERN    在 verif/ 下按这个通配找测试平台。默认 tb_*.sv = TB 叫 tb_*.sv
 #                  且落在 verif/ 下(常规布局)。
-#                  什么时候改:TB 命名不是 tb_ 前缀 / 扩展名不是 .sv;命中多个时仍旧
-#                  只取排序第一个当顶层,一个都没命中仍旧报错退出 1(与出厂一致)。
+#                  什么时候改:TB 命名不是 tb_ 前缀 / 扩展名不是 .sv。命中多个时本次**报错
+#                  退出 1**(列出命中的全部)并要求用 TOP_OVERRIDE 指定本次要跑的那个 ——
+#                  一次只跑一个 TB,不会看着"整套都跑了"其实只跑了一个。
+#                  一个都没命中仍旧报错退出 1(与出厂一致)。
 set TB_PATTERN   {tb_*.sv}
 # 3) TOP_OVERRIDE  顶层模块名覆盖:空 = 从 TB 文件名推导(出厂行为:tb_foo.sv → tb_foo)。
-#                  什么时候改:TB 文件名与里面的顶层模块名对不上(文件叫 tb_foo.sv、
-#                  模块叫 tb_dut_top),这时填实际模块名,elaborate 才找得到顶层。
+#                  什么时候改:① TB 文件名与里面的顶层模块名对不上(文件叫 tb_foo.sv、
+#                  模块叫 tb_dut_top),这时填实际模块名,elaborate 才找得到顶层;
+#                  ② TB_PATTERN 命中多个 TB 时,**必须**填它(填的就是本次要跑的那个模块),
+#                  否则脚本报错退出 1 —— 逐个 TB 跑就逐个填。
 set TOP_OVERRIDE {}
 # 4) INI_OVERRIDE  modelsim.ini 覆盖:空 = 走出厂顺序(先环境变量 MODELSIM_INI,再
 #                  MODELSIM,都没有才用 ModelSim 安装目录那份)解析 vendor 库/原语映射。
@@ -68,11 +74,21 @@ if {[llength $TB_FILE] == 0} {
   quit -f -code 1
 }
 
+# 命中多个 TB 而 TOP_OVERRIDE 是空的:elaborate 谁只能靠猜。**不猜** —— 以前是取排序第一个,
+# 用户看到的一轮"跑完了"其实只跑了一个 TB,其余一个都没编过(elaborate 只吃一个顶层)。
+# 所以列全部候选、报错退出 1,让人明确指定:填 TOP_OVERRIDE,或拆成多个 run。
+if {[llength $TB_FILE] > 1 && $TOP_OVERRIDE eq ""} {
+  puts "\n\[ME\] ERROR: $TB_PATTERN matched [llength $TB_FILE] testbenches, but TOP_OVERRIDE is empty - refusing to pick one:"
+  foreach f [lsort $TB_FILE] { puts "\[ME\]   $f" }
+  puts "\[ME\] set TOP_OVERRIDE to the testbench module for this run, or run each testbench separately (one TB per run)."
+  quit -f -code 1
+}
+
 # ---- 收集 HDL:rtl/ 与 verif/ 两处都收 -------------------------------------- #
 # 为什么收两处:TB 模板与 verif 技能都把**仿真模型**约定放在 `verif/` 下(厂商原语/IP
 # 仿真库/包文件/辅助模块),它们的名字不带 `tb_`,TB_PATTERN 收不到;只收 rtl/ 的话
 # 一跑就是 "Module 'xxx' is not defined"。TB 由 TB_PATTERN 点名,按 basename 去重,
-# 同名只编第一份(rtl/ 优先),不会编两遍。
+# 同名且**内容一致**的只编第一份(rtl/ 优先),不会编两遍;内容不一致的见下面「同名去重」。
 #
 # 为什么只跳 `rtl/ip/` 下的 `*_stub.*`:IP 自带的黑盒 stub 与真模型**同名**,放它进
 # 编译会**静默覆盖真模型**(vlog 只给 Warning),整轮仿真跑在空模块上、还打印成功标记。
@@ -119,20 +135,51 @@ if {$stub_n > 0} {
   foreach f $::SKIPPED_STUBS { puts "\[ME\]   $f" }
 }
 
-# ---- 同名去重:顺序 rtl/ → verif/ → TB -------------------------------------- #
+# ---- 同名去重:**内容一致**才丢,内容不同报错退出 ----------------------------- #
 # 去重要打出来,别悄悄丢:IP 目录里常有同一份厂商文件。顺序的确定性来自各组自己的排序,
 # 同一个 basename 两处都有时留下的是 `rtl/` 那份(真源码优先于仿真模型)。
 # **TB 也走这条去重** —— 它被 verif/ 收一遍、又被 TB_PATTERN 点一遍,只留一份。
+#
+# 但"同名"不等于"同一份":两个不同内容的 `foo.sv` 只会编一个,另一个里的模块**凭空消失**,
+# 失败信息还指不到它(以前就是同名丢第一份、只打一行提示)。所以判定标准是**内容**:
+# 大小相同还不够,还要逐字节读出来比 —— 大小一样而内容不同的两个文件是真会出现的,
+# 那种情况**报错退出 1**,把两个路径都列出来,让人自己决定留哪份。
+proc same_file_content {a b} {
+  if {[file size $a] != [file size $b]} { return 0 }
+  # 二进制读法:文本模式下 Windows 的 CRLF 会被翻译,两个只在行尾不同的文件会被误判成一致
+  set fa [open $a r]
+  fconfigure $fa -translation binary
+  set da [read $fa]
+  close $fa
+  set fb [open $b r]
+  fconfigure $fb -translation binary
+  set db [read $fb]
+  close $fb
+  return [expr {$da eq $db}]
+}
+
 set seen {}
 set kept {}
 foreach f [concat [lsort $rtl_src] $verif_src [lsort $TB_FILE]] {
   set base [file tail $f]
-  if {[lsearch -exact $seen $base] >= 0} {
-    puts "\[ME\] duplicate basename skipped (kept the first): $f"
+  set at [lsearch -exact $seen $base]
+  if {$at < 0} {
+    lappend seen $base
+    lappend kept $f
     continue
   }
-  lappend seen $base
-  lappend kept $f
+  # kept 与 seen 同步增长,所以同一个下标就是同名的那一份
+  set first [lindex $kept $at]
+  if {[same_file_content $first $f]} {
+    puts "\[ME\] duplicate basename skipped (identical content): $f"
+    continue
+  }
+  puts "\n\[ME\] ERROR: duplicate basename with DIFFERENT content: $base"
+  puts "\[ME\]   $first"
+  puts "\[ME\]   $f"
+  puts "\[ME\] both share one module name, so only one can be compiled (the other would silently disappear)."
+  puts "\[ME\] rename one of them, or remove the stale copy."
+  quit -f -code 1
 }
 set all_src $kept
 
@@ -222,7 +269,8 @@ if {[catch {
 if {$TOP_OVERRIDE ne ""} {
   set TOP $TOP_OVERRIDE
 } else {
-  set TOP [file rootname [file tail [lindex [lsort $TB_FILE] 0]]]
+  # 走到这里 TB_PATTERN 只命中一个(命中多个已在上面报错退出),直接用它,不必再排序挑
+  set TOP [file rootname [file tail [lindex $TB_FILE 0]]]
 }
 if {[catch { vsim -c -modelsimini $INI_FWD -l sim.log -voptargs=+acc=rn $TOP } vsim_msg]} {
   puts "\n\[ME\] ERROR: vsim failed to start: $vsim_msg"

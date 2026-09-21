@@ -71,6 +71,7 @@ write_cfgmem -force -format MCS -size <容量MB> -interface <SPIx4|BPIx16> \
 - **BLOCKED**:板子连不上、驱动或 cable 有问题、bit 与板子器件不匹配 → 如实说,不得猜测
 - **NOT_APPLICABLE**:**只有**这个工程根本不部署到硬件时才算(纯 IP 交付之类)。
   工程级的常规收尾就是上板 —— 不得以"没有板子"充当 NOT_APPLICABLE,那要记 BLOCKED 并说明
+- 判定词本身的含义见 `fpga-module-verif` 的**状态表**(唯一权威);本节只写本环节哪种情况记哪个词
 
 ## 产物
 

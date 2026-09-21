@@ -48,6 +48,7 @@ wait_on_run impl_1
 写 `<工作区根>/project/impl/impl.md`:
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ 跑过的命令原文(或 GUI 里点的那几步)
+  (判定词的含义见 `fpga-module-verif` 的**状态表**,唯一权威)
 - 用的 run 名与策略、耗时
 - 资源占用(LUT / FF / BRAM / DSP / IO),与模块级综合时的估算差多少
 - 实现后时序摘要的**文件名**(不做判定,判定在下游)

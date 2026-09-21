@@ -51,6 +51,7 @@ description: 在给 FPGA 工程做发布归档时用:把 bit/bin/mcs、时序与
 写 `<工作区根>/project/release/release.md`:
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)
+  (判定词的含义见 `fpga-module-verif` 的**状态表**,唯一权威)
 - 版本号 + 日期 + 对应哪次实现(bit 路径)
 - 六类归档物的**实际路径**
 - 复现步骤:从干净的工程目录开始,按顺序要跑哪些命令(命令原文)

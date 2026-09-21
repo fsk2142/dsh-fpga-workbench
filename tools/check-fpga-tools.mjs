@@ -7,16 +7,20 @@
 //   · Tab / 代码行非英文 / 行尾混用 只算警告,不能阻塞门禁(与旧包 WARN_CHECKS 一致)
 //   · 测试平台不要求九个小节块与设计断言(模板里的 tb.sv 本来就没有)
 //   · 状态汇总要认得 结论 / spec_state,认得出"有产物没结论",找不到约定文件时退 2
+//   · `--force` 覆盖**可恢复**:旧内容留同目录 `.bak-<时间戳>` 快照,失败时原文件不动
+//   · run.do 不替用户猜:多 TB 无 TOP / 同名文件内容不同 → 退出码 1(有 ModelSim 时真跑夹具;
+//     这台机器没有仿真器就明确跳过 —— 源码自检不该因为没装 ModelSim 变红)
 //
 // 沙箱限制:node 不能开管道抓子进程输出,所以内容断言直接 import 函数;退出码单独用
-// spawnSync(stdio:"ignore") 验(不开管道,能拿到 status)。
+// spawnSync(stdio:"ignore") 验(不开管道,能拿到 status)。要点 run.do 的 `[ME]` 输出时,
+// 把 stdout 重定向到**文件句柄**再读文件(那不是管道)。
 import { spawnSync } from "node:child_process";
-import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, copyFileSync, mkdirSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
-import { applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
+import { INSTRUCTION_FILE, applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
 import { SWEEP_GRACE_MS, sweepTempEntries } from "../lib/toolchain.js";
 
@@ -311,6 +315,139 @@ for (const marker of ["*_stub.*", "onfinish stop", "quit -f -code 1", "ALL TESTS
   check(bundledRunDo.includes(marker), `自带 run.do 模板里有「${marker}」`);
 }
 
+// ── run.do 的"不替你猜":多 TB 不给 TOP → 拒绝;同名文件内容不同 → 拒绝 ────────────────
+//
+// 先做**静态**断言(任何机器上都跑,只需要模板本身):那两段守卫的形状不对(比如判在 elaborate
+// 之后、quit 的退出码写成 0、或只剩一句提示),这里就红。再往下用真 ModelSim 跑夹具验退出码 ——
+// 静态断言证明"有那段",真跑证明"真会拦"。
+//
+// 断言的是**守卫块**:从错误锚点那一行起,到"第一个裸 `}`"或"第一条 quit"为止(哪个先到算哪个)。
+// 只查"文件里有没有那几行字"是不够的:后面那些守卫的 quit 会把断言喂饱(实测咬过 —— 把这段的
+// quit 删掉,宽松断言照样绿)。
+const guardBlock = (anchor) => {
+  const at = bundledRunDo.indexOf(anchor);
+  if (at < 0) return ["(模板里没有这个锚点)"];
+  const from = bundledRunDo.lastIndexOf("\n", at) + 1;
+  const block = [];
+  for (const line of bundledRunDo.slice(from).split("\n")) {
+    block.push(line.trim());
+    if (line.trim() === "}" || line.trim().startsWith("quit")) break;
+  }
+  return block;
+};
+const guardOk = (anchor, label) => {
+  const block = guardBlock(anchor);
+  check(
+    block[0].includes("ERROR:") && block.includes("quit -f -code 1"),
+    `${label}(块首 ${block[0]};块尾 ${block[block.length - 1]})`
+  );
+};
+guardOk("TOP_OVERRIDE is empty", "run.do:多个 TB 命中且 TOP_OVERRIDE 为空 → 报错后接 quit -f -code 1");
+check(
+  /proc same_file_content/u.test(bundledRunDo) && /-translation binary/u.test(bundledRunDo),
+  "run.do:同名去重比的是内容(逐字节读出来比,不是只看大小)"
+);
+guardOk("duplicate basename with DIFFERENT content", "run.do:同名而内容不同 → 报错后接 quit -f -code 1(不是打一行提示就丢)");
+check(
+  !/kept the first/u.test(bundledRunDo),
+  "run.do:旧口径(kept the first)已经不在 —— 两种口径并存的话等于没改"
+);
+
+// 真跑夹具:六个场景,只看退出码 + `[ME]` 输出。
+// 为什么非真跑不可:模板里"有那几行字"与"真会拦下来"是两件事。
+// ModelSim 是外部许可工具:`npm test` 不该因为这台机器没装它就变红 —— 探不到就明确跳过并说明。
+// stdio 不能开管道(沙箱限制,见文件头),所以把 stdout 重定向到**文件句柄**再读 `[ME]` 输出。
+const simRoot = join(SANDBOX, "rundo-sim");
+const rtlFoo = "module foo; endmodule\n";
+const tbSource = (name) => `module ${name};\n  initial begin\n    $display("ALL TESTS PASSED (err_cnt=0)");\n    $finish;\n  end\nendmodule\n`;
+// `[ME] ERROR:` 那一块 = 错误头 + 紧跟其后的缩进续行(**候选/路径就列在这里**)。
+// 只断言"输出里出现过某个路径"不够:编译清单里本来就有同样的路径(实测咬过 —— 守卫删掉后
+// 那条断言照样绿)。所以定位到错误块里再看。
+const rundoError = (output) => {
+  const lines = output.split(/\r?\n/u);
+  const from = lines.findIndex((line) => line.startsWith("[ME] ERROR:"));
+  if (from < 0) return { header: "", details: [] };
+  const details = [];
+  for (let index = from + 1; index < lines.length && /^\[ME\]   /u.test(lines[index]); index += 1) {
+    details.push(lines[index]);
+  }
+  return { header: lines[from], details };
+};
+const simRun = (name, files, doPath = bundledRunDoPath) => {
+  const verif = join(simRoot, name, "verif");
+  for (const [rel, text] of Object.entries(files)) {
+    const file = join(simRoot, name, rel);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text);
+  }
+  const log = join(verif, "ME-stdout.log");
+  const fd = openSync(log, "w");
+  // 交给 ModelSim 的路径一律转正斜杠:反斜杠里的 `\t`/`\n` 会被 Tcl 当转义吃掉(实测)
+  const status = spawnSync("vsim", ["-c", "-do", `do ${doPath.replace(/\\/gu, "/")}; quit -f`], {
+    stdio: ["ignore", fd, "ignore"],
+    cwd: verif
+  }).status;
+  closeSync(fd);
+  return { status, output: existsSync(log) ? readFileSync(log, "utf8") : "" };
+};
+
+const vsimProbe = spawnSync("vsim", ["-c", "-do", "quit -f"], { stdio: "ignore" });
+if (vsimProbe.status !== 0) {
+  check(
+    true,
+    `run.do 的六个夹具真跑:本机没有可用的 ModelSim(vsim 退出码 ${String(vsimProbe.status)},null = PATH 上没有)-> 跳过这段,不假装通过`
+  );
+} else {
+  const manyTb = { "rtl/foo.sv": rtlFoo, "verif/tb_a.sv": tbSource("tb_a"), "verif/tb_b.sv": tbSource("tb_b") };
+  // ① 零 TB:verif/ 下一个 tb_*.sv 都没有 → 1(既有保护,别被这次改动碰坏)
+  let sim = simRun("none", { "rtl/foo.sv": rtlFoo, "verif/helper.sv": rtlFoo });
+  check(sim.status === 1, `零 TB → 退出码 1(实际 ${String(sim.status)})`);
+  check(/no tb_\*\.sv/u.test(rundoError(sim.output).header), "零 TB 报的是「没有 tb_*.sv」这一条");
+  // ② 单 TB → 0(唯一的"正常路径",它坏了说明守卫误伤)
+  sim = simRun("one", { "rtl/foo.sv": rtlFoo, "verif/tb_foo.sv": tbSource("tb_foo") });
+  check(sim.status === 0, `单 TB 照旧跑通 → 退出码 0(实际 ${String(sim.status)})`);
+  // ③ 多个 TB + 没给 TOP_OVERRIDE → 1,且把候选**逐条列出来**
+  sim = simRun("many", manyTb);
+  check(sim.status === 1, `多 TB 无 TOP_OVERRIDE → 退出码 1(不再默默挑排序第一个;实际 ${String(sim.status)})`);
+  const manyError = rundoError(sim.output);
+  check(
+    /matched 2 testbenches/u.test(manyError.header)
+      && sim.output.includes("TOP_OVERRIDE")
+      && manyError.details.some((line) => line.includes("tb_a.sv"))
+      && manyError.details.some((line) => line.includes("tb_b.sv")),
+    `多 TB 那条报出了命中数,并在错误里把两个候选逐条列出、指向 TOP_OVERRIDE(实际续行 ${manyError.details.length} 条)`
+  );
+  // ④ 多个 TB + 显式 TOP_OVERRIDE → 0(填了就等于指定了本次跑哪个)
+  const topPatched = bundledRunDo.replace("set TOP_OVERRIDE {}", "set TOP_OVERRIDE {tb_b}");
+  check(topPatched !== bundledRunDo, "夹具:旋钮 TOP_OVERRIDE 真被填上了(没填上的话下面那条会测成另一回事)");
+  mkdirSync(simRoot, { recursive: true });
+  const topDo = join(simRoot, "many-with-top.do");
+  writeFileSync(topDo, topPatched);
+  sim = simRun("many-top", manyTb, topDo);
+  check(sim.status === 0, `多 TB + 显式 TOP_OVERRIDE → 退出码 0(实际 ${String(sim.status)})`);
+  // ⑤ 同名且内容一致 → 0(内容一致才允许丢),并说明丢了哪一份
+  sim = simRun("dup-same", { "rtl/foo.sv": rtlFoo, "verif/foo.sv": rtlFoo, "verif/tb_foo.sv": tbSource("tb_foo") });
+  check(sim.status === 0, `同名同内容 → 退出码 0(只丢重复那份;实际 ${String(sim.status)})`);
+  check(
+    sim.output.includes("duplicate basename skipped (identical content)"),
+    "同名同内容会打出「identical content」说清丢了哪一份(不静默)"
+  );
+  // ⑥ 同名而内容不同 → 1,并把两个路径都列出来。
+  //    器材**刻意等长**:只比大小的实现会把它当成同一个文件放过去,这条夹具就抓这种实现。
+  const dupA = "module foo; endmodule // r1\n";
+  const dupB = "module foo; endmodule // r2\n";
+  check(Buffer.byteLength(dupA) === Buffer.byteLength(dupB), "夹具:同名不同内容的两份等长(只比大小的实现会被抓出来)");
+  sim = simRun("dup-diff", { "rtl/foo.sv": dupA, "verif/foo.sv": dupB, "verif/tb_foo.sv": tbSource("tb_foo") });
+  check(sim.status === 1, `同名而内容不同 → 退出码 1(实际 ${String(sim.status)})`);
+  const dupError = rundoError(sim.output);
+  check(
+    /duplicate basename with DIFFERENT content/u.test(dupError.header)
+      && dupError.details.some((line) => line.includes("rtl/foo.sv"))
+      && dupError.details.some((line) => line.includes("verif/foo.sv")),
+    `同名不同内容那条在错误里把两个路径都列出来了(实际续行 ${dupError.details.length} 条)`
+  );
+}
+
 // 用户自己的模板(没有任何占位符)→ 必须与模板逐字节一致
 const plainTemplate = join(SANDBOX, "plain-tb.vhd");
 writeFileSync(plainTemplate, "-- 我自己的模板\nentity tb_x is end entity;\n");
@@ -578,6 +715,50 @@ check(
   run("module-verif-new.mjs", [newFileRoot, "--kind", "run-do", "--force"]) === 0,
   "--force 才覆盖 run.do"
 );
+
+// ── --force 的覆盖必须**可恢复** ───────────────────────────────────────────────
+//
+// 原来是 `writeFileSync(target, text)` —— 先截断再写,而且旧内容一点不剩,`--force` 于是成了
+// "丢用户改动"的开关。现在:覆盖前把旧内容留成同目录 `<目标>.bak-<时间戳>`,新内容先写临时文件、
+// 核验过才改名替换。夹具先塞一份"用户改过的"内容,再 --force,快照必须逐字节等于它。
+const backupMod = join(SANDBOX, `backup-force-${stamp}`);
+const backupVerif = join(backupMod, "verif");
+const backupRunDo = join(backupVerif, "run.do");
+const tamperedRunDo = "# 用户改过的 run.do(夹具)\nset RTL_DIR {../my_rtl}\n";
+mkdirSync(backupVerif, { recursive: true });
+writeFileSync(backupRunDo, tamperedRunDo);
+check(
+  run("module-verif-new.mjs", [backupMod, "--kind", "run-do", "--force"]) === 0,
+  "已有 run.do + --force → 退出码 0(覆盖)"
+);
+check(readFileSync(backupRunDo, "utf8") === bundledRunDo, "目标确实被新模板覆盖了");
+const runDoBackups = readdirSync(backupVerif).filter((name) => name.startsWith("run.do.bak-"));
+check(
+  runDoBackups.length === 1,
+  `覆盖前留了一份 run.do.bak-<时间戳> 快照(实际 ${runDoBackups.length} 个:${readdirSync(backupVerif).join("、")})`
+);
+const backupText = runDoBackups.length === 1 ? readFileSync(join(backupVerif, runDoBackups[0]), "utf8") : "(没有快照)";
+check(
+  backupText === tamperedRunDo,
+  "快照里是覆盖前的旧内容、逐字节一致(所以真能恢复回去;不是留了个空壳)"
+);
+check(
+  !readdirSync(backupVerif).some((name) => name.includes(".tmp-")),
+  "替换没有留下临时文件(先写临时文件、核验后改名,收尾要干净)"
+);
+
+// 快照/替换失败时:`保留原文件` + 报错退出。夹具:让 `verif/run.do` 这个位置被一个**目录**占着 ——
+// 快照那一步就失败(复制不了目录),此时目标一个字节都不该动。
+const dirTargetMod = join(SANDBOX, `backup-dir-${stamp}`);
+const dirTarget = join(dirTargetMod, "verif", "run.do");
+mkdirSync(dirTarget, { recursive: true });
+writeFileSync(join(dirTarget, "keep.txt"), "keep\n");
+const dirForceCode = run("module-verif-new.mjs", [dirTargetMod, "--kind", "run-do", "--force"]);
+check(dirForceCode === 2, `快照失败(目标位置是目录)→ 退出码 2(落盘失败;实际 ${String(dirForceCode)})`);
+check(
+  existsSync(join(dirTarget, "keep.txt")) && readdirSync(join(dirTargetMod, "verif")).join("、") === "run.do",
+  "失败时原有内容原样保留,也没留下快照 / 临时文件的半成品"
+);
 // 漏给根目录时必须报参数错,不能把 `--kind` 的值当成根目录去写(实测踩过:会在 ./run-do/ 下起文件还退 0)
 check(
   run("module-verif-new.mjs", ["--kind", "run-do"]) === 2,
@@ -812,6 +993,23 @@ check(
     && readFileSync(forceAnchor, "utf8").includes("spec/spec.md")
     && !readFileSync(forceRules, "utf8").includes("TAMPERED"),
   "--force 真覆盖已有锚点与工作区指令(不是只接受的空开关)"
+);
+// 覆盖**可恢复**:锚点与工作区指令这两份旧内容都留下了同目录 `.bak-<时间戳>` 快照,
+// 而且快照里必须是覆盖前的那份 —— 不然"可恢复"只是句口号。
+const forceBackups = readdirSync(forceRoot).filter((name) => name.includes(".bak-"));
+const anchorBackup = forceBackups.find((name) => name.startsWith(".fpga-workbench.json.bak-"));
+const rulesBackup = forceBackups.find((name) => name.startsWith(`${INSTRUCTION_FILE}.bak-`));
+check(
+  anchorBackup !== undefined && rulesBackup !== undefined,
+  `--force 覆盖锚点与 ${INSTRUCTION_FILE} 前都留了快照(实际:${forceBackups.join("、") || "一个都没有"})`
+);
+check(
+  anchorBackup !== undefined && readFileSync(join(forceRoot, anchorBackup), "utf8").includes("TAMPERED"),
+  "锚点快照里是覆盖前的那份内容(所以改坏了能恢复回去)"
+);
+check(
+  rulesBackup !== undefined && readFileSync(join(forceRoot, rulesBackup), "utf8") === "TAMPERED RULES\n",
+  `${INSTRUCTION_FILE} 快照里是覆盖前的那份内容、逐字节一致`
 );
 check(
   run("setup-scaffold.mjs", [forceRoot, "--kind", "project", "--force"]) === 1

@@ -11,7 +11,7 @@
 //
 // 只 import lib/toolchain.js:它只用 node 内置模块,而 lib/index.js 要 schemastery,
 // 后者只在 profile 的 node_modules 里,从仓库 import 会解析失败。
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -19,6 +19,7 @@ import {
   NS,
   SWEEP_GRACE_MS,
   DETECT_TARGETS,
+  EXPECTED_PWSH_VERSION,
   TEMPLATE_FIELDS,
   TOOLS,
   backupChangedFiles,
@@ -29,9 +30,12 @@ import {
   legacyMigrationPatch,
   listDirectory,
   listFiles,
+  presetFileDiff,
   presetSyncNeeded,
   probeFilesystem,
   pruneEmptySkillDirs,
+  queryVersion,
+  readdirNames,
   resolveTemplates,
   staleShippedFiles,
   statusOf,
@@ -48,7 +52,7 @@ const RUN_ID = String(process.pid);
 // 跑到最后要把它们扫干净 —— 开头也扫一次,清掉上次异常退出留下的残留;
 // 开头那次带宽限期,免得删掉并行那次正在用的目录。
 const TMP_ROOT = join(ROOT, ".tmp");
-const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture", "preset-sync-"];
+const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture", "preset-sync-", "sweep-check-"];
 sweepTempEntries(TMP_ROOT, FIXTURE_PREFIXES, SWEEP_GRACE_MS);
 
 
@@ -445,6 +449,30 @@ check(
   optionalText.includes("C:\\p\\pwsh.exe") && optionalText.includes("C:\\y\\python.exe"),
   "提示里带上 PowerShell 7 与 Python 3 的路径(配了就该用得上)"
 );
+// 诚实标注(R-03):这条路径只喂会话提示 —— **宿主终端是不是真的用它,插件管不到**。
+// 写成"已就绪"会让人以为已经强制绑定,那是假承诺。设置页说明与会话提示都要有这句。
+const pwshField = FIELDS.find((field) => field.key === "pwshPath");
+const pythonField = FIELDS.find((field) => field.key === "pythonPath");
+check(
+  String(pwshField?.hint ?? "").includes("不由本插件保证") && String(pwshField?.hint ?? "").includes(EXPECTED_PWSH_VERSION),
+  `设置页说明诚实标注:宿主终端是否真的用它「不由本插件保证」,并写明按 ${EXPECTED_PWSH_VERSION} 校验`,
+  String(pwshField?.hint)
+);
+check(
+  String(pythonField?.hint ?? "").includes("不由本插件保证") && String(pythonField?.hint ?? "").includes("只如实报出版本"),
+  "python 那条路径同样标注:只如实报版本、宿主是否真的用它不保证",
+  String(pythonField?.hint)
+);
+check(
+  optionalText.includes("不由本插件保证") && optionalText.includes(EXPECTED_PWSH_VERSION),
+  "会话提示里对运行时路径同样标注:只喂提示、宿主是否真的用它不保证",
+  optionalText.split("\n").filter((line) => line.includes("不由本插件保证")).join("\n")
+);
+// 反过来:不许出现"已经强制绑定"的口气(做不到就如实说做不到)
+check(
+  !/运行时路径[^。]{0,20}已强制绑定|已绑定宿主终端/u.test(optionalText + String(pwshField?.hint ?? "")),
+  "不宣称已经强制绑定宿主终端(没这个能力就不许这么写)"
+);
 const optionalMissing = describeEnv({ ...prepared, pwshPath: "C:\\p\\pwsh.exe" }, probeWith(Object.values(prepared)));
 check(
   !optionalMissing.includes("C:\\p\\pwsh.exe") && optionalMissing.includes(prepared.modelsimIniPath),
@@ -563,6 +591,115 @@ check(
   "检测:Python 3 按 Python3* 匹配到版本目录(不写死版本号)"
 );
 
+// ── 版本查询:检测路径上**唯一**允许起进程的地方(R-03) ──────────────────────
+//
+// 用户口径:本机统一 PowerShell 7.6.6 —— 那是**执行约束**,所以"文件在不在"不够;
+// 但"只看文件"挡不住 5.1 与别的 7.x,用户明确不要静默接受。三种情形(匹配 / 不匹配 /
+// 命令跑不起来)都必须有交代,而且检测不能被它拖垮、也不能为别的工具起进程。
+const pwshFilePath = "C:\\PF\\PowerShell\\7\\pwsh.exe";
+const pwshEnv = { ProgramFiles: "C:\\PF", LocalAppData: "C:\\LA", PATH: "" };
+const pwshList = listStub({ "C:\\PF\\PowerShell": ["7"] });
+const versionSpy = (calls, result) => (path) => {
+  calls.push(path);
+  return result;
+};
+const pwshHitOf = (hits) => hits.find((hit) => hit.field === "pwshPath");
+
+const matchCalls = [];
+const pwshMatch = pwshHitOf(detectTools(detectProbe([pwshFilePath]), pwshList, pwshEnv, versionSpy(matchCalls, { version: "7.6.6" })));
+check(
+  pwshMatch?.version === "7.6.6" && pwshMatch?.versionOk === true,
+  `版本匹配 ${EXPECTED_PWSH_VERSION} → 报出实际版本并判为匹配`,
+  JSON.stringify(pwshMatch)
+);
+check(pwshMatch?.versionNote?.includes("7.6.6"), "匹配时也把版本写进给人的那句提示里", String(pwshMatch?.versionNote));
+check(
+  matchCalls.length === 1 && matchCalls[0] === pwshFilePath,
+  `只对该候选起一次版本查询(实际 ${matchCalls.length} 次)且查的是它本身`
+);
+
+const mismatchCalls = [];
+const pwshMismatch = pwshHitOf(detectTools(detectProbe([pwshFilePath]), pwshList, pwshEnv, versionSpy(mismatchCalls, { version: "7.4.2" })));
+check(
+  pwshMismatch?.version === "7.4.2" && pwshMismatch?.versionOk === false,
+  "版本不匹配 → 如实报出实际版本并判为不匹配(5.1 或别的 7.x 都不得静默接受)",
+  JSON.stringify(pwshMismatch)
+);
+check(
+  pwshMismatch?.versionNote?.includes("7.4.2") && pwshMismatch?.versionNote?.includes(EXPECTED_PWSH_VERSION),
+  "不匹配时那句提示里同时给出实际版本与要求版本",
+  String(pwshMismatch?.versionNote)
+);
+check(
+  /不匹配/u.test(String(pwshMismatch?.versionNote)) && !/符合本模式/u.test(String(pwshMismatch?.versionNote)),
+  "不匹配时不得说成「符合/通过」(否则用户以为已经达标)",
+  String(pwshMismatch?.versionNote)
+);
+
+const brokenCalls = [];
+const pwshBroken = pwshHitOf(detectTools(detectProbe([pwshFilePath]), pwshList, pwshEnv, versionSpy(brokenCalls, { error: "ENOENT" })));
+check(
+  pwshBroken?.version === undefined && pwshBroken?.versionOk === false && String(pwshBroken?.versionError).includes("ENOENT"),
+  "命令跑不起来 → 如实报 error、不猜版本,也不当作匹配",
+  JSON.stringify(pwshBroken)
+);
+check(pwshBroken?.versionNote?.includes("查不出来"), "跑不起来时提示里说清「查不出来」(不是留空让人以为没问题)");
+// 桩抛异常也不能让整次检测崩:检测是"点一下就出结论"的只读动作
+const pwshThrew = pwshHitOf(
+  detectTools(detectProbe([pwshFilePath]), pwshList, pwshEnv, () => {
+    throw new Error("boom");
+  })
+);
+check(pwshThrew?.versionOk === false && pwshThrew?.path === pwshFilePath, "版本查询抛异常 → 按「查不出来」处理,其余候选照常返回");
+
+// python 只如实报版本:没有统一约束就不做判定(有判定就会变成假门禁)
+const pyVersion = detectTools(
+  detectProbe(["C:\\PF\\Python314\\python.exe"]),
+  listStub({ "C:\\PF": ["Python314"] }),
+  fakeEnv,
+  versionSpy([], { version: "3.14.0" })
+).find((hit) => hit.field === "pythonPath");
+check(
+  pyVersion?.version === "3.14.0" && pyVersion?.versionExpected === undefined && pyVersion?.versionOk === undefined,
+  "python 只如实报版本,不做匹配判定(本模式对它没有统一版本要求)",
+  JSON.stringify(pyVersion)
+);
+
+// 别的工具(仿真器/综合器/编译器)一次进程都不许起
+const otherCalls = [];
+detectTools(detectProbe(["C:\\modeltech64_2020.4\\win64\\vsim.exe"]), listStub({ "C:\\": ["modeltech64_2020.4"] }), fakeEnv, versionSpy(otherCalls, { version: "x" }));
+detectTools(detectProbe(["C:\\altera\\13.0sp1\\quartus\\bin64\\quartus_sh.exe"]), listStub({ "C:\\": ["altera"], "C:\\altera": ["13.0sp1"] }), fakeEnv, versionSpy(otherCalls, { version: "x" }));
+check(otherCalls.length === 0, `非 pwsh/python 的候选不查版本(实际起了 ${otherCalls.length} 次进程)`);
+
+// queryVersion 本身也得真能起进程 —— 桩只能证明接线对。拿 node 当被测程序(测试时它一定在),
+// 失败那条用一个不存在的路径(确定性,不依赖任何已装工具)。
+const realVersion = queryVersion(process.execPath, { args: ["--version"], pattern: /(\d+\.\d+\.\d+)/u });
+check(
+  typeof realVersion.version === "string" && /^\d+\./u.test(realVersion.version),
+  `queryVersion 真起进程并解析出版本(实际 ${JSON.stringify(realVersion)})`
+);
+const realMissing = queryVersion(join(TMP_ROOT, `no-such-exe-${RUN_ID}.exe`), { args: ["--version"], pattern: /(\d+)/u });
+check(
+  realMissing.version === undefined && typeof realMissing.error === "string",
+  `可执行文件不存在时如实报 error、不抛不猜(实际 ${JSON.stringify(realMissing)})`
+);
+// 本机真跑一次整条路(默认探针 + 真实版本查询)。断言的是"结论与报出的版本自洽",
+// 不钉死这台机器的版本 —— 换台机器跑不该红,但两台机器都不许出现"没版本还判匹配"。
+const realPwsh = detectTools().find((hit) => hit.field === "pwshPath");
+if (realPwsh === undefined) {
+  console.log("      本机没检测到 pwsh.exe,跳过真实版本核对");
+} else {
+  console.log(`      本机 pwsh:${realPwsh.path} → ${String(realPwsh.version ?? realPwsh.versionError)}`);
+  check(
+    realPwsh.versionOk === (realPwsh.version === EXPECTED_PWSH_VERSION),
+    `本机 pwsh 的匹配结论与实际版本自洽(实际 ${String(realPwsh.version ?? "查不出")} / 要求 ${EXPECTED_PWSH_VERSION})`
+  );
+  check(
+    typeof realPwsh.version === "string" || typeof realPwsh.versionError === "string",
+    "真实检测里 pwsh 要么报出版本、要么报出错误(不允许两者都空)"
+  );
+}
+
 // 每个具体工具(选项里不是"其他"、也不是"不用"的)都必须在检测表里有对应项。这条守卫来自一次真实遗漏:
 // 下拉里有 Quartus、检测表里没有 —— 界面上写着"支持它",一键检测却对它无能为力。
 for (const [selectKey, pathKey] of [
@@ -650,10 +787,25 @@ check(
 );
 
 check(detectTools(detectProbe([]), listStub({}), { PATH: "" }).length === 0, "检测:什么都没有时返回空(不抛、不猜)");
-// 检测只读文件系统,不许起进程 —— 起进程会把"点一下检测"变成"可能挂住"
+// 检测**只在版本查询那一处**起进程(R-03):别的地方仍然只读文件系统 —— "点一下检测"
+// 不该变成"可能挂住或跑一堆命令"。所以按源码定位:起进程的调用只许出现在 queryVersion 里。
+const toolchainSource = readFileSync(new URL("../lib/toolchain.js", import.meta.url), "utf8");
+const toolchainLines = toolchainSource.split("\n");
+const spawnPattern = /child_process|execSync|spawnSync|execFile|spawn\(/u;
+const importLine = toolchainLines.findIndex((line) => spawnPattern.test(line) && line.startsWith("import "));
+const versionStart = toolchainLines.findIndex((line) => line.includes("export function queryVersion"));
+const versionEnd = toolchainLines.findIndex((line, index) => index > versionStart && line === "}");
+const outsideVersion = toolchainLines
+  .map((line, index) => ({ line, index }))
+  .filter(({ line, index }) => spawnPattern.test(line) && index !== importLine && !(index > versionStart && index < versionEnd));
 check(
-  !/child_process|execSync|spawnSync|execFile/u.test(readFileSync(new URL("../lib/toolchain.js", import.meta.url), "utf8")),
-  "检测不起进程(只读文件系统)"
+  importLine >= 0 && versionStart > 0 && versionEnd > versionStart,
+  `找得到那个唯一的版本查询函数(定位:import ${importLine} / 函数 ${versionStart}-${versionEnd})`
+);
+check(
+  outsideVersion.length === 0,
+  `起进程只出现在 queryVersion 里,其余字段只探文件系统(越界 ${outsideVersion.length} 处:${outsideVersion.map(({ index }) => `第 ${index + 1} 行`).join("、") || "无"})`,
+  outsideVersion.map(({ line }) => line.trim()).join("\n        ")
 );
 
 // ── 覆盖用户预设前的备份(用户的地盘不能无条件盖掉) ──────────────────────────
@@ -688,6 +840,9 @@ check(
 
 // 我们从包里删掉的文件,用户预设目录里那份要跟着删 —— 否则"删掉的技能"照样在被加载
 // (技能是从用户预设目录扫的;cpSync 只合并不删多余的)。
+//
+// 但**判据只能是"上次同步清单里记过没有"**:以前还有一半是"只要在 skills/ 这种行为目录下,
+// 包里没有就删" —— 那会连**用户自己写的技能**一起删掉(这个目录本来就是他的地盘)。
 const staleRoot = join(TMP_ROOT, `stale-check-${RUN_ID}-${String(Date.now())}`);
 const staleSource = join(staleRoot, "source");
 const staleTarget = join(staleRoot, "user");
@@ -695,27 +850,58 @@ mkdirSync(join(staleSource, "skills", "keep-me"), { recursive: true });
 writeFileSync(join(staleSource, "skills", "keep-me", "SKILL.md"), "还在提供的技能\n");
 mkdirSync(join(staleTarget, "skills", "keep-me"), { recursive: true });
 mkdirSync(join(staleTarget, "skills", "gone"), { recursive: true });
+// 用户自己写的技能:目录名与插件无关、清单里也没有 —— 正是以前会被误删的那一类
+mkdirSync(join(staleTarget, "skills", "my-own-skill"), { recursive: true });
 writeFileSync(join(staleTarget, "skills", "keep-me", "SKILL.md"), "还在提供的技能\n");
 writeFileSync(join(staleTarget, "skills", "gone", "SKILL.md"), "我们已经删掉的旧技能\n");
+writeFileSync(join(staleTarget, "skills", "my-own-skill", "SKILL.md"), "用户自己写的技能\n");
 writeFileSync(join(staleTarget, "用户自己的笔记.md"), "用户加的\n");
 
 const shippedBefore = ["skills/keep-me/SKILL.md", "skills/gone/SKILL.md"];
-const stale = staleShippedFiles(staleSource, staleTarget, shippedBefore);
-check(stale.includes("skills/gone/SKILL.md"), "上次是我们写的、包里已删的文件会被清掉", JSON.stringify(stale));
-check(!stale.includes("skills/keep-me/SKILL.md"), "包里还提供的文件不动");
-check(!stale.includes("用户自己的笔记.md"), "用户自己加的文件不在清单里 → 不删");
+const diff = presetFileDiff(staleSource, staleTarget, shippedBefore);
+check(diff.stale.includes("skills/gone/SKILL.md"), "上次是我们写的、包里已删的文件会被清掉", JSON.stringify(diff.stale));
+check(!diff.stale.includes("skills/keep-me/SKILL.md"), "包里还提供的文件不动");
+check(!diff.stale.includes("用户自己的笔记.md"), "用户自己加的文件不在清单里 → 不删");
+check(
+  !diff.stale.includes("skills/my-own-skill/SKILL.md"),
+  "**用户自己放进 skills/ 的技能不得列为待删**(行为目录不是我们的地盘 —— R-01 的核心边界)",
+  JSON.stringify(diff.stale)
+);
+check(
+  diff.foreign.includes("skills/my-own-skill/SKILL.md") && diff.foreign.includes("用户自己的笔记.md"),
+  `清单外的文件进 foreign 报出来(发现非本插件文件,已保留:实际 ${JSON.stringify(diff.foreign)})`
+);
+check(
+  staleShippedFiles(staleSource, staleTarget, shippedBefore).join(",") === diff.stale.join(","),
+  "staleShippedFiles 就是 presetFileDiff 的 stale 那一半(同一个判据,不是两份实现)"
+);
 check(listFiles(staleSource).join(",") === "skills/keep-me/SKILL.md", "listFiles 给出相对路径且用 / 分隔");
 
-// 技能这类"留着就直接改变 AI 行为"的目录:即使没有清单(第一次升级、或技能刚改名)也要清 ——
-// 否则一次改名会让新旧两套技能同时被加载。
-const noManifest = staleShippedFiles(staleSource, staleTarget, undefined);
-check(noManifest.includes("skills/gone/SKILL.md"), "没有清单时,skills/ 下包内已没有的文件仍然清掉");
-check(!noManifest.includes("用户自己的笔记.md"), "没有清单时,清单外且不在 skills/ 下的文件照样不删");
+// 清单丢了(第一次升级 / 清单被删)时就**分不清**"我们的旧技能"与"用户写的技能" ——
+// 那种情况下宁可一个都不删、只报告:留着最多是多加载一个技能,删错了是删用户的东西。
+const noManifest = presetFileDiff(staleSource, staleTarget, undefined);
+check(noManifest.stale.length === 0, "没有清单时一律不删(分不清是谁写的)", JSON.stringify(noManifest.stale));
+check(
+  noManifest.foreign.includes("skills/gone/SKILL.md") &&
+    noManifest.foreign.includes("skills/my-own-skill/SKILL.md"),
+  `没有清单时两者都报成「非本插件文件,已保留」(实际 ${JSON.stringify(noManifest.foreign)})`
+);
 // 清单里记过、但位于 skills/ 之外的(比如旧模板):按清单删
 writeFileSync(join(staleTarget, "旧模板.sv"), "包里已经没有的模板\n");
 const withManifest = staleShippedFiles(staleSource, staleTarget, [...shippedBefore, "旧模板.sv"]);
 check(withManifest.includes("旧模板.sv"), "清单里记过、位于 skills/ 之外的文件按清单删");
 check(!staleShippedFiles(staleSource, staleTarget, undefined).includes("旧模板.sv"), "没有清单时不动 skills/ 之外的文件");
+// 宿主那半侧也得按这套走:按清单删 + 把保留数量报进返回值(设置页那条事实)。
+// lib/index.js 要 schemastery,这里 import 不了,所以断言源码 —— "行为目录那一半"不许复活。
+check(
+  /const \{ stale, foreign \} = presetFileDiff\(source, destination, manifest\)/u.test(hostSource) &&
+    !/behaviorDirs/u.test(hostSource),
+  "宿主按清单删,且不再有「行为目录下就算我们的」这半(源码级)"
+);
+check(
+  hostSource.includes("个非本插件文件,已保留") && /keptForeign/u.test(hostSource),
+  "宿主把「发现非本插件文件,已保留」写进日志与 presetSync() 返回值(不是静默保留)"
+);
 
 // 用户自己往预设目录里放的东西(不在 skills/ 下的普通文件)**不参与"要不要同步"的判定** ——
 // 否则两棵树永远不一致,每次启动都重同步、重备份一遍(实测就是这么攒出一堆无用备份的)。
@@ -759,6 +945,74 @@ const removedDirs = pruneEmptySkillDirs(pruneRoot);
 check(removedDirs === 1 && !existsSync(join(pruneRoot, "旧技能")), `空技能目录被删掉(实际删了 ${removedDirs} 个)`);
 check(existsSync(join(pruneRoot, "有内容的技能", "SKILL.md")), "有内容的技能目录不动");
 check(pruneEmptySkillDirs(join(ROOT, ".tmp", "根本没有这个目录")) === 0, "目录不存在时返回 0(不抛)");
+
+// ── 临时项清理:只碰"确属我们"的条目,拿不准就保留 + 报告(R-01) ────────────────
+//
+// 这条要守的是"删"这一步本身:归属靠**前缀**确认(那是我们这次运行自己建的名字),
+// 前缀不命中的一律不碰;没有前缀 = 没有归属依据 → 一个都不删;拿不准(读不到时间)
+// 或删失败 → 保留并报告,**不许换一种更狠的办法删**;而且能整个关掉(remove:false)。
+const sweepRoot = join(TMP_ROOT, `sweep-check-${RUN_ID}`);
+mkdirSync(join(sweepRoot, "keep-me"), { recursive: true });
+mkdirSync(join(sweepRoot, "ours-1"), { recursive: true });
+mkdirSync(join(sweepRoot, "ours-young"), { recursive: true });
+// 老 fixture:把时间推回到宽限期之外
+const oldTime = new Date(Date.now() - SWEEP_GRACE_MS - 60 * 1000);
+utimesSync(join(sweepRoot, "ours-1"), oldTime, oldTime);
+writeFileSync(join(sweepRoot, "keep-me", "用户的.txt"), "别动\n");
+
+const sweepReport = [];
+check(
+  sweepTempEntries(sweepRoot, ["ours-"], SWEEP_GRACE_MS, { report: sweepReport }) === 1 && !existsSync(join(sweepRoot, "ours-1")),
+  "只删命中我们前缀、且过了宽限期的条目(实际删了 1 个)"
+);
+check(existsSync(join(sweepRoot, "keep-me")), "前缀不命中的条目一律不碰(用户的东西)");
+check(existsSync(join(sweepRoot, "ours-young")), "宽限期内的条目不删(并行那次正在用的 fixture 不会被踩)");
+check(
+  sweepReport.some((item) => item.name === "ours-young" && /宽限/u.test(item.reason)),
+  `保留的条目连同原因报出来(实际 ${JSON.stringify(sweepReport)})`
+);
+
+// 拿不准的条目(读不到时间)→ 保留 + 报告。用**悬空 junction** 构造:readdir 列得出来,
+// stat 失败(ENOENT)—— 正是"无法确认安全"的那种条目。
+const dangling = join(sweepRoot, "ours-dangling");
+try {
+  symlinkSync(join(sweepRoot, "no-such-target"), dangling, "junction");
+  const danglingReport = [];
+  check(
+    sweepTempEntries(sweepRoot, ["ours-"], SWEEP_GRACE_MS, { report: danglingReport }) === 0 &&
+      // 悬空 junction 用 existsSync 看是 false(它跟着链接走),得看目录里还在不在
+      readdirSync(sweepRoot).includes("ours-dangling") &&
+      danglingReport.some((item) => item.name === "ours-dangling"),
+    `读不到时间的条目不删、只报告(实际 ${JSON.stringify(danglingReport)})`
+  );
+} catch (error) {
+  check(false, "能造出「读不到时间」的条目来验备份式保留(建 junction 失败)", String(error));
+}
+
+// remove:false = 只报告不删:归属确认不了时的退化路径(不是"删不掉就换成永久删除")
+mkdirSync(join(sweepRoot, "ours-dry"), { recursive: true });
+const dryReport = [];
+check(
+  sweepTempEntries(sweepRoot, ["ours-"], SWEEP_GRACE_MS, { remove: false, report: dryReport }) === 0 &&
+    existsSync(join(sweepRoot, "ours-dry")),
+  "remove:false 时一个都不删(把「删」这一步做成可关闭)"
+);
+check(
+  dryReport.some((item) => item.name === "ours-dry" && /只报告/u.test(item.reason)),
+  `关掉删除时把候选连同原因报出来,不是静默什么都不做(实际 ${JSON.stringify(dryReport)})`
+);
+// 没有前缀 = 没有归属依据 → 一个都不删(这条防的是"传空数组就把整个目录扫了")
+const emptyPrefixReport = [];
+check(
+  sweepTempEntries(sweepRoot, [], 0, { report: emptyPrefixReport }) === 0 &&
+    existsSync(join(sweepRoot, "keep-me")) &&
+    existsSync(join(sweepRoot, "ours-young")),
+  "没给前缀时一个都不删(无从确认归属)"
+);
+check(
+  emptyPrefixReport.length > 0,
+  `没给前缀时也报告「没有归属依据」,不是静默返回(实际 ${JSON.stringify(emptyPrefixReport)})`
+);
 
 // ── 模板:用户提供优先,缺了退回插件自带 ─────────────────────────────────────
 //

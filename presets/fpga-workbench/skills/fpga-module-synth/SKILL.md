@@ -132,6 +132,7 @@ default → AreaOptimized_high → AlternateRoutability → PerformanceOptimized
 写 `<模块根>/synth/synth.md`(**本环节的结论行在这里**,它同时覆盖门禁与时序):
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `NOT_APPLICABLE`)+ 跑过的**命令原文**
+  (判定词的含意见 `fpga-module-verif` 的**状态表**,唯一权威;下面「判据」只写本环节哪种情况记哪个词)
 - 器件型号、用的策略与轮数
 - 资源占用(LUT / FF / BRAM / DSP)
 - 综合后估计的 Fmax 与报出来的时钟

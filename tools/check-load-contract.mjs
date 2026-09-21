@@ -382,8 +382,12 @@ let browsePayload = {
   ],
   truncated: false
 };
-/** 检测路由的答复:换工具时要靠它把路径一起换掉(也顺带覆盖检测结果那一块的渲染)。 */
-const detectPayload = {
+/**
+ * 检测路由的答复:换工具时要靠它把路径一起换掉(也顺带覆盖检测结果那一块的渲染)。
+ * **`let` 而不是 const**:末尾那一段"检测结论里的版本信息"要给先后几次检测换不同的答复
+ * (版本匹配 / 不匹配 / 查不出来 / 没有版本字段),而 fetch 替身取的是**发出时**的那一份。
+ */
+let detectPayload = {
   found: [
     { field: "compilerPath", option: "verilator", label: "Verilator", path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", source: "known" },
     { field: "compilerPath", option: "other", label: "Icarus Verilog", path: "C:\\iverilog\\bin\\iverilog.exe", source: "known" }
@@ -429,10 +433,13 @@ const fetchStub = (url) => {
   }
   if (target.includes("/detect")) {
     detectRequested += 1;
+    // 答复照**发出时**那一份取(与上面预演那条同一套):先发后回的乱序里,先发那笔
+    // 带的就是它发出时的数据,不被后来的改动串味。
+    const data = detectPayload;
     if (deferDetect !== null) {
-      return new Promise((resolve) => deferDetect.push(() => resolve({ ok: true, json: () => Promise.resolve(detectPayload) })));
+      return new Promise((resolve) => deferDetect.push(() => resolve({ ok: true, json: () => Promise.resolve(data) })));
     }
-    return Promise.resolve({ ok: true, json: () => Promise.resolve(detectPayload) });
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
   }
   if (target.includes("?")) {
     previewRequested += 1;
@@ -1152,6 +1159,27 @@ try {
     "那个 CSS 变量有默认值(定义在 .fpga-set 上,宿主也能覆盖)"
   );
 
+  // ⑥ 下拉弹层(base-select):宿主暗色下弹层曾是白底浅字,靠 color-scheme 治不动(实测这套
+  // Electron 的原生弹层不吃它),所以改用可自定义 select 让页面自己画弹层。两条硬约束:
+  //   · **必须在 @supports 里** —— 不支持的引擎整段不生效,不能因为这条新样式把现状改坏;
+  //   · 颜色**走变量/继承,不写死** —— 写死就等于把弹层钉在某一种主题上。
+  check(
+    /@supports\s*\(appearance:\s*base-select\)\s*\{/u.test(styleText),
+    "弹层配色那段包在 @supports (appearance: base-select) 里(不支持的引擎保持现状)"
+  );
+  check(
+    /::picker\(select\)\s*\{[^}]*appearance:\s*base-select[^}]*background-color:\s*var\(--fpga-set-field-bg\)/u.test(styleText),
+    "弹层的底色取自 CSS 变量(不是写死的颜色),并且选择器与弹层两处都进了 base-select"
+  );
+  check(
+    /select\.fpga-set-input::picker-icon\s*\{\s*color:\s*inherit/u.test(styleText),
+    "箭头颜色继承当前文字色(不自绘第二个箭头,也不写死颜色)"
+  );
+  check(
+    /select\.fpga-set-input\s*\{[^}]*white-space:\s*nowrap/u.test(styleText),
+    "收起状态补了单行截断(base-select 默认会把长标签折成两行,原生不会)"
+  );
+
   // ② 挂载:容器与**根元素**都要按判出来的主题显式声明 color-scheme
   //
   // 前面每一轮 runEffects 都跑过这条 effect、却从没有跑过清理函数(替身不自动卸载),所以先收尾:
@@ -1199,6 +1227,156 @@ try {
   check(preference.listeners.length === 0, "卸载时退订(不留悬挂的监听)");
 } catch (error) {
   check(false, "主题跟随能走通", String(error));
+}
+
+// ── 版本信息:检测结论那一行要报出**实测版本** ─────────────────────────────────
+//
+// 光"检测到 C:\...\verilator_bin.exe"不算报清楚:装的是不符合本模式要求的版本时,用户从
+// 路径上看不出任何问题。宿主那条检测路由对**会起进程问版本的两个字段**(PowerShell / Python
+// 的路径)因此多带了 `version` / `versionError` / `versionExpected` / `versionOk` / `versionNote`
+// (见 lib/toolchain.js 的 versionInfo)。这一段测的是**客户端把它们渲染出来**:
+//   ① versionNote 显示出来;② versionOk === false 时那一行带警告样式;
+//   ③ versionError 时如实说"版本查询失败",但**不**因此说这一行"未就绪"(文件本身是在的);
+//   ④ 一个版本字段都没有(绝大多数检测项)时不留空标签。
+//
+// 夹具说明:假字段表里只有 compilerPath 参与检测(真实载荷里版本字段挂在 pwshPath / pythonPath 上),
+// 所以版本键搭在 compilerPath 那条结果上 —— 这一段渲染与字段键无关。
+// 每次渲染前 fake.reset();检测请求走已有的 deferDetect 闸门,resolve 的时机由测试决定。
+try {
+  /** 一条检测结果(路径、来源、选项都照假状态表里那份写,只让版本键可变)。 */
+  const versionHit = (extra) => ({
+    field: "compilerPath",
+    option: "verilator",
+    label: "Verilator",
+    path: "C:\\msys64\\mingw64\\bin\\verilator_bin.exe",
+    source: "known",
+    ...extra
+  });
+  /**
+   * 在渲染树里找节点,**数组也要下钻** —— 检测结论那一段是 `hits.map(...)` 的产物,
+   * 在 children 里占一层数组(现成的 findByProp 不下钻数组,取不到里面的东西)。
+   * 判断拿到的是**节点**而不是 props:`children` 在替身里挂在节点上(不在 props 上)。
+   * @param node - createElement 的产物(或它的 children 里的一层数组)。
+   * @param predicate - 对一个节点的判断。
+   * @returns 找到的节点,或 undefined。
+   */
+  const findDeep = (node, predicate) => {
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const found = findDeep(child, predicate);
+        if (found !== undefined) return found;
+      }
+      return undefined;
+    }
+    if (node === null || typeof node !== "object") return undefined;
+    if (predicate(node)) return node;
+    for (const child of node.children ?? []) {
+      const found = findDeep(child, predicate);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  /** 那一行检测结论(按字段行的 key 取,不靠"树里第几个")。 */
+  const detectRowOf = (tree, key) =>
+    findDeep(findByProp(tree, (props) => props.key === key), (node) => node.props?.className === "fpga-set-detect-row");
+  /** 那一行里文本恰好是某句话、且带某个 class 的节点(找不到就是 undefined)。 */
+  const nodeWithText = (row, className, text) =>
+    findDeep(row, (node) => node.props?.className === className && (node.children ?? []).includes(text));
+  /**
+   * 受控地跑一次检测:先把积压的 effect 与闸门放干净,再开闸门、渲染一次并触发检测,让这一笔
+   * **停在闸门上**;然后放行它,返回**结论落地后**那棵渲染树里对应的一行。
+   * @param found - 这一轮 detect 路由的答复。
+   * @param label - 这一条的标签(失败时看清是哪一条)。
+   * @returns `{ row, text, fieldText }`:那一行的检测结论节点、它的 JSON,以及**整个字段行**
+   *   的 JSON(就绪与否写在这一行的标签上,"版本没验到不等于未就绪"要对着整行看)。
+   */
+  const detectRowWith = async (found, label) => {
+    deferDetect = null;
+    fake.runEffects();
+    await tick();
+    deferDetect = [];
+    detectPayload = { found };
+    fake.reset();
+    captured();
+    fake.runEffects();
+    await tick();
+    check(deferDetect.length === 1, `${label}检测请求发出去了、停在闸门上(实际 ${deferDetect.length} 次)`);
+    deferDetect[0]();
+    await tick();
+    fake.reset();
+    const tree = captured();
+    const row = detectRowOf(tree, "compilerPath");
+    return {
+      row,
+      text: JSON.stringify(row ?? {}),
+      fieldText: JSON.stringify(findByProp(tree, (props) => props.key === "compilerPath") ?? {})
+    };
+  };
+
+  // 宿主会给的三种 note(照 lib/toolchain.js 里那三句话的措辞,不要另编)
+  const okNote = "版本 7.6.6(符合本模式的 7.6.6 要求)";
+  const mismatchNote = '实际版本 5.1.26100 —— 本模式要求 7.6.6,版本不匹配(这条路径不会被当成"已就绪")';
+  const brokenNote = "PowerShell 路径可用,但版本查不出来(spawn pwsh.exe ENOENT) —— 本模式要求 7.6.6,请自己确认";
+
+  // ① 有 versionNote:显示出来(hint 样式 —— 版本对得上不是问题)
+  const noted = await detectRowWith(
+    [versionHit({ version: "7.6.6", versionExpected: "7.6.6", versionOk: true, versionNote: okNote })],
+    "①"
+  );
+  check(noted.row !== undefined, "①找得到「编译器路径」那一行的检测结论");
+  check(
+    nodeWithText(noted.row, "fpga-set-hint", okNote) !== undefined,
+    `①检测结论里显示了宿主给的 versionNote(实测版本)—— 实际那一行:${noted.text}`
+  );
+
+  // ② 版本不匹配(versionOk === false):同一句话照抄,只把颜色换成警告色
+  const mismatched = await detectRowWith(
+    [versionHit({ version: "5.1.26100", versionExpected: "7.6.6", versionOk: false, versionNote: mismatchNote })],
+    "②"
+  );
+  check(
+    nodeWithText(mismatched.row, "fpga-set-bad", mismatchNote) !== undefined,
+    `②versionOk === false:版本那句带警告样式(.fpga-set-bad)—— 实际那一行:${mismatched.text}`
+  );
+  check(
+    nodeWithText(mismatched.row, "fpga-set-hint", mismatchNote) === undefined,
+    "②版本不匹配的那句不许留在 hint 样式里(要一眼看出是问题)"
+  );
+
+  // ③ 版本查不出来(versionError):如实说,但**不**因此把这一行判成未就绪(文件本身是在的)。
+  // 夹具照宿主的真实载荷来:查不出来时 `versionNote` 也在(那句是"路径可用,但版本查不出来(…)"),
+  // 客户端只取**版本查询失败**这一句(同一件事不必说两遍:note 里那句"查不出来"就是它)。
+  const broken = await detectRowWith(
+    [
+      versionHit({
+        versionError: "spawn pwsh.exe ENOENT",
+        versionExpected: "7.6.6",
+        versionOk: false,
+        versionNote: brokenNote
+      })
+    ],
+    "③"
+  );
+  const brokenRow = JSON.stringify(broken.row ?? {});
+  check(brokenRow.includes("版本查询失败:spawn pwsh.exe ENOENT"), `③versionError:如实说「版本查询失败:…」—— 实际那一行:${brokenRow}`);
+  check(
+    broken.fieldText.includes("已就绪") && !broken.fieldText.includes("未就绪"),
+    "③版本没验到不等于未就绪(文件在,这一行照旧是「已就绪」)"
+  );
+
+  // ④ 一个版本字段都没有(绝大多数检测项):一个标签都不留,更不许留空壳
+  const plain = await detectRowWith([versionHit({})], "④");
+  const strays = (plain.row?.children ?? []).filter(
+    (child) => child !== null && typeof child === "object" && child.type !== "button"
+  );
+  check(strays.length === 0, `④没有版本字段时那一行不多任何标签(实际多出 ${strays.length} 个)`);
+  check(!JSON.stringify(plain.row ?? {}).includes("版本"), "④没有版本字段时不出现版本文字(不留空标签)");
+} catch (error) {
+  check(false, "检测结论里的版本信息能走通", String(error));
+} finally {
+  // 这一段在文件末尾:别把闸门或那份假答复留给后面的人
+  deferDetect = null;
+  detectPayload = { found: [] };
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

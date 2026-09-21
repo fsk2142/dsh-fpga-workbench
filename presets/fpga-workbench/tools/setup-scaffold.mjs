@@ -5,15 +5,19 @@
 //   · 写锚点 `.fpga-workbench.json`(kind 与 spec 路径)—— 整套流程靠它定位
 //   · 建该级别全部环节目录,并给 spec/ 建 explore/(探索产物有地方放)
 //   · 幂等:已存在的目录不动;已有锚点不覆盖(除非 --force,且锚点类型与本次一致)
+//   · `--force` 的覆盖**可恢复**:旧内容先留一份同目录 `<文件>.bak-<时间戳>` 快照(路径会打印
+//     出来),新内容写临时文件核验过才替换 —— 理由见 `lib/stamp.mjs` 的 {@link writeFileRecoverable}
 //
 // 只建目录与锚点,**不生成空的 spec.md / flow.md** —— 报告要由讨论产出,不预置占位内容。
 //
 // 用法:
 //   node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
-// 退出码:0 成功 / 1 出错 / 2 参数不对
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// 退出码:0 成功 / 1 出错(含落盘失败:此时原有文件一个都没动)/ 2 参数不对
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { writeFileRecoverable } from "./lib/stamp.mjs";
 
 /**
  * 本模式的工作区指令文件名。
@@ -109,14 +113,18 @@ export function planScaffold(root, options = {}) {
 
 /**
  * 落盘(幂等)。已有目录不重建;已有锚点不覆盖,除非 `force`。
+ *
+ * 覆盖走 {@link writeFileRecoverable}:旧内容先留同目录 `.bak-<时间戳>` 快照,新内容核验过才替换。
+ * 快照或替换失败**抛错**(原文件不动),由入口报错退出 —— 这里不吞异常,免得留下半吊子骨架。
  * @param plan - {@link planScaffold} 的结果。
  * @param options - `{ dryRun, force }`。
- * @returns `{ created, skipped }`,元素是绝对路径。
+ * @returns `{ created, skipped, backups }`,元素是绝对路径;`backups` 是本次留下的快照。
  */
 export function applyScaffold(plan, options = {}) {
   const dryRun = options.dryRun === true;
   const created = [];
   const skipped = [];
+  const backups = [];
 
   for (const dir of plan.dirs) {
     if (existsSync(dir)) {
@@ -127,13 +135,21 @@ export function applyScaffold(plan, options = {}) {
     created.push(dir);
   }
 
+  // 覆盖前的快照单独记一份:它不参与"建了什么"的计数,只用来告诉用户旧内容在哪
+  const write = (file, text) => {
+    if (!dryRun) {
+      const snapshot = writeFileRecoverable(file, text);
+      if (snapshot !== undefined) backups.push(snapshot);
+    }
+    created.push(file);
+  };
+
   for (const { file, value } of plan.anchors) {
     if (existsSync(file) && options.force !== true) {
       skipped.push(file);
       continue;
     }
-    if (!dryRun) writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-    created.push(file);
+    write(file, `${JSON.stringify(value, null, 2)}\n`);
   }
 
   // 工作区指令:两级各落一份(模块根 / 工程根),同样"已存在就跳过" —— 用户按项目改过的那份
@@ -142,12 +158,11 @@ export function applyScaffold(plan, options = {}) {
     if (existsSync(plan.instruction) && options.force !== true) {
       skipped.push(plan.instruction);
     } else {
-      if (!dryRun) writeFileSync(plan.instruction, readModeRules());
-      created.push(plan.instruction);
+      write(plan.instruction, readModeRules());
     }
   }
 
-  return { created, skipped };
+  return { created, skipped, backups };
 }
 
 /**
@@ -272,11 +287,22 @@ function main() {
     }
   }
 
-  const { created, skipped } = applyScaffold(plan, { dryRun: args.dryRun, force: args.force });
+  let applied;
+  try {
+    applied = applyScaffold(plan, { dryRun: args.dryRun, force: args.force });
+  } catch (error) {
+    // 落盘失败(快照失败 / 替换失败)时原有文件一个都没动 —— 说清这一点,别让人以为写坏了一半
+    console.error("落盘失败,原有文件没有改动:");
+    console.error(`  ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const { created, skipped, backups } = applied;
 
   const label = args.dryRun ? "[dry-run] 将要建立" : "已建立";
   console.log(`${label} ${created.length} 项,跳过已存在的 ${skipped.length} 项(根目录:${root})`);
   for (const path of created) console.log(`  + ${relative(root, path) || "."}`);
+  // 覆盖是可恢复的:快照留在哪必须打出来,否则等于没说
+  for (const backup of backups) console.log(`  覆盖前已留快照(要恢复就把它的内容复制回目标):${backup}`);
   const anchor = plan.anchors[0]?.file;
   if (anchor !== undefined && !created.includes(anchor)) {
     console.log(`锚点已存在,未覆盖:${anchor}(要重建用 --force)`);

@@ -12,8 +12,93 @@
 //   · 模板里没有这些占位符(用户自己的模板多半如此)→ 就是一次纯复制
 //
 // 故意不做的事:不猜模板、不改模板内容、不覆盖已有文件(除非 --force)。
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// **`--force` 覆盖是可恢复的**:旧内容先复制成同目录的 `<目标>.bak-<时间戳>`(路径会打印出来),
+// 新内容先写临时文件、读回来核验过才改名替换 —— 见 {@link writeFileRecoverable}。
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, relative as relativePath, resolve } from "node:path";
+
+/** 取一个错误的可读文字(非 Error 的抛出物也要能报出来)。 */
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** 丢掉临时文件(失败路径专用):先恢复可写再删,免得只读属性把临时文件留在地上。 */
+function discardTemporary(file) {
+  try {
+    chmodSync(file, 0o666);
+  } catch {
+    // 改不动权限也接着删:删不掉只是留个临时文件,不该盖过真正的失败原因
+  }
+  try {
+    rmSync(file, { force: true });
+  } catch {
+    // 同上
+  }
+}
+
+/**
+ * 覆盖一个已有文件时**先留可恢复快照、再原子替换**:写临时文件 → 读回来逐字节核验 → 改名替换。
+ *
+ * 为什么不是 `writeFileSync(target, text)`:`writeFileSync` 是**先截断再写**,写到一半失败
+ * (磁盘满、权限、进程被杀)就把用户原来的文件毁成半截,旧内容一点不剩 —— `--force` 于是成了
+ * "丢改动"的开关。这里保证三件事:
+ *   · 替换前把旧内容原样复制成同目录的 `<目标>.bak-<时间戳>`(那个 `-1`/`-2` 后缀只用来避开
+ *     同一个时间戳的第二次覆盖 —— 绝不覆盖已有的快照)
+ *   · 新内容先落到临时文件,并**读回来逐字节核验**;核验不过就报错,目标一个字节都不动
+ *   · 核验通过才 `rename` 到目标(同目录改名;不会出现"半截文件")
+ * 快照与替换失败都保留原文件,把原因(含快照路径)抛给调用方去报错退出。
+ *
+ * @param target - 目标文件。已存在就留快照;不存在则是一次普通落盘。
+ * @param text - 要写入的正文(UTF-8)。
+ * @returns 快照路径;目标原本不存在时返回 `undefined`(没有旧内容可留)。
+ * @throws 快照或替换失败时抛出 —— 原文件与已存在的快照都保留,失败原因里带路径。
+ */
+export function writeFileRecoverable(target, text) {
+  const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(temporary, text);
+    if (!readFileSync(temporary).equals(Buffer.from(text, "utf8"))) {
+      throw new Error("写进去的内容与要写的对不上");
+    }
+  } catch (error) {
+    discardTemporary(temporary);
+    throw new Error(`写临时文件失败,目标未动:${target} —— ${errorText(error)}`);
+  }
+
+  let snapshot;
+  if (existsSync(target)) {
+    const stampText = new Date().toISOString().replace(/[:.]/gu, "-");
+    snapshot = `${target}.bak-${stampText}`;
+    for (let n = 1; existsSync(snapshot); n += 1) snapshot = `${target}.bak-${stampText}-${n}`;
+    try {
+      copyFileSync(target, snapshot);
+      if (!readFileSync(snapshot).equals(readFileSync(target))) throw new Error("复制出来的内容与原文对不上");
+    } catch (error) {
+      // 半成品快照要清掉:留着它比没有更坏(看着像一份能恢复的备份,其实是断的)
+      discardTemporary(temporary);
+      discardTemporary(snapshot);
+      throw new Error(`快照失败(半成品已清掉),原文件未动:${target} —— ${errorText(error)}`);
+    }
+  }
+
+  // 目标的权限跟过去:改名会带上临时文件自己的权限,不改的话覆盖会把目标的权限换掉
+  if (snapshot !== undefined) {
+    try {
+      chmodSync(temporary, statSync(target).mode);
+    } catch {
+      // 权限带不过去不算失败:内容才是判据
+    }
+  }
+  try {
+    renameSync(temporary, target);
+  } catch (error) {
+    discardTemporary(temporary);
+    throw new Error(
+      `替换失败,原文件保留${snapshot === undefined ? "" : `(快照:${snapshot})`}:${target} —— ${errorText(error)}`
+    );
+  }
+  return snapshot;
+}
 
 /** 唯一会被替换的两个占位符。其余 `<...>` 原样保留 —— 内容不归这个脚本管。 */
 export const NAME_TOKENS = ["ModuleName", "module_snake"];
@@ -125,7 +210,7 @@ function parseArgs(argv) {
  * `module-synth-new.mjs`(约束 / `synth-script`)。这样命令一看就知道属于哪个环节,
  * 也不需要调用方去记 `--kind`。
  * @param options - `{ root, name, template, kind, out, force, dryRun }`;`synth-script` 另收 `{ part, top }`(从 spec 读到的值)。
- * @returns 退出码:0 成功 / 1 目标已存在且未加 force / 2 参数或环境不对。
+ * @returns 退出码:0 成功 / 1 目标已存在且未加 force / 2 参数不对,或落盘失败(原文件保留)。
  */
 export function stampFile(options) {
   const { root, name, template, kind } = options;
@@ -165,8 +250,9 @@ export function stampFile(options) {
     console.error(`合法范围只能是根目录(及其子目录)里面:${rootResolved}`);
     return 2;
   }
-  if (existsSync(target) && options.force !== true) {
-    console.error(`目标已存在,不覆盖:${target}(要覆盖加 --force)`);
+  const targetExists = existsSync(target);
+  if (targetExists && options.force !== true) {
+    console.error(`目标已存在,不覆盖:${target}(要覆盖加 --force;覆盖前会先留一份 <目标>.bak-<时间戳> 快照)`);
     return 1;
   }
 
@@ -186,13 +272,26 @@ export function stampFile(options) {
   if (kind === "synth-script") {
     ({ text, filled } = fillSynthScript(text, options));
   }
+  let snapshot;
   if (options.dryRun !== true) {
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, text);
+    try {
+      mkdirSync(dirname(target), { recursive: true });
+      snapshot = writeFileRecoverable(target, text);
+    } catch (error) {
+      console.error(`写文件失败,原文件没动:${target}`);
+      console.error(`  ${errorText(error)}`);
+      return 2;
+    }
   }
 
   console.log(`${options.dryRun === true ? "[dry-run] 将复制模板到" : "已复制模板到"} ${target}`);
   console.log(`  模板:${template}`);
+  if (snapshot !== undefined) {
+    // 打印出来才叫"可恢复":不打印的话没人知道旧内容在哪
+    console.log(`  覆盖前已留快照(要恢复就把它的内容复制回目标):${snapshot}`);
+  } else if (options.dryRun === true && targetExists) {
+    console.log("  目标已存在:正式跑会先留一份 <目标>.bak-<时间戳> 快照,再覆盖");
+  }
   console.log(
     copyAsIs
       ? `  原样复制:${kind} 的文件名与正文都固定,不替模块名`

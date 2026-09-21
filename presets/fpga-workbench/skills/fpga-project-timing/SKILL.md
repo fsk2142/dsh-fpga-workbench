@@ -66,6 +66,7 @@ report_cdc -file <跨域报告路径>
 写 `<工作区根>/project/timing/timing.md`:
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ 报告文件的完整路径
+  (判定词的含义见 `fpga-module-verif` 的**状态表**,唯一权威)
 - 时钟清单:名字、周期、WNS、是否约束上
 - 未约束路径计数
 - 最差几条违例路径的简表(起点/终点/裕量/所属时钟域)

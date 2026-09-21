@@ -106,6 +106,7 @@ node "<自带命令目录>\setup-scaffold.mjs" <工作区根> --kind project --m
 
 - `spec.md`:结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ 需求与架构 +
   **模块清单表**(每个模块一行:职责 / 接口 / 依赖 / 做到哪一步)+ 器件与工程 + IP 策略 + 上板要验什么
+  (判定词的含义见 `fpga-module-verif` 的**状态表**,唯一权威)
 - `flow.md`:整机框图(Mermaid 本体),spec.md 里指向它
 
 清单表里每个模块的"做到哪一步"都指得回去。有模块尚未跑完模块级流程 → 如实写出来,

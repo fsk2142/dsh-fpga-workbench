@@ -70,6 +70,7 @@ description: 把多个模块接起来之后做系统级仿真时用:写顶层测
 写 `<工作区根>/project/syssim/syssim.md`:
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)
+  (判定词的含义见 `fpga-module-verif` 的**状态表**,唯一权威)
 - 命令原文 + 激励数据来源 + 比对方式与结果
 - 覆盖了哪些跨模块路径、哪些**没覆盖**
 

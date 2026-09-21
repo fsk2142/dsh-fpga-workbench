@@ -820,6 +820,125 @@ for (const skill of ["fpga-module-spec", "fpga-project-spec"]) {
   check(/5~15|5-15|5～15/u.test(text), `${skill} 给了规模上限(图太大反而看不清)`);
 }
 
+// ── R-02:"先画图确认 / 先补规格"的门槛按任务风险放宽 ────────────────────────────
+//
+// 旧口径按"是否新增功能"决定要不要先画图确认 —— 结果是修一个语法错、处理一条 lint 告警,也被要求
+// 先补一整套规格、先批准流程图。用户已同意放宽:判据改成**任务风险**(重大架构 / 公共接口 / 跨时钟
+// 方案 / 关键数据通路 / 用户可见的算法决策且尚未确定才要先确认图);已有批准方案里的普通实现与
+// **局部修复**直接动手,只要求读相关代码与项目约束 + 改完做聚焦验证。
+//
+// 这几条同时也把 R-09 的"唯一权威"钉住:动手规则只维护在工作区规则(README 的 fpga-mode-rules
+// 区块,骨架抽成 AGENTS.fpga.md)一处,人设与技能只引用 —— 免得「人设放宽了、技能还强制」。
+check(/任务风险/u.test(rulesBody), "工作区规则写明门槛按任务风险判");
+// 判据必须写成**否定旧口径**的样子:"按是否新增功能判"这种正向写法才是要防的那条
+check(/不是按"是否新增功能"/u.test(rulesBody), "工作区规则写明判据不是'是否新增功能'");
+for (const word of ["重大架构", "公共接口", "跨时钟", "关键数据通路", "用户可见"]) {
+  check(rulesBody.includes(word), `工作区规则的风险清单里有「${word}」`);
+}
+check(
+  /局部修复[\s\S]{0,100}直接动手/u.test(rulesBody),
+  "工作区规则写明局部修复直接动手(不要求先出图 / 先补规格)"
+);
+check(
+  /局部修复[\s\S]{0,200}不要求[\s\S]{0,40}规格/u.test(rulesBody),
+  "工作区规则写明局部修复不要求先补一整套规格"
+);
+check(
+  /唯一出处/u.test(rulesBody),
+  "工作区规则声明动手规则的唯一出处就是本区块(人设与技能只引用)"
+);
+check(
+  /唯一出处[\s\S]{0,80}工作区规则|工作区规则[\s\S]{0,24}唯一出处/u.test(persona) &&
+    /不另立|只引用|不重复/u.test(persona),
+  "人设把动手规则指回工作区规则(只引用,不另立一套)"
+);
+check(!/是否新增功能/u.test(persona), "人设里没有留下旧的'是否新增功能才要确认图'口径");
+check(/不是按"有没有新功能"/u.test(persona), "人设同样写明不是按'有没有新功能'判");
+check(/任务风险/u.test(persona), "人设与工作区规则同步写明按任务风险判");
+// "缺规格文件"与"缺关键决策依据"分开:前者不必然阻塞局部任务,后者影响结果时才问用户
+check(
+  /缺规格文件[\s\S]{0,20}缺关键决策依据/u.test(rulesBody) && /不阻塞|不必然阻塞/u.test(rulesBody),
+  "工作区规则把'缺规格文件'与'缺关键决策依据'分开,并写明前者不必然阻塞"
+);
+check(
+  /缺规格文件[\s\S]{0,80}不阻塞/u.test(lintText) && /关键决策/u.test(lintText),
+  "rtl 技能前置同样把这两件事分开(缺文件不阻塞局部任务)"
+);
+// 复位/事件沿:模板默认可用高有效;已有工程按实际接口与项目约定,要改必须说明并取得确认
+check(
+  /复位与事件沿[\s\S]{0,80}实际工程/u.test(rulesBody) && /事件沿[\s\S]{0,60}确认/u.test(rulesBody),
+  "工作区规则写明复位/事件沿以实际工程为准,要改需说明并确认"
+);
+check(
+  /复位与事件沿[\s\S]{0,140}实际工程/u.test(lintText) && /事件沿[\s\S]{0,60}确认/u.test(lintText),
+  "rtl 技能同样写明复位/事件沿以实际工程为准(要改需说明并确认)"
+);
+// rtl 技能开头就分开两条路径:局部那条**不要求**先建 spec/flow.md、也不要求先批准流程图
+check(
+  /两条适用路径|两条路径/u.test(lintText) && /新设计|重大变更/u.test(lintText),
+  "rtl 技能开头写明两条适用路径(新设计/重大变更 与 局部调查与修复)"
+);
+check(
+  /局部[\s\S]{0,200}?不要求[\s\S]{0,20}flow\.md/u.test(lintText) &&
+    /不要求先批准流程图/u.test(lintText),
+  "rtl 技能写明局部路径不要求先建 spec/flow.md、也不要求先批准流程图"
+);
+for (const skill of ["fpga-module-spec", "fpga-module-rtl"]) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  check(
+    /工作区规则第 2 条|fpga-mode-rules/u.test(text),
+    `${skill} 把'先确认图'的判据指回唯一出处(不自己另立)`
+  );
+}
+
+// ── R-07:状态语义集中成一张五行表(唯一权威),且"脚本相等 ≠ PASS" ──────────────
+//
+// `comp.py` 被改成"两边都空 → 0 样本也算相等、退出码 0"之后,agent 侧更容易把"脚本说相等"当成
+// 验证通过。所以:定义只留一份,并且明说**零样本 / 脚本判相等只是数据层事实,不是 PASS**。
+const STATUS_HEADER = "| 状态 | 含义(唯一权威) |";
+check(
+  verifSkillText.includes(STATUS_HEADER),
+  "验证技能里有状态表(判定词的唯一权威)"
+);
+const statusRowsMissing = ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"].filter(
+  (word) => !new RegExp(`^\\| \`${word}\` \\|`, "mu").test(verifSkillText)
+);
+check(
+  statusRowsMissing.length === 0,
+  `状态表是五行 PASS / FAIL / BLOCKED / UNVERIFIED / NOT_APPLICABLE(缺:${statusRowsMissing.join("、") || "无"})`
+);
+check(/不得用来掩盖/u.test(verifSkillText), "状态表写明 NOT_APPLICABLE 不得用来掩盖'无法验证'");
+check(
+  /零样本/u.test(verifSkillText) && /脚本[^。\n]{0,40}(≠|不等于)[^。\n]{0,16}PASS/u.test(verifSkillText),
+  "验证技能写明:零样本 / 脚本判'相等'不等于验证 PASS"
+);
+check(
+  /充分验证[\s\S]{0,20}证据/u.test(verifSkillText) && /真实不符/u.test(verifSkillText) &&
+    /覆盖不足/u.test(verifSkillText) && /无法继续/u.test(verifSkillText),
+  "状态表的五条定义都在(PASS 有证据 / FAIL 真实不符 / BLOCKED 无法继续 / UNVERIFIED 覆盖不足)"
+);
+// 唯一权威:这张表全仓只有一份,其余技能只引用
+const tableCopies = skillNames.filter((skill) =>
+  readFileSync(join(skillDir, skill, "SKILL.md"), "utf8").includes(STATUS_HEADER)
+);
+check(
+  tableCopies.length === 1 && tableCopies[0] === "fpga-module-verif",
+  `五行状态表只有一份权威(实际:${tableCopies.join("、") || "无"})`
+);
+// 每个会写判定词结论的技能都要引这张表(review 用的是 approved / changes requested,不在这一套里)
+const verdictRefSkills = Object.keys(VERDICT_SETS).filter(
+  (skill) => skill !== "fpga-module-verif" && skill !== "fpga-module-review"
+);
+for (const skill of verdictRefSkills) {
+  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  check(
+    /fpga-module-verif[^。\n]{0,12}状态表|状态表[^。\n]{0,24}唯一权威/u.test(text),
+    `${skill} 提到判定词时引用唯一权威状态表(不各自复述定义)`
+  );
+}
+check(/fpga-module-verif[\s\S]{0,30}状态表/u.test(rulesBody), "工作区规则提到判定词时也指向那张状态表");
+check(/fpga-module-verif[\s\S]{0,30}状态表/u.test(persona), "人设提到判定词时也指向那张状态表");
+
 console.log(
   failures.length > 0
     ? `\nFAIL (${failures.length}): ${failures.join(" | ")}`

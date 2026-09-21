@@ -49,6 +49,7 @@ description: 在给 FPGA 工程写或核对约束与管脚时用:时钟约束、
 写 `<工作区根>/project/constraints/constraints.md`:
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ 约束文件路径
+  (判定词的含义见 `fpga-module-verif` 的**状态表**,唯一权威)
 - **管脚对照表**:信号名 | 管脚号 | IO 标准 | 来源(原理图第几页/哪个连接器)
 - 时钟清单:名字、周期、来源
 - 时序例外清单:哪条路径、为什么、谁确认的

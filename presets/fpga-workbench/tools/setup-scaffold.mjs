@@ -8,7 +8,9 @@
 //   · `--force` 的覆盖**可恢复**:旧内容先留一份同目录 `<文件>.bak-<时间戳>` 快照(路径会打印
 //     出来),新内容写临时文件核验过才替换 —— 理由见 `lib/stamp.mjs` 的 {@link writeFileRecoverable}
 //   · 落盘**前**先做**全量预检**:每个目标的**真实落点**(看穿 junction / 符号链接)必须仍在根里、
-//     目标必须可写;不过就在动手之前拒绝(理由见 `lib/stamp.mjs` 的 {@link realEscape})
+//     目标必须可写、**位置类型必须对**(环节目录的位置得是目录、锚点与规则文件的位置得是文件 ——
+//     见 {@link assertStageDirsAreDirs} 与 {@link assertFileTargetsAreFiles});不过就在动手之前拒绝
+//     (理由见 `lib/stamp.mjs` 的 {@link realEscape})
 //
 // 只建目录与锚点,**不生成空的 spec.md / flow.md** —— 报告要由讨论产出,不预置占位内容。
 //
@@ -20,7 +22,7 @@
 //   node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
 // 退出码:0 成功 / 1 出错(落盘失败:已经发生的动作会原样列出来)/ 2 参数不对,或目标经
 //         junction / 符号链接逃出了根目录
-import { accessSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -132,9 +134,13 @@ function coded(error, code) {
  *    这里用目标**最近的已存在父路径**的真实路径再核一次(见 `lib/stamp.mjs` 的 {@link realEscape})。
  * ② **可写**:已存在的目标探它自己(只读属性在这里露出来),还没建的目标探它**最近的已存在祖先**
  *    (创建正是落在它里面)。提前失败,别建了一半才发现写不进去。
+ *    ⚠ **探不到 ACL 层面的拒绝**(2026-09-21 实测:给一个目录挂 `deny (W)`,里面真的写不进去,而
+ *    `accessSync(W_OK)` 照样通过 —— Windows 上 `access` 看的是**只读属性**,而目录的只读属性本身
+ *    是无效的)。想真知道能不能写就得试写一次,而试写要删掉那个探针文件 —— 本模式零删除,不干。
+ *    那种失败会在写的时候暴露,由下面的 {@link withActions} **如实报告**,不在这里假装能预检。
  *
  * 预检本身只读 —— 不过就抛,此时**一个字节都没动**。它挡不住的东西(TOCTOU、写入途中被别的进程
- * 占住、路径某一节是文件)由下面的 `withActions` 如实报告,不假装能防住。
+ * 占住、路径某一节是文件、上面那条 ACL 拒绝)由下面的 `withActions` 如实报告,不假装能防住。
  * @param plan - `{ dirs, anchors, instruction, root }`。
  * @throws 逃逸给 `code: "FPGA_PATH_ESCAPE"`(含真实落点),不可写给 `"FPGA_UNWRITABLE"`。
  */
@@ -175,6 +181,76 @@ function preflight(plan) {
 }
 
 /**
+ * 一个**已存在**的路径是不是"类型不对"(该是目录的却是个文件、该是文件的却是个目录)。
+ *
+ * 为什么要它:落盘那一步用 `existsSync(x)` 判"已存在" —— 它不看类型,于是**同名的另一种东西**
+ * 也算"已经有了",被静默跳过;全跳过之后就打出"骨架已完整,无需改动。" —— 而那个位置根本建不出
+ * 要的东西(与 F-04 同形状的谎报,`<模块根>/rtl` 是个文件时实测踩到)。所以判据必须是**类型**。
+ * @param path - 目标路径。
+ * @param kind - `"directory"`(该是目录)或 `"file"`(该是文件)。
+ * @returns 类型不对时 true;路径不存在时 false;读不出类型(悬空链接之类)按"不对"处理。
+ */
+function typeMismatch(path, kind) {
+  if (!existsSync(path)) return false;
+  try {
+    return kind === "directory" ? !statSync(path).isDirectory() : !statSync(path).isFile();
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * 环节目录的位置被**同名文件**占着时,在动手之前拒绝。
+ *
+ * 为什么必须单独管:见 {@link typeMismatch} —— `existsSync` 判不出类型,会把"这里是个文件"
+ * 当成"目录建好了"跳过,于是报出"骨架已完整"这种谎。零删除:只报告,一个字节都不动。
+ * `--dry-run` 也要过这一关 —— 预演同样不许报"将要建立"/"骨架已完整"。
+ * @param plan - `{ dirs, root }`。
+ * @throws 冲突给 `code: "FPGA_CONFLICT"`(逐个列出占位的路径)。
+ */
+function assertStageDirsAreDirs(plan) {
+  const blocked = plan.dirs.filter((dir) => typeMismatch(dir, "directory"));
+  if (blocked.length === 0) return;
+  const lines = blocked.map((dir) => `  ${dir}(这里是文件,不是目录 —— 环节目录建不出来)`);
+  throw coded(
+    new Error(
+      `拒绝:环节目录的位置被同名文件占着(一个字节都没动):\n${lines.join("\n")}\n` +
+        "把它改名或移到别处再跑 —— 本模式不删用户的文件,不会替你腾位置。"
+    ),
+    "FPGA_CONFLICT"
+  );
+}
+
+/**
+ * 锚点 / 工作区指令的位置**不是文件**时,同样在动手之前拒绝。
+ *
+ * 这是上面那条的姊妹口子(同一次实测里一起查出来的):`main()` 只预读**根锚点**,工程模式下各
+ * 模块的锚点、以及工作区指令都由落盘那一步按"已存在"跳过 —— 位置放的是**目录**时,跳过就成了
+ * 谎报的前提:全部跳过 → 打出"骨架已完整,无需改动。",而那个锚点/规则文件根本没写出来。
+ *
+ * **`--force` 时不拦**:那条路会真的去写,写不动时由 {@link withActions} 如实列出"已经发生的动作"
+ * —— 那正是 F-04 的证据(拿"锚点位置是目录 + `--force`"当夹具),不能改成提前拒绝。
+ * @param plan - `{ anchors, instruction }`。
+ * @param force - 本次是否 `--force`。
+ * @throws 冲突给 `code: "FPGA_CONFLICT"`。
+ */
+function assertFileTargetsAreFiles(plan, force) {
+  if (force === true) return;
+  const targets = plan.anchors.map((anchor) => anchor.file);
+  if (plan.instruction !== undefined) targets.push(plan.instruction);
+  const blocked = targets.filter((file) => typeMismatch(file, "file"));
+  if (blocked.length === 0) return;
+  const lines = blocked.map((file) => `  ${file}(这里是目录,不是文件 —— 锚点 / 规则文件写不出来)`);
+  throw coded(
+    new Error(
+      `拒绝:锚点 / 工作区规则的位置被目录占着(一个字节都没动):\n${lines.join("\n")}\n` +
+        "把它改名或移到别处再跑 —— 本模式不删用户的文件,不会替你腾位置。"
+    ),
+    "FPGA_CONFLICT"
+  );
+}
+
+/**
  * 失败时把**已经发生的动作**挂到错误信息上 —— **如实报告,不做删除式回滚**。
  *
  * 用户定案:插件运行时绝不永久删除,所以失败时不能"把建了一半的东西删掉"来假装没发生;
@@ -205,7 +281,8 @@ function withActions(error, state, root) {
  * 落盘(幂等)。已有目录不重建;已有锚点不覆盖,除非 `force`。
  *
  * 覆盖走 {@link writeFileRecoverable}:旧内容先留同目录 `.bak-<时间戳>` 快照,新内容核验过才替换。
- * 动手之前先过一遍 {@link preflight}(真实路径边界 + 可写性),不过就**在动手之前**拒绝。
+ * 动手之前先过一遍 {@link preflight}(真实路径边界 + 可写性)与 {@link assertStageDirsAreDirs}
+ * (环节目录的位置必须是目录),不过就**在动手之前**拒绝。
  * 预检之后万一仍然失败,**不回滚、也不吞异常**(用户定案:绝不永久删除),而是把**已经发生的动作**
  * 一起抛出去(见 {@link withActions}),由入口原样打印。
  * @param plan - {@link planScaffold} 的结果(带 `root`)。
@@ -215,6 +292,11 @@ function withActions(error, state, root) {
 export function applyScaffold(plan, options = {}) {
   const dryRun = options.dryRun === true;
   const state = { dirs: [], files: [], skipped: [], backups: [] };
+
+  // 先过"位置对不对"这两关(dry-run 也要过):环节目录的位置必须是目录、锚点与规则文件的位置
+  // 必须是文件 —— 被占着时**不写**、也不谎报"骨架已完整"
+  assertStageDirsAreDirs(plan);
+  assertFileTargetsAreFiles(plan, options.force);
 
   try {
     // dry-run 只报告不落盘,所以不预检(预检的意义是"别建到一半才发现写不进去")
@@ -393,8 +475,13 @@ function main() {
   } catch (error) {
     // 失败**不一定是"什么都没发生"**(可能已经建了目录、写了前几个锚点),所以这里不撒"原有文件没动"
     // 的谎、也不做删除式回滚:`已经发生的动作`就在错误信息里(见 withActions),原样打出来。
-    // 退出码按类别分:预检发现逃逸 = 路径边界问题(2),其余落盘失败 = 1。
-    console.error("落盘失败(没有做删除式回滚,已经发生的动作见下):");
+    // 例外是"位置被同名文件占着"(FPGA_CONFLICT):那一条在动手之前就抛了,盘上确实原样 —— 说清即可。
+    // 退出码按类别分:预检发现逃逸 = 路径边界问题(2),其余(不可写 / 位置被占 / 落盘失败)= 1。
+    console.error(
+      error?.code === "FPGA_CONFLICT"
+        ? "预检不过(一个字节都没动,盘上还是原样):"
+        : "落盘失败(没有做删除式回滚,已经发生的动作见下):"
+    );
     console.error(`  ${error instanceof Error ? error.message : String(error)}`);
     return error?.code === "FPGA_PATH_ESCAPE" ? 2 : 1;
   }

@@ -10,14 +10,19 @@
 # 这是**模板**(从 templates/run_synth.tcl 起一份放进模块根,按工程改)。下面几段的
 # "为什么这么写"都是实测踩出来的,别删:
 #   * **预检 `.xci` 的器件**:IP 与工程器件不同族,要到综合时才炸,报错还看不出根因 ——
-#     所以跑综合前先把两边的器件打出来比一遍。
+#     所以跑综合前先把两边的器件打出来比一遍。**器件有两种写法,两种都要认**(见下面
+#     `xci_part`):2025.x 生成的 `.xci` 把器件拆成 DEVICE/PACKAGE/SPEEDGRADE 三段,只认
+#     `part = xc…` 那种整串的话真文件一个都匹配不上 —— 预检会**静默跳过**(实测 9 个真文件)。
+#   * **proc 体内别在注释里写花括号**:注释同样参与括号配对,一个裸花括号就把 proc 拆散,
+#     里面的语句跑到顶层执行,报的错还看不出根因(实测踩过)。
 #   * **失败一律非零退出码**:报 ERROR、出 CRITICAL WARNING、器件不存在、源码缺失,都
 #     不许"看着跑完了"就算过。
 #   * **报告落 `synth/`**;Vivado 工程与中间产物就地落 `synth/vivado_proj/`(可再生的,
 #     别提交),**不得把工程塞进 `rtl/`**。
 #
 # **控制台/日志里的消息一律用英文**:Vivado 的输出按本地代码页落盘,写中文会变乱码,
-# 而下面的判定要读这些行。注释用中文没关系(不会被打印)。
+# 而下面的判定要读这些行。注释写中文没关系 —— 但要知道**注释也会被回显进日志**(实测:中文
+# 在日志里是乱码,不影响执行,只是不好读),所以判定要读的行与关键说明都用英文。
 #
 # 路径全部从当前目录推出来,**不写死任何绝对路径**;也不往工程里拷任何本机配置。
 # ============================================================================ #
@@ -108,17 +113,49 @@ if {[llength $HDL] == 0} {
 
 # ---- 预检 1:`.xci` 里的器件必须与上面那个器件一致 -------------------------- #
 # 为什么要提前查:IP 与器件不同族,要到综合时才炸,而报错看不出根因。
+# 器件的两种写法**都要认** —— 只认一种的话,另一种会被当成"文件里没写器件"而**静默跳过预检**。
+# 实测(2026-09-21,9 个真实 `.xci`,Vivado 2025.2 生成):它们全是下面第 ① 种,旧写法一条都
+# 匹配不上,预检其实一直没跑。所以从 ① 开始试:
+#   ① 2025.x 的 JSON(`xilinx.com:schema:json_instance:1.0`):器件被拆成三个参数 ——
+#      `"DEVICE": [ { "value": "<器件>" } ]`、`"PACKAGE": … "<封装>"`、`"SPEEDGRADE": … "<速度等级>"`
+#      —— 拼起来才是 Vivado 的器件串(拼法就是 `xci_part` 里那句 `"$dev$pkg$spd"`)。
+#   ② 老写法 / XML:某个 part 引用后面直接跟整条器件串(即与上面那个 `set PART` 同形的一串)。
+# 返回 `{器件串 是否完整}`:拿不到速度等级时只拼到封装(那就只能按前缀比,不能因此判成不匹配)。
+proc xci_part {txt} {
+  set dev ""
+  regexp -nocase {"DEVICE"[ \t]*:[ \t]*\[[ \t]*\{[ \t]*"value"[ \t]*:[ \t]*"([^"]+)"} $txt -> dev
+  if {$dev ne ""} {
+    set pkg ""
+    regexp -nocase {"PACKAGE"[ \t]*:[ \t]*\[[ \t]*\{[ \t]*"value"[ \t]*:[ \t]*"([^"]+)"} $txt -> pkg
+    if {$pkg ne ""} {
+      set spd ""
+      # 写法与上面两条**同形**(锚定到 value 键)。别用"排除花括号"那种正则:braced 字符串
+      # 里出现裸花括号会提前结束它 —— 实测:proc 被拆散、里面的语句跑到顶层执行。注意
+      # **注释也一样**:proc 体内的注释同样参与括号配对,所以注释里也不要花括号。
+      regexp -nocase {"SPEEDGRADE"[ \t]*:[ \t]*\[[ \t]*\{[ \t]*"value"[ \t]*:[ \t]*"([^"]*)"} $txt -> spd
+      return [list "$dev$pkg$spd" [expr {$spd ne ""}]]
+    }
+  }
+  if {[regexp -nocase {part[^A-Za-z0-9]{0,8}(xc[a-z0-9]+[a-z0-9\-]*)} $txt -> whole]} {
+    return [list $whole 1]
+  }
+  return [list "" 0]
+}
+
 foreach xci $XCIS {
   set fh [open $xci r]
   set txt [read $fh]
   close $fh
-  # `.xci` 有的版本是 JSON、有的是 XML;两边都是 `xxx_part...` 后面跟器件串,而 Xilinx
-  # 器件串一律以 `xc` 开头 —— 拿它当锚,比按格式解析稳。
-  if {![regexp -nocase {part[^A-Za-z0-9]{0,8}(xc[a-z0-9]+[a-z0-9\-]*)} $txt -> xpart]} {
+  lassign [xci_part $txt] xpart xcomplete
+  if {$xpart eq ""} {
     puts "\[run_synth\] WARN: no part found in $xci -- part check skipped for this file"
     continue
   }
-  if {![string equal -nocase $xpart $PART]} {
+  # 器件串不完整(缺速度等级)时按**前缀**比:比不出来就说比不出来,不据此判成不匹配。
+  set same [expr {$xcomplete
+    ? [string equal -nocase $xpart $PART]
+    : [string equal -nocase -length [string length $xpart] $PART $xpart]}]
+  if {!$same} {
     fail "part mismatch: IP and project target different devices
          xci      : $xci
          xci part : $xpart

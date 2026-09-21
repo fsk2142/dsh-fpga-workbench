@@ -60,6 +60,14 @@ spec/  rtl/  verif/  synth/
 
 **要定下来的**:目标器件与封装。
 
+**器件只写一处(用户口径)**:
+
+- 这个模块如果属于某个工程(工程根下有 `project/spec/spec.md`)→ **器件以工程 spec 为准,这里不重述**:
+  模块 spec 只写一句「器件见工程 spec」,不要抄一份器件串下来 —— 两处迟早不一致,而 RTL 与 IP 都
+  按那个串生成(实测踩过:模块按 xcku3p 综合,IP 却是在 xc7a100t 工程里定制的 → IP 被锁、
+  `module not found`)。`module-report-check.mjs` 会发现两边不一致(警告)。
+- 独立交付的模块(不进任何工程、本身即交付物)→ 在这里定,并写进模块 spec。
+
 **讨论内容**:型号 / 系列 / 封装(FPGA 或 CPLD、7 系列或 UltraScale、Xilinx 或 Altera 等)。
 **器件决定 RTL 的写法** —— 可用原语与 IP、资源估算、时序约束方式、厂商属性与代码风格都随之变化。
 

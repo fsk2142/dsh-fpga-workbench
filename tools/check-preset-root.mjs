@@ -745,6 +745,129 @@ check(
   /rtl\/ip\//u.test(lintText) && /仿真用的文件|仿真模型/u.test(lintText),
   "rtl 技能写明 IP 的归位规则(实体与 .xci → rtl/ip/,仿真模型 → verif/)"
 );
+// IP 的**选型顺序**(用户口径 2026-09-21):能用厂商原语 / XPM 参数化宏表达的就不用 IP 向导生成,
+// 更不在图形界面上点 —— 原语就是 HDL(可读、可 lint、可移植),`.xci` 是界面产物(改不动、跨版本
+// 搬不走,还多一个"器件不同族到综合才炸"的坑)。顺序是"自己写 → 原语/XPM → 确实没有等价原语才引 IP",
+// 所以优先那档与例外那档都要钉住,免得被改成"一律不许用 IP"或退回"随便点一个 IP"。
+check(
+  /原语/u.test(lintText) && /XPM|参数化宏/u.test(lintText),
+  "rtl 技能的 IP 选型顺序里点出厂商原语与 XPM 参数化宏"
+);
+check(
+  /优先[\s\S]{0,40}(原语|XPM)/u.test(lintText) &&
+    /(不用|减少|避免|不许)[\s\S]{0,30}(IP 向导|图形界面|界面)/u.test(lintText),
+  "rtl 技能写明:能用原语 / XPM 就不用 IP 向导,不在图形界面上点"
+);
+check(
+  /没有等价原语/u.test(lintText) && /硬核/u.test(lintText),
+  "rtl 技能写明例外:确实没有等价原语的(硬核 / 复杂协议)才用厂商 IP(不是一律禁用)"
+);
+// 工程级 IP 策略也要同一口径,但不另立一套:指回 rtl 技能那节(同"判定词指向唯一状态表"的做法)
+check(
+  /XPM|原语/u.test(projectSpec) && /fpga-module-rtl/u.test(projectSpec),
+  "工程级 IP 策略写明同一口径,并把判据指回 rtl 技能那节"
+);
+// 生成 IP 那一步也要把器件钉住(**根因**,不只靠事后预检):2026-09-21 实测 `create_ip` **不接受**
+// `-part`(Vivado 2025.2 报 Unknown option),器件来自**工程的 part** —— 所以技能必须写明"先
+// create_project -part <spec 里的器件>",以及"IP 生成后器件写死在 .xci 里,换器件要重新 generate_target"。
+check(
+  /create_ip[\s\S]{0,200}?不接受[\s\S]{0,80}?-part/u.test(lintText) &&
+    /create_project[\s\S]{0,60}-part[\s\S]{0,60}spec/u.test(lintText),
+  "rtl 技能写明:create_ip 不接受 -part(器件是工程的 part,来自 spec)"
+);
+check(
+  /generate_target/u.test(lintText) &&
+    /(换器件|改器件)[\s\S]{0,60}(重新|重跑)[\s\S]{0,30}generate_target/u.test(lintText),
+  "rtl 技能写明换器件必须重新生成 IP(器件写死在 .xci 里)"
+);
+// IP 时序卡:作者**实际在用**的约定(2026-09-21 照他工程里 rtl/ip/<ip>/{timing.json,README.md,
+// probe_*.*,*_stub.v} 的样子落进技能)—— 每个 IP 目录一张卡,写**实测**出来的时序前提;只认测到的。
+check(
+  /timing\.json/u.test(lintText) && /rtl\/ip\//u.test(lintText) && /实测/u.test(lintText),
+  "rtl 技能写明 IP 时序卡(rtl/ip/<ip>/timing.json,只写实测到的)"
+);
+check(
+  /timing\.json/u.test(checkRtlText) && /IP 卡/u.test(checkRtlText),
+  "module-rtl-check 检查每个 rtl/ip/<ip>/ 的 timing.json(缺卡/解析不了 → 警告)"
+);
+// 端口方向与类型(用户 2026-09-21 定):input wire / output logic / inout tri;内部信号 logic,
+// 只有"实例之间的连接网"用 wire;函数 / 任务形参不受限。断言钉在"方向 + 类型 + 例外"三件一起。
+check(
+  /input\*\*[\s\S]{0,40}wire/u.test(lintText) && /output\*\*[\s\S]{0,40}logic/u.test(lintText),
+  "rtl 技能写明:模块 input 用 wire、output 用 logic"
+);
+check(
+  /内部信号\*\*[\s\S]{0,30}logic/u.test(lintText) && /实例与实例之间的连接网/u.test(lintText),
+  "rtl 技能写明:内部信号用 logic,只有实例之间的连接网用 wire"
+);
+check(
+  /函数 \/ 任务的形参不受/u.test(lintText),
+  "rtl 技能写明例外:函数 / 任务的形参不按端口类型判"
+);
+// 字面量(用户 2026-09-21 定):禁止 `'0` 这种不带宽度的填充写法;都要写 `N'基值`;
+// 信号类统一 `'b`、数据类统一 `'h`。机械检查只查"带没带宽度与基"。
+check(
+  /禁止 `'0`/u.test(lintText) && /信号类[\s\S]{0,40}`'b`/u.test(lintText) && /数据类[\s\S]{0,40}`'h`/u.test(lintText),
+  "rtl 技能写明字面量口径:禁止 `'0`;信号类用 `'b`、数据类用 `'h`"
+);
+check(
+  /只查"带没带"宽度与基|判不了这个信号是数据类还是信号类/u.test(lintText),
+  "rtl 技能写明:机械检查只查有没有带宽度与基(数据/信号靠读代码判)"
+);
+// 信号名后缀口径(用户 2026-09-21 定,后一条把 `_q` 去掉):`_r` 寄存后的值 / `_d` 数据类 —— 只这两种,
+// 不许自己另造(`_reg`/`_ff`/`_next` 之类)。断言钉在"后缀 + 含义 + 例子"三件一起,而不是挑关键词 ——
+// 否则注释里出现过这几个词就能把断言喂饱(这类教训本仓库已经踩过)。
+check(
+  /`_r`[\s\S]{0,80}寄存后的值/u.test(lintText) && /tvalid_r|tlast_r/u.test(lintText),
+  "rtl 技能写明 `_r` = 寄存后的值(带 `tvalid_r` / `tlast_r` 这种例子)"
+);
+check(
+  /`_d`[\s\S]{0,60}数据类/u.test(lintText) && /tdata_d|crc_d/u.test(lintText),
+  "rtl 技能写明 `_d` = 数据类(带 `tdata_d` / `crc_d` 这种例子)"
+);
+// `_q` 与 `_r` 功能重复,按用户口径去掉:新代码不再用,已有代码不动 —— 断言钉住"写明了不再用"
+check(
+  /`_q`[\s\S]{0,80}(不再用|不用)/u.test(lintText) && /`_r`/u.test(lintText),
+  "rtl 技能写明 `_q` 新代码不再用、统一写 `_r`(与 `_r` 功能重复)"
+);
+check(
+  /别自己另造后缀/u.test(lintText) && /_reg/u.test(lintText) && /_ff/u.test(lintText),
+  "rtl 技能写明:别自己另造后缀(`_reg` / `_ff` / `_next` 这类)"
+);
+// XPM 的**仿真侧**要跟上:上面那几条把大家推向 XPM,那 verif 技能就得说清 `-L xpm`,
+// 以及"先用 modelsim.ini 里已编好的那份、别重编;真不行才拿原厂源码自编"——
+// 否则照着"优先 XPM"改完 RTL,第一次跑仿真就撞上未定义,而技能里只有 unisims 那一档。
+const verifText = readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8");
+check(
+  /xpm/u.test(verifText) && /-L xpm/u.test(verifText),
+  "verif 技能写明 XPM 仿真要 -L xpm(与 unisims 那档同一套做法)"
+);
+check(
+  /(别重编|不要重编|不重编)/u.test(verifText) &&
+    /原厂源码|data\/ip\/xpm|compile_simlib/u.test(verifText) &&
+    /退路/u.test(verifText),
+  "verif 技能写明:先用已编好的那份,原厂源码自编只是退路(不是首选动作)"
+);
+// 测试平台里写死的延迟/复位拍数必须来自 IP 卡(否则仿真与 RTL 一起错、而仿真还是绿的)
+check(
+  /timing\.json/u.test(verifText) && /(延迟|拍数)/u.test(verifText),
+  "verif 技能写明:测试平台里的延迟/拍数照 IP 卡来,不凭印象"
+);
+// 证据路径校验(用户认可的"AC 证据位置"那件):verif 技能要求在写 PASS 前跑它,review 技能把它
+// 收进审查清单 —— 少了它,"报告指着已退役 IP / 还没生成的文件"就没人管。
+check(
+  /module-report-check\.mjs/u.test(verifText) && /只验路径存在/u.test(verifText),
+  "verif 技能写明:写 PASS 前跑 module-report-check(只验证据路径存在,不判内容)"
+);
+check(
+  /摘要/u.test(verifText) && /--record/u.test(verifText),
+  "verif 技能写明:检查也看「依据的摘要变没变」,以及 --record 怎么记"
+);
+const reviewText = readFileSync(join(skillDir, "fpga-module-review", "SKILL.md"), "utf8");
+check(
+  /module-report-check\.mjs/u.test(reviewText),
+  "review 技能把证据路径校验收进审查清单"
+);
 // 一个文件写不下就拆子模块(用户 2026-09-19 指出原来缺这条):要写明**什么时候拆**
 // (一个文件写不完整块逻辑就拆),而且**判据是功能、不是代码行数**(用户当场点明),
 // 以及要用现成的子模块时先问用户"他提供还是本环节写" —— 与 IP 那条同一套问法。

@@ -17,6 +17,7 @@
 // 用法:
 //   node module-rtl-check.mjs [<模块目录>] [--json]
 // 模块目录默认当前目录;扫 <模块>/rtl 下的 .v/.sv,并顺带检查 <模块>/verif/tb_*.sv。
+// 另外查 `rtl/ip/<ip>/timing.json`(IP 时序卡)在不在、能不能解析 —— 那是**警告**(见 ipCardEntries)。
 // 退出码:0 全部通过(可以只有警告) / 1 有 FAIL / 2 用法或环境错误。
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -49,7 +50,72 @@ const SKIP_DIRS = new Set([
  *     "这模块过了"这个结论本身就不成立。
  * 端口对齐这条规则现在**不存在**(文件里没有),存在的是「端口类型」;哪天加了,按同一判据并进这里。
  */
-const WARN_ONLY = new Set(["Tab 字符", "代码行非英文", "行尾混用", "!= 待确认", "端口类型"]);
+const WARN_ONLY = new Set(["Tab 字符", "代码行非英文", "行尾混用", "!= 待确认", "端口类型", "IP 卡", "字面量写法", "内部 wire"]);
+
+/**
+ * 端口方向与类型的搭配(用户口径 2026-09-21):input 必须 wire、output 必须 logic、inout 必须 tri。
+ *
+ * 为什么只查**模块端口**:函数 / 任务的形参写成 `input logic x` 是正常的(那是变量)—— 所以按
+ * `function` / `task` 到 `endfunction` / `endtask` 之间跳过(实测踩过:模板里的
+ * `function automatic logic saturate (input logic …)` 会被这条误报)。
+ */
+const PORT_TYPE = /^\s*(input|output|inout)\s+(wire|logic|reg|tri)\b/u;
+
+/** 无宽度的填充写法(`'0` / `'1` / `'x` / `'z`)—— 用户禁止:宽度对不上时是把隐患藏起来。 */
+const FILL_LITERAL = /'[01xz]\b/iu;
+
+/**
+ * 基前没写宽度(`'b0` / `'hFF`)。
+ *
+ * 前面**不能是**标识符字符或 `)`:那样是"用常量表达式当宽度"(`1'b0`、`WIDTH'hFF`、`(W)'d0`),
+ * 合法写法,不该报(实测你代码里有 `1'b0` 这种,共 223 处)。
+ */
+const WIDTHLESS_BASE = /(?<![\w)\]])'[bhdox]/iu;
+
+
+/**
+ * `rtl/ip/` 下每个 IP 目录的时序卡(见 `fpga-module-rtl` 的「IP 时序卡」)。
+ *
+ * 卡是"给人看的前提"(实测出来的读/写延迟、复位占用拍、配置、探针),**缺了不拦门禁** ——
+ * 所以它是警告;但它必须被看见:换实现/换器件时读的正是这张卡(实测踩过:FIFO 从厂商 IP 换成
+ * XPM 宏,读延迟从 k+2 变 k+1,输出对齐器会少一拍)。只认 `timing.json` 这个名字。
+ * @param ipDir - `<模块根>/rtl/ip`。
+ * @returns 每个 IP 目录一条检查结果(形状与 {@link checkFile} 的文件项一致,便于一起打印)。
+ */
+function ipCardEntries(ipDir) {
+  let names;
+  try {
+    names = readdirSync(ipDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return names
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name)
+    .sort()
+    .map((name) => {
+      const shown = `rtl/ip/${name}/timing.json`;
+      const card = join(ipDir, name, "timing.json");
+      const warn = (message) => ({ file: shown, issues: [{ rule: "IP 卡", line: 0, message }] });
+      if (!existsSync(card)) {
+        return warn(`rtl/ip/${name}/ 下没有 timing.json —— 这个 IP 的时序前提(读/写延迟、复位占用拍、配置)没有实测记录;测一份再往下走(格式见 fpga-module-rtl 的「IP 时序卡」)`);
+      }
+      try {
+        const parsed = JSON.parse(readFileSync(card, "utf8"));
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return warn("timing.json 的顶层要是一个对象(键值对);数组/标量读不出前提,等于没有卡");
+        }
+        // 卡里必须有这四栏 —— 缺哪一栏,这张卡就说不清"它是什么 / 什么时候测的 / 怎么复核 / 什么配置"(见 fpga-module-rtl)
+        const missingFields = ["card", "measured", "probe", "config"].filter((key) => !(key in parsed));
+        if (missingFields.length > 0) {
+          return warn(`timing.json 缺栏目:${missingFields.join("、")} —— card(这是什么)/ measured(哪天测的)/ probe(拿什么测的)/ config(什么配置)都要有,否则别人没法复核`);
+        }
+      } catch (error) {
+        return warn(`timing.json 解析不了(${String(error?.message ?? error)}) —— 卡读不出来等于没有卡`);
+      }
+      return { file: shown, issues: [] };
+    });
+}
 
 /** 断言说明的必填字段:每一处断言各写一遍。 */
 const ASSERT_FIELDS = ["Purpose", "Trigger", "Failure"];
@@ -162,9 +228,30 @@ export function checkFile(file, isTestbench) {
     add("编译隔离", lines.length, "结尾没有把 `default_nettype 收回来(通常 `default_nettype wire)");
   }
 
+  // 实例端口的连接网(`.port(net)` 里的 net):内部 wire 只有出现在这里才算"连接网"
+  const connectedNets = new Set([...raw.matchAll(/\.\w+\s*\(\s*(\w+)\s*\)/gu)].map((match) => match[1]));
+  /** 内部声明的 wire:`name -> 行号`(后面判它是不是连接网)。 */
+  const declaredWires = new Map();
+  /** 函数 / 任务体内(那里面 `input logic` 是变量,不按端口判)。 */
+  let inSubprogram = false;
+
   for (const [index, line] of lines.entries()) {
     const number = index + 1;
     const stripped = line.trim();
+
+    // 进出函数 / 任务(端口类型那条要在外面)
+    if (/^\s*(function|task)\b/u.test(line)) inSubprogram = true;
+    if (/^\s*(endfunction|endtask)\b/u.test(line)) inSubprogram = false;
+
+    // 内部 wire 声明(多名字声明 `wire a, b;` 都收)
+    const wireDecl = /^\s*wire\b([^;]*)/u.exec(codeOf(line));
+    if (wireDecl !== null && !inSubprogram) {
+      const body = wireDecl[1].replace(/\[[^\]]*\]/gu, " ");
+      for (const part of body.split(",")) {
+        const name = /(\w+)\s*$/u.exec(part.trim())?.[1];
+        if (name !== undefined && !declaredWires.has(name)) declaredWires.set(name, number);
+      }
+    }
 
     // ── Tab(警告) ──
     if (line.includes("\t")) add("Tab 字符", number, "出现 Tab,用空格");
@@ -176,12 +263,29 @@ export function checkFile(file, isTestbench) {
       if (bad.length > 0) add("代码行非英文", number, `代码里出现非英文字符:${bad.join("")}`);
     }
 
-    // ── 端口类型要显式(input wire / output logic / inout tri;reg 视为显式) ──
+    // ── 端口类型:要写全,而且要写对(input wire / output logic / inout tri) ──
     // 纯写法问题,只警告(见 WARN_ONLY):照报,但不拦门禁 —— 它错了不会让"这模块过没过"的结论错。
-    const port = /^\s*(input|output|inout)\s+(?!wire\b|logic\b|tri\b|reg\b)(\w+)/u.exec(line);
-    if (port !== null && !["parameter", "localparam", "genvar"].includes(port[2])) {
-      const want = port[1] === "input" ? "wire" : port[1] === "output" ? "logic" : "tri";
-      add("端口类型", number, `端口类型要写全:${port[1]} ${port[2]} → ${port[1]} ${want}`);
+    // 函数 / 任务的形参不在其内(那里的 `input logic x` 是变量)。
+    if (!inSubprogram) {
+      const port = /^\s*(input|output|inout)\s+(?!wire\b|logic\b|tri\b|reg\b)(\w+)/u.exec(line);
+      const want = (direction) => (direction === "input" ? "wire" : direction === "output" ? "logic" : "tri");
+      if (port !== null && !["parameter", "localparam", "genvar"].includes(port[2])) {
+        add("端口类型", number, `端口类型要写全:${port[1]} ${port[2]} → ${port[1]} ${want(port[1])}`);
+      } else {
+        const typed = PORT_TYPE.exec(line);
+        if (typed !== null && typed[2] !== want(typed[1])) {
+          add("端口类型", number, `端口方向与类型不搭:${typed[1]} ${typed[2]} → ${typed[1]} ${want(typed[1])}`);
+        }
+      }
+    }
+
+    // ── 字面量写法(用户口径):禁止无宽度填充;基前必须带宽度 ──
+    const code = codeOnly(line);
+    const fill = FILL_LITERAL.exec(code);
+    if (fill !== null) {
+      add("字面量写法", number, `禁止「${fill[0]}」这种无宽度填充写法:把宽度与基写全(信号类 → \`N'b…\`,数据类 → \`N'h…\`)`);
+    } else if (WIDTHLESS_BASE.test(code)) {
+      add("字面量写法", number, "字面量没带宽度:写成 `N'b…` / `N'h…`(`1'b0` 这种)");
     }
 
     // ── always_ff 只用 posedge ──
@@ -200,20 +304,28 @@ export function checkFile(file, isTestbench) {
     // `X != y` 在全 X 时求值为 X,`if (X)` 为假 → 一条错都不报(实测的静默漏检)。客观事实:
     // SystemVerilog 的 `!==` 才是四态精确比较(`!=` 结果未知时返回 1)。
     //
-    // 取舍:只有同一行里出现**期望值命名**的信号(`_exp` / `exp_` / `expected` / `_gold` /
-    // `gold_` / `_ref` / `ref_` / `reference`)才判 FAIL —— 那基本就是数据比对;其余的 `!=`
-    // (例如 `while (i != 0)` 这类循环/计数条件)只报警告:不能为了不漏掉数据比对,把循环条件
-    // 也一起拦死(误报一次,人就再也不信这个检查器)。期望值命名按标识符逐个比对,不拿整行匹配
-    // (整行匹配会被 `expected` 所在的别处代码带偏)。
+    // 取舍:只有**两侧都是信号**的 `!=` 才算数据比对(`dut_data != exp_data` 这种),且至少要有一侧
+    // 是**期望值命名**(`_exp` / `exp_` / `expected` / `_gold` / `_ref` / `reference`)才判 FAIL;
+    // 其余的 `!=` 只报警告:不能为了不漏掉数据比对,把循环/计数条件也一起拦死(误报一次,人就再也不
+    // 信这个检查器)。
+    //
+    // **两侧都要是信号**这条是 2026-09-21 补的(实测踩到):原来只要"整行里出现过 exp_ 命名的标识符"
+    // 就判 FAIL,于是 `if (exp_pixel_idx != 0 && …)` 这种**计数/索引比常量**被当成数据比对拦住了 ——
+    // 而那正是上面那句"循环/计数条件可以保留"要放过的。现在按"操作符紧邻的两个操作数"判:
+    // `X != 0`、`(expr % W) != (W-1)` 这类一侧是常量/表达式的,一律只提醒。
     if (isTestbench && line.includes("!=")) {
       const operands = codeOnly(line);
-      if (/(?<![=!])!=(?!=)/u.test(operands)) {
-        const expectedSide = (operands.match(/[A-Za-z_]\w*/gu) ?? []).some((name) => EXPECTED_SIGNAL.test(name));
+      const pair = /([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*(?<![=!])!=(?!=)\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)/u.exec(operands);
+      if (pair !== null) {
+        const expectedSide = EXPECTED_SIGNAL.test(pair[1]) || EXPECTED_SIGNAL.test(pair[2]);
         if (expectedSide) {
           add("数据比对", number, "数据比对用了 '!='(全 X 时 X != y 求值为 X,if (X) 为假 → 一条错都不报):改用 '!=='");
         } else {
           add("!= 待确认", number, "这一行有 '!=':确认是数据比对就改 '!=='(否则全 X 会漏检);循环/计数条件可以保留");
         }
+      } else if (/(?<![=!])!=(?!=)/u.test(operands)) {
+        // 一侧是常量 / 表达式(计数与索引的常见形状):不判 FAIL,但要提醒一句
+        add("!= 待确认", number, "这一行有 '!=':确认是数据比对就改 '!=='(否则全 X 会漏检);循环/计数条件可以保留");
       }
     }
 
@@ -310,6 +422,22 @@ export function checkFile(file, isTestbench) {
     }
   }
 
+  // ── 内部 wire:只该用于**实例与实例之间的连接网**(用户口径 2026-09-21) ──
+  // 判据(保守,只挑"明确不是连接网"的):内部声明的 wire,如果整个文件里**除声明外还在用**、
+  // 却**从没出现在任何 `.port(net)` 连接里**,那它不是连接网 —— 该用 logic。
+  // 声明了但没再用到的**不报**(那是"没用上",不是类型问题;混进来就变成噪音)。
+  for (const [name, line] of declaredWires) {
+    if (connectedNets.has(name)) continue;
+    const uses = (raw.match(new RegExp(`\\b${name}\\b`, "gu")) ?? []).length;
+    if (uses > 1) {
+      add(
+        "内部 wire",
+        line,
+        `内部 signal '${name}' 用了 wire,但它没有出现在任何实例端口连接里 —— 内部信号用 logic;wire 只留给实例之间的连接网`
+      );
+    }
+  }
+
   return issues;
 }
 
@@ -363,10 +491,14 @@ function main() {
     console.log(`注意:verif/ 下有 ${uncheckedTb.length} 个 VHDL 测试平台(${uncheckedTb.join("、")}),本检查器未检查。`);
   }
 
-  const report = targets.map(([file, isTb]) => ({
-    file: relative(moduleRoot, file).split(sep).join("/"),
-    issues: checkFile(file, isTb)
-  }));
+  const report = [
+    ...targets.map(([file, isTb]) => ({
+      file: relative(moduleRoot, file).split(sep).join("/"),
+      issues: checkFile(file, isTb)
+    })),
+    // IP 时序卡:与文件项同形一起打印(见 ipCardEntries)
+    ...ipCardEntries(join(rtlDir, "ip"))
+  ];
   const failures = report.flatMap((entry) => entry.issues.filter(isFailure));
   const warnings = report.flatMap((entry) => entry.issues.filter((issue) => !isFailure(issue)));
 

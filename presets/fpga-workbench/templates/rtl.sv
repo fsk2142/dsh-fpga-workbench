@@ -36,15 +36,6 @@ module <ModuleName> # (
                 localparam int unsigned                             ADDR_W  =   $clog2(DEPTH);
 
 //==================================================================================//
-//    Registers                                                                     //
-//==================================================================================//
-// TODO: replace with module-specific registers / internal signals
-                logic   [ADDR_W-1:0]                                rd_ptr_q;
-                logic   [ADDR_W-1:0]                                wr_ptr_q;
-                logic   [PIXEL_W-1:0]                               din_q;
-                state_t                                             state_q;
-
-//==================================================================================//
 //    Types                                                                         //
 //==================================================================================//
 // TODO: replace with module-specific typedef / FSM states
@@ -55,10 +46,19 @@ module <ModuleName> # (
                 } state_t;
 
 //==================================================================================//
+//    Registers                                                                     //
+//==================================================================================//
+// TODO: replace with module-specific registers / internal signals
+                logic   [ADDR_W-1:0]                                rd_ptr_r;
+                logic   [ADDR_W-1:0]                                wr_ptr_r;
+                logic   [PIXEL_W-1:0]                               din_d;
+                state_t                                             state_r;
+
+//==================================================================================//
 //    Combinational Logic                                                           //
 //==================================================================================//
 // TODO: replace with module-specific combinational logic
-assign din_q = din;
+assign din_d = din;
 
 always_comb begin
     // next-state / data-path muxes go here
@@ -70,18 +70,18 @@ end
 // TODO: replace with module-specific FSM / datapath registers
 always_ff @( posedge clk ) begin
     if (rst) begin
-        state_q <= ST_IDLE;
+        state_r <= ST_IDLE;
     end else begin
-        // state_q <= ...;
+        // state_r <= ...;
     end
 end
 
 always_ff @( posedge clk ) begin
     if (rst) begin
-        rd_ptr_q <= '{ADDR_W{1'b0}};
-        wr_ptr_q <= '{ADDR_W{1'b0}};
+        rd_ptr_r <= '{ADDR_W{1'b0}};
+        wr_ptr_r <= '{ADDR_W{1'b0}};
     end else begin
-        // state_q <= ...;
+        // state_r <= ...;
     end
 end
 
@@ -119,13 +119,13 @@ endtask
 // Use placeholder name 'sub_<role>' (role = functional role of the submodule);
 // instantiate by need (1..N copies with u0_/u1_/... prefix per house style).
 // Example shape (uncomment + rename + fill port map):
-
-sub_<role>                                            u0_sub_<role> (
-    .clk                                                            ( clk   ),
-    .rst                                                            ( rst   ),
-    .din                                                            ( din   ),
-    .dout                                                           ( dout  )
-    );
+//
+// sub_<role>                                          u0_sub_<role> (
+//     .clk                                                            ( clk   ),
+//     .rst                                                            ( rst   ),
+//     .din                                                            ( din   ),
+//     .dout                                                           ( dout  )
+//     );
 
 //==================================================================================//
 //    Assertions                                                                    //
@@ -143,7 +143,7 @@ assert property (@( posedge clk ) rst |-> rst)
 // Trigger : every posedge clk.
 // Failure : $error if both pointers equal while full flag asserted.
 // SVA template (uncomment + adapt; do NOT keep in production without review):
-// @( posedge clk ) disable iff (rst) (wr_full |-> wr_ptr_q != rd_ptr_q)
+// @( posedge clk ) disable iff (rst) (wr_full |-> wr_ptr_r != rd_ptr_r)
 
 endmodule
 

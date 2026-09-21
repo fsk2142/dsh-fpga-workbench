@@ -12,17 +12,18 @@
 // 只 import lib/toolchain.js:它只用 node 内置模块,而 lib/index.js 要 schemastery,
 // 后者只在 profile 的 node_modules 里,从仓库 import 会解析失败。
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   FIELDS,
   NS,
   TEMP_GRACE_MS,
   DETECT_TARGETS,
-  EXPECTED_PWSH_VERSION,
+  CLEANUP_KINDS,
   TEMPLATE_FIELDS,
   TOOLS,
   backupChangedFiles,
+  cleanupEntry,
   describeEnv,
   detectTools,
   inspectTools,
@@ -32,6 +33,8 @@ import {
   listEmptySkillDirs,
   listFiles,
   listTempLeftovers,
+  newlyReportedCleanup,
+  nextReportedCleanup,
   presetFileDiff,
   presetSyncNeeded,
   probeFilesystem,
@@ -85,8 +88,8 @@ const REQUIRED_FIELDS = FIELDS.filter((field) => field.required === true);
 const CHOICE_FIELDS = VISIBLE.filter((field) => field.control === "select");
 const OPTIONAL_FIELDS = FIELDS.filter((field) => field.required !== true);
 const HIDDEN_FIELDS = FIELDS.filter((field) => field.control === "hidden");
-check(KEYS.length === 22, `字段共 22 个:19 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
-check(VISIBLE.length === 19, `可见字段 19 个(实际 ${VISIBLE.length})`);
+check(KEYS.length === 20, `字段共 20 个:17 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
+check(VISIBLE.length === 17, `可见字段 17 个(实际 ${VISIBLE.length})`);
 check(
   HIDDEN_FIELDS.map((field) => field.key).join(",") === "verilatorPath,modelsimPath,vivadoPath",
   "三个改名前的旧键作为隐藏字段保留(迁移用)"
@@ -118,17 +121,17 @@ check(
   "可选字段不报'会跳过什么'(它缺了并不跳过任何环节)"
 );
 const GROUPS = [...new Set(VISIBLE.map((field) => field.group))];
-check(GROUPS.length === 7, `可见的分组恰好七个(实际 ${GROUPS.join("、")})`);
+check(GROUPS.length === 6, `可见的分组恰好六个(实际 ${GROUPS.join("、")})`);
 check(
-  GROUPS.join(",") === "终端工具,脚本工具,编译工具,仿真工具,综合工具,库映射,模板",
-  `分组按重要性排:终端 → 脚本 → 编译 → 仿真 → 综合 → 库映射 → 模板(实际 ${GROUPS.join(" → ")})`
+  GROUPS.join(",") === "脚本工具,编译工具,仿真工具,综合工具,库映射,模板",
+  `分组按重要性排:脚本 → 编译 → 仿真 → 综合 → 库映射 → 模板(实际 ${GROUPS.join(" → ")})`
 );
 // 每个工具组里:先"用哪个",紧跟它的路径 —— 这是用户要的排列
 const ORDER = VISIBLE.map((field) => field.key);
 for (const [choice, path] of [["compiler", "compilerPath"], ["simulator", "simulatorPath"], ["synthesizer", "synthesizerPath"]]) {
   check(ORDER.indexOf(path) === ORDER.indexOf(choice) + 1, `${choice} 后面紧跟 ${path}`);
 }
-check(CHOICE_FIELDS.length === 7, `七个下拉:三类工具 + 终端 + 脚本 + RTL 语言 + 仿真语言(实际 ${CHOICE_FIELDS.length})`);
+check(CHOICE_FIELDS.length === 6, `六个下拉:三类工具 + 脚本 + RTL 语言 + 仿真语言(实际 ${CHOICE_FIELDS.length})`);
 check(
   CHOICE_FIELDS.every((field) => {
     const options = field.options ?? [];
@@ -171,7 +174,7 @@ check(
 
 // ── 存在性判定 ──────────────────────────────────────────────────────────────
 const empty = inspectTools({}, probeWith([]));
-check(empty.length === 22, "空设置也返回全部字段");
+check(empty.length === 20, "空设置也返回全部字段");
 check(
   empty.filter((tool) => tool.control !== "select").every((tool) => tool.configured === false && tool.present === false),
   "空设置下所有路径字段都未配置且不可用"
@@ -435,7 +438,7 @@ check(
   "提示里写明产物落点(各归各环节目录)"
 );
 check(readyText.includes("where"), "提示里写明权威来源,不让 agent 去 PATH 猜");
-// 可选项里"配了就该让 agent 看见"的三个(两个运行时 + 库映射文件):它们不在 required 里,
+// 可选项里"配了就该让 agent 看见"的两个(Python 3 + 库映射文件):它们不在 required 里,
 // 以前一个字都不提 —— 用户配好、也验证过存在,agent 却只能用 PATH 猜(实测反馈)。
 // 反向也要成立:没配或探不到的一律不出现(可选字段永不制造门禁)。
 check(
@@ -443,76 +446,57 @@ check(
   "提示里带上一小段可选项:库映射文件(配了就能用)"
 );
 const optionalText = describeEnv(
-  { ...prepared, pwshPath: "C:\\p\\pwsh.exe", pythonPath: "C:\\y\\python.exe" },
-  probeWith([...Object.values(prepared), "C:\\p\\pwsh.exe", "C:\\y\\python.exe"])
+  { ...prepared, pythonPath: "C:\\y\\python.exe" },
+  probeWith([...Object.values(prepared), "C:\\y\\python.exe"])
 );
-check(
-  optionalText.includes("C:\\p\\pwsh.exe") && optionalText.includes("C:\\y\\python.exe"),
-  "提示里带上 PowerShell 7 与 Python 3 的路径(配了就该用得上)"
-);
+check(optionalText.includes("C:\\y\\python.exe"), "提示里带上 Python 3 的路径(配了就该用得上)");
 // 诚实标注(R-03):这条路径只喂会话提示 —— **宿主终端是不是真的用它,插件管不到**。
 // 写成"已就绪"会让人以为已经强制绑定,那是假承诺。设置页说明与会话提示都要有这句。
-const pwshField = FIELDS.find((field) => field.key === "pwshPath");
 const pythonField = FIELDS.find((field) => field.key === "pythonPath");
 check(
-  String(pwshField?.hint ?? "").includes("不由本插件保证") && String(pwshField?.hint ?? "").includes(EXPECTED_PWSH_VERSION),
-  `设置页说明诚实标注:宿主终端是否真的用它「不由本插件保证」,并写明按 ${EXPECTED_PWSH_VERSION} 校验`,
-  String(pwshField?.hint)
-);
-check(
   String(pythonField?.hint ?? "").includes("不由本插件保证") && String(pythonField?.hint ?? "").includes("只如实报出版本"),
-  "python 那条路径同样标注:只如实报版本、宿主是否真的用它不保证",
+  "python 那条路径标注:只如实报版本、宿主是否真的用它不保证",
   String(pythonField?.hint)
 );
 check(
-  optionalText.includes("不由本插件保证") && optionalText.includes(EXPECTED_PWSH_VERSION),
+  optionalText.includes("不由本插件保证"),
   "会话提示里对运行时路径同样标注:只喂提示、宿主是否真的用它不保证",
   optionalText.split("\n").filter((line) => line.includes("不由本插件保证")).join("\n")
 );
 // 反过来:不许出现"已经强制绑定"的口气(做不到就如实说做不到)
 check(
-  !/运行时路径[^。]{0,20}已强制绑定|已绑定宿主终端/u.test(optionalText + String(pwshField?.hint ?? "")),
+  !/运行时路径[^。]{0,20}已强制绑定|已绑定宿主终端/u.test(optionalText + String(pythonField?.hint ?? "")),
   "不宣称已经强制绑定宿主终端(没这个能力就不许这么写)"
 );
-const optionalMissing = describeEnv({ ...prepared, pwshPath: "C:\\p\\pwsh.exe" }, probeWith(Object.values(prepared)));
+const optionalMissing = describeEnv({ ...prepared, pythonPath: "C:\\y\\python.exe" }, probeWith(Object.values(prepared)));
 check(
-  !optionalMissing.includes("C:\\p\\pwsh.exe") && optionalMissing.includes(prepared.modelsimIniPath),
+  !optionalMissing.includes("C:\\y\\python.exe") && optionalMissing.includes(prepared.modelsimIniPath),
   "填了但探不到的运行时不出现在提示里(可选字段不报未就绪、也不当可用)"
 );
 
-// ── F-05:版本是执行约束的字段,状态里必须带上**要求版本** ────────────────────────
+// ── 终端那一组字段已删(用户定案 2026-09-21):不许再冒出"填了也不生效"的终端设置 ─────
 //
-// 状态路由只探文件在不在(它不起进程,见 lib/toolchain.js 的长注释),所以"版本对不对"它答不了。
-// 但要求本身必须跟着状态发出去 —— 否则消费方只能拿"文件在"冒充"版本达标":手填一个 7.4.2 的
-// pwshPath,状态那一行说"已就绪"、旁边那行检测结论说"版本不匹配",同屏自相矛盾,用户不知道信谁。
-// 设置页那句"已就绪"的降级渲染在 check-load-contract.mjs 里行为验证(那里能真跑渲染)。
-// statusOf 用的是真实文件系统探测,所以这里填一个**本机一定存在**的文件(node 自己的可执行文件),
-// 只为让 present 真的是 true —— 要验的是"文件在 + 带版本要求"这两件事一起出现。
-const pwshStatus = statusOf({ pwshPath: process.execPath }).tools.find((tool) => tool.key === "pwshPath");
+// 为什么删:终端用哪个 pwsh 由宿主的 shell 执行器自己定(dsh-pwsh-local 只认它自己的 `shell`
+// 设置段,见 FIELDS 顶上的注),本插件设置页里填的路径**喂不到那儿去** —— 原来那两个字段
+// (pwsh 下拉 / PowerShell 7 路径)只影响会话提示一行字,外加一条"版本够不够"的告警。这里钉住
+// 三件事,免得哪天又被加回来(它牵着字段表、检测表、状态载荷与会话提示四处):
+//   · 字段表与检测表里都不再有终端项;
+//   · 会话提示里不再出现那个 7.6.6 版本要求;
+//   · 状态载荷里也没有 versionExpected —— 那套"版本够不够"的判定随字段一起删了,不留死分支。
 check(
-  pwshStatus?.versionExpected === EXPECTED_PWSH_VERSION && pwshStatus?.present === true,
-  `状态载荷带上版本要求(pwshPath → ${EXPECTED_PWSH_VERSION}),文件在照样如实报 present`,
-  JSON.stringify(pwshStatus)
+  !FIELDS.some((field) => field.key === "pwshPath" || field.key === "pwsh")
+    && !DETECT_TARGETS.some((target) => target.field === "pwshPath"),
+  "终端那一组字段与它的检测项都已删除(设置页不再有填了也不生效的项)"
+);
+const settledPrompt = describeEnv(prepared, probeWith(Object.values(prepared)));
+check(
+  !settledPrompt.includes("版本未核验") && !settledPrompt.includes("7.6.6"),
+  "会话提示里不再出现「版本未核验 / 7.6.6」(那个版本要求随字段一起删了)",
+  settledPrompt.split("\n").filter((line) => line.includes("版本") || line.includes("7.6.6")).join("\n")
 );
 check(
-  statusOf({}).tools.filter((tool) => tool.versionExpected !== undefined).length === 1,
-  "只有版本敏感的那一个字段带要求版本(别的字段没有版本约束,不该凭空多一个标记)"
-);
-// 反向:python 只如实报版本、本模式对它没有统一要求 —— 状态里带上要求就变成假门禁了
-check(
-  statusOf({ pythonPath: "C:\\y\\python.exe" }).tools.find((tool) => tool.key === "pythonPath")?.versionExpected === undefined,
-  "python 没有版本要求,状态里不带 versionExpected(带了就是拿要求冒充约束)"
-);
-// 只探文件的那条路同样不许把"文件在"读成版本达标(会话提示里由宿主写清"未核验 + 要求几")
-const versionPrompt = describeEnv(
-  { ...prepared, pwshPath: "C:\\p\\pwsh.exe" },
-  probeWith([...Object.values(prepared), "C:\\p\\pwsh.exe"])
-);
-check(
-  versionPrompt.includes("版本未核验") && versionPrompt.includes(EXPECTED_PWSH_VERSION) &&
-    !/PowerShell 7[^\n]*已就绪/u.test(versionPrompt),
-  "会话提示对版本敏感的路径写出「版本未核验 + 本模式要求 X」,不说成已就绪",
-  versionPrompt.split("\n").filter((line) => line.includes("版本未核验") || line.includes("PowerShell 7")).join("\n")
+  statusOf({}).tools.every((tool) => !("versionExpected" in tool)),
+  "状态载荷里已经没有 versionExpected 这个键(判定能力随字段一起删掉,不留死分支)"
 );
 const pythonOnlyPrompt = describeEnv(
   { ...prepared, pythonPath: "C:\\y\\python.exe" },
@@ -613,18 +597,6 @@ check(
   "检测:XSim 报的是 bin 目录(那个字段本来就是目录,不是 xvlog.bat)"
 );
 
-const pwshHit = detectTools(
-  detectProbe(["C:\\PF\\PowerShell\\7\\pwsh.exe"]),
-  listStub({ "C:\\PF\\PowerShell": ["7"] }),
-  fakeEnv
-);
-check(
-  pwshHit.some(
-    (hit) => hit.field === "pwshPath" && hit.path === "C:\\PF\\PowerShell\\7\\pwsh.exe" && hit.option === "pwsh"
-  ),
-  "检测:PowerShell 7 按 %ProgramFiles% 展开找到(带选项标记,好让设置页按「不用」筛)"
-);
-
 const pythonHit = detectTools(
   detectProbe(["C:\\PF\\Python314\\python.exe"]),
   listStub({ "C:\\PF": ["Python314"] }),
@@ -637,83 +609,55 @@ check(
 
 // ── 版本查询:检测路径上**唯一**允许起进程的地方(R-03) ──────────────────────
 //
-// 用户口径:本机统一 PowerShell 7.6.6 —— 那是**执行约束**,所以"文件在不在"不够;
-// 但"只看文件"挡不住 5.1 与别的 7.x,用户明确不要静默接受。三种情形(匹配 / 不匹配 /
-// 命令跑不起来)都必须有交代,而且检测不能被它拖垮、也不能为别的工具起进程。
-const pwshFilePath = "C:\\PF\\PowerShell\\7\\pwsh.exe";
-const pwshEnv = { ProgramFiles: "C:\\PF", LocalAppData: "C:\\LA", PATH: "" };
-const pwshList = listStub({ "C:\\PF\\PowerShell": ["7"] });
+// 它是只读的:起一次进程、把版本号打印出来。断言的是**只报实测、不做判定** —— 本模式现在不把
+// 任何版本当硬要求(带 `expected` 的那套判定随终端字段一起删了,见 FIELDS 顶上的注),所以这一节
+// 没有"匹配 / 不匹配"可言,只有"报出来了 / 报不出来"两种交代;而且检测不能被它拖垮。
+const pyFilePath = "C:\\PF\\Python314\\python.exe";
+const pyEnv = { ProgramFiles: "C:\\PF", LocalAppData: "C:\\LA", PATH: "" };
+const pyList = listStub({ "C:\\PF": ["Python314"] });
 const versionSpy = (calls, result) => (path) => {
   calls.push(path);
   return result;
 };
-const pwshHitOf = (hits) => hits.find((hit) => hit.field === "pwshPath");
+const pyHitOf = (hits) => hits.find((hit) => hit.field === "pythonPath");
 
-const matchCalls = [];
-const pwshMatch = pwshHitOf(detectTools(detectProbe([pwshFilePath]), pwshList, pwshEnv, versionSpy(matchCalls, { version: "7.6.6" })));
+const versionCalls = [];
+const pyVersion = pyHitOf(detectTools(detectProbe([pyFilePath]), pyList, pyEnv, versionSpy(versionCalls, { version: "3.14.0" })));
 check(
-  pwshMatch?.version === "7.6.6" && pwshMatch?.versionOk === true,
-  `版本匹配 ${EXPECTED_PWSH_VERSION} → 报出实际版本并判为匹配`,
-  JSON.stringify(pwshMatch)
+  pyVersion?.version === "3.14.0" && !("versionOk" in pyVersion) && !("versionExpected" in pyVersion),
+  "版本如实报出来,载荷里不带任何「够不够」的判定键(本模式没有硬要求)",
+  JSON.stringify(pyVersion)
 );
-check(pwshMatch?.versionNote?.includes("7.6.6"), "匹配时也把版本写进给人的那句提示里", String(pwshMatch?.versionNote));
+check(pyVersion?.versionNote?.includes("3.14.0"), "实测版本也写进给人的那句提示里", String(pyVersion?.versionNote));
 check(
-  matchCalls.length === 1 && matchCalls[0] === pwshFilePath,
-  `只对该候选起一次版本查询(实际 ${matchCalls.length} 次)且查的是它本身`
-);
-
-const mismatchCalls = [];
-const pwshMismatch = pwshHitOf(detectTools(detectProbe([pwshFilePath]), pwshList, pwshEnv, versionSpy(mismatchCalls, { version: "7.4.2" })));
-check(
-  pwshMismatch?.version === "7.4.2" && pwshMismatch?.versionOk === false,
-  "版本不匹配 → 如实报出实际版本并判为不匹配(5.1 或别的 7.x 都不得静默接受)",
-  JSON.stringify(pwshMismatch)
-);
-check(
-  pwshMismatch?.versionNote?.includes("7.4.2") && pwshMismatch?.versionNote?.includes(EXPECTED_PWSH_VERSION),
-  "不匹配时那句提示里同时给出实际版本与要求版本",
-  String(pwshMismatch?.versionNote)
-);
-check(
-  /不匹配/u.test(String(pwshMismatch?.versionNote)) && !/符合本模式/u.test(String(pwshMismatch?.versionNote)),
-  "不匹配时不得说成「符合/通过」(否则用户以为已经达标)",
-  String(pwshMismatch?.versionNote)
+  versionCalls.length === 1 && versionCalls[0] === pyFilePath,
+  `只对该候选起一次版本查询(实际 ${versionCalls.length} 次)且查的是它本身`
 );
 
 const brokenCalls = [];
-const pwshBroken = pwshHitOf(detectTools(detectProbe([pwshFilePath]), pwshList, pwshEnv, versionSpy(brokenCalls, { error: "ENOENT" })));
+const pyBroken = pyHitOf(detectTools(detectProbe([pyFilePath]), pyList, pyEnv, versionSpy(brokenCalls, { error: "ENOENT" })));
 check(
-  pwshBroken?.version === undefined && pwshBroken?.versionOk === false && String(pwshBroken?.versionError).includes("ENOENT"),
-  "命令跑不起来 → 如实报 error、不猜版本,也不当作匹配",
-  JSON.stringify(pwshBroken)
+  pyBroken?.version === undefined && String(pyBroken?.versionError).includes("ENOENT"),
+  "命令跑不起来 → 如实报 error、不猜版本,也不当成报出来了",
+  JSON.stringify(pyBroken)
 );
-check(pwshBroken?.versionNote?.includes("查不出来"), "跑不起来时提示里说清「查不出来」(不是留空让人以为没问题)");
+check(pyBroken?.versionNote?.includes("查不出来"), "跑不起来时提示里说清「查不出来」(不是留空让人以为没问题)");
 // 桩抛异常也不能让整次检测崩:检测是"点一下就出结论"的只读动作
-const pwshThrew = pwshHitOf(
-  detectTools(detectProbe([pwshFilePath]), pwshList, pwshEnv, () => {
+const pyThrew = pyHitOf(
+  detectTools(detectProbe([pyFilePath]), pyList, pyEnv, () => {
     throw new Error("boom");
   })
 );
-check(pwshThrew?.versionOk === false && pwshThrew?.path === pwshFilePath, "版本查询抛异常 → 按「查不出来」处理,其余候选照常返回");
-
-// python 只如实报版本:没有统一约束就不做判定(有判定就会变成假门禁)
-const pyVersion = detectTools(
-  detectProbe(["C:\\PF\\Python314\\python.exe"]),
-  listStub({ "C:\\PF": ["Python314"] }),
-  fakeEnv,
-  versionSpy([], { version: "3.14.0" })
-).find((hit) => hit.field === "pythonPath");
 check(
-  pyVersion?.version === "3.14.0" && pyVersion?.versionExpected === undefined && pyVersion?.versionOk === undefined,
-  "python 只如实报版本,不做匹配判定(本模式对它没有统一版本要求)",
-  JSON.stringify(pyVersion)
+  pyThrew?.path === pyFilePath && pyThrew?.version === undefined,
+  "版本查询抛异常 → 按「查不出来」处理,其余候选照常返回"
 );
 
 // 别的工具(仿真器/综合器/编译器)一次进程都不许起
 const otherCalls = [];
 detectTools(detectProbe(["C:\\modeltech64_2020.4\\win64\\vsim.exe"]), listStub({ "C:\\": ["modeltech64_2020.4"] }), fakeEnv, versionSpy(otherCalls, { version: "x" }));
 detectTools(detectProbe(["C:\\altera\\13.0sp1\\quartus\\bin64\\quartus_sh.exe"]), listStub({ "C:\\": ["altera"], "C:\\altera": ["13.0sp1"] }), fakeEnv, versionSpy(otherCalls, { version: "x" }));
-check(otherCalls.length === 0, `非 pwsh/python 的候选不查版本(实际起了 ${otherCalls.length} 次进程)`);
+check(otherCalls.length === 0, `不带 version 的候选不查版本(实际起了 ${otherCalls.length} 次进程)`);
 
 // queryVersion 本身也得真能起进程 —— 桩只能证明接线对。拿 node 当被测程序(测试时它一定在),
 // 失败那条用一个不存在的路径(确定性,不依赖任何已装工具)。
@@ -757,20 +701,20 @@ check(
   timedOut.version === undefined && /ETIMEDOUT/u.test(String(timedOut.error)),
   `查询超时 → 当"查不出"(实际 ${JSON.stringify(timedOut)})`
 );
-// 本机真跑一次整条路(默认探针 + 真实版本查询)。断言的是"结论与报出的版本自洽",
-// 不钉死这台机器的版本 —— 换台机器跑不该红,但两台机器都不许出现"没版本还判匹配"。
-const realPwsh = detectTools().find((hit) => hit.field === "pwshPath");
-if (realPwsh === undefined) {
-  console.log("      本机没检测到 pwsh.exe,跳过真实版本核对");
+// 本机真跑一次整条路(默认探针 + 真实版本查询)。断言的是"报出的东西与版本字段自洽":
+// 只报了版本、或只报了错,不许两者都空;也不钉死这台机器的版本(换台机器跑不该红)。
+const realPython = detectTools().find((hit) => hit.field === "pythonPath");
+if (realPython === undefined) {
+  console.log("      本机没检测到 python.exe,跳过真实版本核对");
 } else {
-  console.log(`      本机 pwsh:${realPwsh.path} → ${String(realPwsh.version ?? realPwsh.versionError)}`);
+  console.log(`      本机 python:${realPython.path} → ${String(realPython.version ?? realPython.versionError)}`);
   check(
-    realPwsh.versionOk === (realPwsh.version === EXPECTED_PWSH_VERSION),
-    `本机 pwsh 的匹配结论与实际版本自洽(实际 ${String(realPwsh.version ?? "查不出")} / 要求 ${EXPECTED_PWSH_VERSION})`
+    typeof realPython.version === "string" || typeof realPython.versionError === "string",
+    "真实检测里 python 要么报出版本、要么报出错误(不允许两者都空)"
   );
   check(
-    typeof realPwsh.version === "string" || typeof realPwsh.versionError === "string",
-    "真实检测里 pwsh 要么报出版本、要么报出错误(不允许两者都空)"
+    !("versionOk" in realPython) && !("versionExpected" in realPython),
+    "真实载荷里也没有「够不够」的判定键(只报实测)"
   );
 }
 
@@ -780,7 +724,6 @@ for (const [selectKey, pathKey] of [
   ["compiler", "compilerPath"],
   ["simulator", "simulatorPath"],
   ["synthesizer", "synthesizerPath"],
-  ["pwsh", "pwshPath"],
   ["python", "pythonPath"]
 ]) {
   const options = FIELDS.find((field) => field.key === selectKey)?.options ?? [];
@@ -991,6 +934,38 @@ check(
   /pendingCleanup/u.test(hostSource),
   "宿主侧用 pendingCleanup 报告待清理(源码级;零删除由本文件末尾的静态守卫把住)"
 );
+check(
+  /reportPendingCleanup\(ctx, pendingCleanup, join\(home, BACKUP_DIR, CLEANUP_REPORTED_FILE\)\)/u.test(hostSource) &&
+    /CLEANUP_REPORTED_FILE/u.test(hostSource),
+  "宿主把「已提示过」的记录文件路径传进去(同一批只提示一次要靠它持久化;源码级)"
+);
+
+// ── 待清理清单:同一批只提示一次(用户定案 2026-09-21)─────────────────────────
+//
+// 这些东西我们永远不会删,同一条反复提示就是每天一次的噪音。判据两半:
+//   · 新出现的才提示;已提示过的(仍在清单里)不再提示 → 提醒只喊一次;
+//   · "已提示过"的记录按**这次的清单**重写(剪掉已消失的路径)→ 同名空壳将来重现时还会提示。
+const cleanupNow = [
+  cleanupEntry("emptyDir", "C:\\home\\skills\\gone"),
+  cleanupEntry("stale", "C:\\home\\skills\\old\\SKILL.md")
+];
+const freshOnly = newlyReportedCleanup(cleanupNow, ["C:\\home\\skills\\gone"]);
+check(
+  freshOnly.length === 1 && freshOnly[0].path.endsWith("SKILL.md"),
+  `已经提示过的条目不再重复提示,只报新出现的(实际 ${freshOnly.map((e) => e.path).join("、") || "无"})`
+);
+check(newlyReportedCleanup(cleanupNow, []).length === 2, "第一次(没有记录)时全部提示");
+check(newlyReportedCleanup([], ["C:\\x"]).length === 0, "没有待清理项时什么都不提示");
+check(
+  nextReportedCleanup([...cleanupNow, cleanupEntry("temp", "C:\\tmp\\a.tmp")]).length === 3 &&
+    nextReportedCleanup([cleanupNow[0]]).join(",") === "C:\\home\\skills\\gone",
+  "记录按这次的清单重写(消失的路径被剪掉;同一路径将来重现时还会提示)"
+);
+// 文案:空目录那条要把"可能是谁的"说清 —— 不然用户会以为一定是插件留下的
+check(
+  /空技能目录/u.test(CLEANUP_KINDS.emptyDir) && /也可能是你自己建/u.test(CLEANUP_KINDS.emptyDir),
+  "「空技能目录」的说明写清它可能是谁的(插件删/改名技能的壳,或你自己建的空目录)"
+);
 
 // 用户自己往预设目录里放的东西(不在 skills/ 下的普通文件)**不参与"要不要同步"的判定** ——
 // 否则两棵树永远不一致,每次启动都重同步、重备份一遍(实测就是这么攒出一堆无用备份的)。
@@ -1049,7 +1024,12 @@ check(
 // 归属靠**前缀**确认(那是我们这次运行自己建的名字):前缀不命中 → 不列、不碰;
 // 没有前缀 = 没有归属依据 → 连列都不列(空数组)。宽限期内的标成 pending:false
 // (那可能是并行那次正在用的 fixture);读不到时间的按待清理列出并写明原因。
-const sweepRoot = join(TMP_ROOT, `sweep-check-${RUN_ID}`);
+// 目录名必须**每次运行都是新的**(所以带时间戳,不能只带 PID):这一节依赖"目录刚建出来"
+// —— `ours-young` 靠 mtime 落在宽限期内、`ours-dangling` 要现建一个 junction。而 `.tmp/` 里的
+// fixture 按用户定案**不删除**,PID 会被系统回收:第二次撞上同一个 PID 时,`mkdirSync` 落在旧目录上
+// (mtime 是旧的、junction 已存在),这三条断言就红(实测:2026-09-21 一次 `test:installed` 就这么红的)。
+// 上面 backup-check / stale-check / prune-skills 已经带了时间戳,同一原因。
+const sweepRoot = join(TMP_ROOT, `sweep-check-${RUN_ID}-${String(Date.now())}`);
 mkdirSync(join(sweepRoot, "keep-me"), { recursive: true });
 mkdirSync(join(sweepRoot, "ours-1"), { recursive: true });
 mkdirSync(join(sweepRoot, "ours-young"), { recursive: true });
@@ -1109,6 +1089,14 @@ check(
   bundled.filter((template) => !template.present).map((template) => template.path).join(", ")
 );
 check(bundled.every((template) => template.source === "bundled"), "没填模板路径时用自带那份");
+// 自带模板给的必须是**绝对路径**,而且解析基准是插件包自身(`import.meta.url`),不是当前工作目录
+// (用户口径 2026-09-21:模块按功能分组、挂在任意深度时模板仍要能引用)。相对路径会随 CWD 变,
+// 也就会随"从哪个目录跑命令"变 —— 那正是要挡掉的:命令里的 `--template <这份路径>` 必须直接可用。
+check(
+  bundled.every((template) => isAbsolute(template.path)),
+  "自带模板给的是绝对路径(--template 直接可用,与 CWD / 模块根无关)",
+  bundled.map((template) => template.path).join(" | ")
+);
 
 // 三个模板字段各自独立:填哪个用哪个,互不影响
 const USER_RTL = "C:\\my-templates\\rtl.sv";

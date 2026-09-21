@@ -644,6 +644,29 @@ check(
 const neqLoopCode = run("module-rtl-check.mjs", [neqLoopMod]);
 check(neqLoopCode === 0, `循环条件的 '!=' 只报警告 → 退出码 0(不拦门禁;实际 ${neqLoopCode})`);
 
+// ②b 两侧都要是**信号**才算数据比对(2026-09-21 实测踩到):`exp_pixel_idx != 0` 这种
+//     "计数/索引比常量"原来被当成数据比对拦死,与"循环/计数条件可以保留"的口径冲突。
+const neqConstMod = join(SANDBOX, "neq-const-mod");
+mkdirSync(join(neqConstMod, "rtl"), { recursive: true });
+mkdirSync(join(neqConstMod, "verif"), { recursive: true });
+const neqConstPath = join(neqConstMod, "verif", "tb_neq_const.sv");
+writeFileSync(neqConstPath, goodTb
+  .replace("module tb_good;", "module tb_neq_const;")
+  .replace(
+    "        if (err_cnt == 0)",
+    "        if (exp_pixel_idx != 0 && (exp_pixel_idx % C_IMG_W) != (C_IMG_W - 1)) err_cnt = err_cnt + 1;\n        if (err_cnt == 0)"
+  ));
+check(
+  !blocking(neqConstPath, true).some((issue) => issue.rule === "数据比对"),
+  "期望值命名的**计数/索引**比常量(`exp_pixel_idx != 0`)不算数据比对(不判 FAIL)"
+);
+check(
+  blocking(neqConstPath, true).some((issue) => issue.rule === "!= 待确认"),
+  "但那两处 '!=' 仍会提醒一句(不是静默放过)"
+);
+const neqConstCode = run("module-rtl-check.mjs", [neqConstMod]);
+check(neqConstCode === 0, `计数/索引比常量只报警告 → 退出码 0(实际 ${neqConstCode})`);
+
 // ③ 成功标记必须与 err_cnt 挂钩:无条件打印的 ALL TESTS PASSED 只是字形
 //    (控制头与打印之间夹一行说明也是同一条语句 —— 自带模板就是这种分行写法)
 const tbMarker = (verdict) => [
@@ -695,6 +718,20 @@ check(
   "module-rtl-new 按模板起文件 → 退出码 0"
 );
 check(existsSync(join(newFileRoot, "rtl", "uart_rx.sv")), "RTL 落在 rtl/ 下");
+// 模块根可以放在**任意深度**(用户口径 2026-09-21:按功能分组,别被固定的类别目录限制)。
+// 模板引用与模块路径无关 —— `--template` 拿的是设置里那份或插件包自带那份的**绝对路径**
+// (解析基准是插件包自身,不是 CWD):所以多层、带空格都照落,不需要为此改任何东西。
+const deepMod = join(SANDBOX, `deep-${stamp}`, "功能组 甲", "uart_rx");
+check(
+  run("module-rtl-new.mjs", [deepMod, "UartRx", "--template", join(TEMPLATES, "rtl.sv")]) === 0
+    && existsSync(join(deepMod, "rtl", "UartRx.sv")),
+  "多层 + 带空格的模块根照样落对(模板引用与模块路径、当前目录无关)"
+);
+check(
+  run("module-verif-new.mjs", [deepMod, "UartRx", "--template", join(TEMPLATES, "tb.sv")]) === 0
+    && existsSync(join(deepMod, "verif", "tb_uart_rx.sv")),
+  "同一个深层模块根:测试平台也落在它自己的 verif/ 下"
+);
 check(
   run("module-rtl-check.mjs", [newFileRoot]) === 0,
   "模板生成的文件直接过机械检查(骨架开箱合规)"
@@ -767,6 +804,16 @@ const runStderr = (script, args) => {
   closeSync(fd);
   return { code, output: readFileSync(log, "utf8") };
 };
+// 同一个道理,但收 **stdout** —— 检查器把正常结论(ok / warn / PASS)写在 stdout,只有用法错误与
+// 落盘失败走 stderr。用 runStderr 去读一条警告会什么都读不到(实测踩过:断言像在测空气)。
+const runStdout = (script, args) => {
+  const path = existsSync(join(MODULE_TOOLS, script)) ? join(MODULE_TOOLS, script) : join(TOOLS, script);
+  const log = join(SANDBOX, `stdout-${script}-${String(Date.now())}.log`);
+  const fd = openSync(log, "w");
+  const code = spawnSync(process.execPath, [path, ...args], { stdio: ["ignore", fd, "ignore"] }).status;
+  closeSync(fd);
+  return { code, output: readFileSync(log, "utf8") };
+};
 const dirTargetMod = join(SANDBOX, `backup-dir-${stamp}`);
 const dirTarget = join(dirTargetMod, "verif", "run.do");
 mkdirSync(dirTarget, { recursive: true });
@@ -798,6 +845,26 @@ check(
 // 来源,换器件时必漏。现在起脚本时从 spec/spec.md 读出来填。夹具器件**故意与自带模板里那个
 // 不同**:填没填上,一眼分得出来。
 const bundledRunSynth = readFileSync(join(TEMPLATES, "run_synth.tcl"), "utf8");
+// 器件预检**必须同时认两种写法**(2026-09-21 实测:9 个真实 `.xci` 全是 Vivado 2025.x 的 JSON,
+// 器件被拆成 DEVICE / PACKAGE / SPEEDGRADE 三段,只有老的 `part = xc…` 整串正则 → 一条都匹配不上,
+// 预检于是打了 WARN 就跳过 = 从来没真跑过)。行为已用真 Vivado 复核(见 run_synth.tcl 头注)。
+// 断言钉在**真的 regexp 命令行**上,不是钉在模板文本里出现过这几个词 —— 否则上面那段解释性
+// 注释就能把断言喂饱(这么写的第一版就被注释蒙过去了,咬人验证时才发现)。
+check(
+  /proc xci_part/u.test(bundledRunSynth) &&
+    /regexp[^\n]*"DEVICE"/u.test(bundledRunSynth) &&
+    /regexp[^\n]*"PACKAGE"/u.test(bundledRunSynth) &&
+    /regexp[^\n]*"SPEEDGRADE"/u.test(bundledRunSynth),
+  "run_synth.tcl 的器件预检真的去读 2025.x JSON 三段(DEVICE / PACKAGE / SPEEDGRADE)"
+);
+check(
+  /regexp[^\n]*part\[\^A-Za-z0-9\]/u.test(bundledRunSynth),
+  "run_synth.tcl 仍保留老写法(整条器件串)作退路(两种写法都要认)"
+);
+check(
+  !/\[\^\}\]\*\?/u.test(bundledRunSynth),
+  "run_synth.tcl 里没有「排除花括号」那种正则(裸花括号会把 braced 字符串提前关掉,实测把 proc 拆散)"
+);
 const specMod = join(SANDBOX, `spec-mod-${stamp}`);
 mkdirSync(join(specMod, "spec"), { recursive: true });
 const specFile = join(specMod, "spec", "spec.md");
@@ -1146,6 +1213,322 @@ check(
   roFail.output.slice(-300)
 );
 check(!existsSync(join(roRoot, "verif")), "预检不过时一个环节目录都没建(真正提前失败)");
+
+// ── 环节目录的位置被**同名文件**占着时,不许当"目录已存在"跳过 ────────────────────
+//
+// 复现:落盘那一步原来用 `existsSync(dir)` 判"已存在" —— 一个**同名文件**也算,于是被当成"目录建好了"
+// 跳过;全跳过之后就打出"骨架已完整,无需改动。",可 `rtl/` 根本建不出目录、下游技能写不进去
+// (与 F-04 同形状的谎报)。现在必须:退 1、指名道姓说哪个位置不是目录、一个环节目录都不建、
+// 用户那个同名文件原样不动(零删除)。`--dry-run` 也走同一关,不许预演成"将要建立"。
+const stageFileRoot = join(SANDBOX, `stage-is-file-${stamp}`);
+mkdirSync(stageFileRoot, { recursive: true });
+const stageFile = join(stageFileRoot, "rtl");
+writeFileSync(stageFile, "这里是个文件,不是目录\n");
+const stageDry = runStderr("setup-scaffold.mjs", [stageFileRoot, "--dry-run"]);
+check(
+  stageDry.code === 1 && !stageDry.output.includes("骨架已完整") && !stageDry.output.includes("将要建立"),
+  `--dry-run 也不把"位置是文件"预演成"将要建立"/"骨架已完整"(退出码 ${String(stageDry.code)})`,
+  stageDry.output.slice(-300)
+);
+const stageFail = runStderr("setup-scaffold.mjs", [stageFileRoot]);
+check(stageFail.code === 1, `环节目录的位置被同名文件占着 → 退出码 1(实际 ${String(stageFail.code)})`);
+check(
+  !stageFail.output.includes("骨架已完整") && stageFail.output.includes(stageFile),
+  "不谎报「骨架已完整」,并指名道姓给出那个位置",
+  stageFail.output.slice(-300)
+);
+check(
+  !existsSync(join(stageFileRoot, "spec")) && !existsSync(join(stageFileRoot, "verif")),
+  "拒绝时一个环节目录都没建(没动用户的盘)"
+);
+check(!existsSync(join(stageFileRoot, ".fpga-workbench.json")), "锚点也没写(拒绝发生在任何落盘之前)");
+check(
+  !existsSync(join(stageFileRoot, INSTRUCTION_FILE)) && readFileSync(stageFile, "utf8").includes("这里是个文件"),
+  `拒绝时连工作区指令都没落(零删除:用户那个同名文件原样没动,${INSTRUCTION_FILE} 也没落)`
+);
+
+// ── 姊妹口子:锚点 / 规则文件的**位置是目录**、又没给 --force ─────────────────────
+//
+// 上面那关卡的是"环节目录的位置是文件";这一关卡的是反过来的那一半:`main()` 只预读**根锚点**,
+// 工程模式下各模块的锚点、以及工作区指令,都由落盘那一步按"已存在"跳过 —— 位置放的是**目录**时,
+// "跳过"就成了谎报的前提:全部"已存在"→ 打出"骨架已完整,无需改动。",可锚点/规则文件根本没写出来。
+// 两条都要:退出码 1、点名那个位置、用户那个目录原样不动(零删除)。
+const anchorDirRoot = join(SANDBOX, `anchor-is-dir-${stamp}`);
+mkdirSync(join(anchorDirRoot, "uart", ".fpga-workbench.json", "inner"), { recursive: true });
+writeFileSync(join(anchorDirRoot, "uart", ".fpga-workbench.json", "inner", "keep.txt"), "keep\n");
+const anchorDir1 = runStderr("setup-scaffold.mjs", [anchorDirRoot, "--kind", "project", "--modules", "uart"]);
+const anchorDir2 = runStderr("setup-scaffold.mjs", [anchorDirRoot, "--kind", "project", "--modules", "uart"]);
+check(
+  anchorDir1.code === 1 && anchorDir2.code === 1,
+  `模块锚点位置是目录(不给 --force)→ 两次都退 1(实际 ${String(anchorDir1.code)} / ${String(anchorDir2.code)})`
+);
+check(
+  !anchorDir1.output.includes("骨架已完整") && !anchorDir2.output.includes("骨架已完整") &&
+    anchorDir2.output.includes(join(anchorDirRoot, "uart", ".fpga-workbench.json")),
+  "第二次全「已存在」时也不谎报「骨架已完整」,并点名那个位置",
+  anchorDir2.output.slice(-300)
+);
+check(
+  !existsSync(join(anchorDirRoot, "project")) && !existsSync(join(anchorDirRoot, "uart", "rtl")),
+  "拒绝发生在任何落盘之前(工程与模块的环节目录都没建)"
+);
+check(
+  readFileSync(join(anchorDirRoot, "uart", ".fpga-workbench.json", "inner", "keep.txt"), "utf8").includes("keep"),
+  "用户那个目录连同里面的东西原样没动(零删除)"
+);
+
+const rulesDirRoot = join(SANDBOX, `rules-is-dir-${stamp}`);
+mkdirSync(join(rulesDirRoot, "spec", "explore"), { recursive: true });
+for (const stage of ["rtl", "verif", "synth"]) mkdirSync(join(rulesDirRoot, stage), { recursive: true });
+writeFileSync(join(rulesDirRoot, ".fpga-workbench.json"), '{"kind":"module","spec":"spec/spec.md"}\n');
+mkdirSync(join(rulesDirRoot, INSTRUCTION_FILE), { recursive: true });
+writeFileSync(join(rulesDirRoot, INSTRUCTION_FILE, "keep.txt"), "keep\n");
+const rulesDir = runStderr("setup-scaffold.mjs", [rulesDirRoot]);
+check(rulesDir.code === 1, `工作区规则的位置是目录 → 退出码 1(实际 ${String(rulesDir.code)})`);
+check(
+  !rulesDir.output.includes("骨架已完整") && rulesDir.output.includes(join(rulesDirRoot, INSTRUCTION_FILE)),
+  `骨架齐了但规则文件写不出来时,不谎报「骨架已完整」(${INSTRUCTION_FILE} 的位置被点名)`,
+  rulesDir.output.slice(-300)
+);
+check(
+  readFileSync(join(rulesDirRoot, INSTRUCTION_FILE, "keep.txt"), "utf8").includes("keep"),
+  "用户那个目录原样没动(零删除)"
+);
+
+// ── IP 时序卡:rtl/ip/<ip>/timing.json 缺了 / 读不出来 → 警告(不拦门禁) ─────────
+//
+// 约定来自用户工程里的实际做法(2026-09-21):每个 IP 目录一张卡,写**实测**出来的时序前提。
+// 卡是给人看的前提,缺了不该拦住 lint(所以是警告);但它必须被看见 —— 换实现时读的正是它。
+const ipCardRoot = join(SANDBOX, `ip-card-${stamp}`);
+mkdirSync(join(ipCardRoot, "rtl", "ip", "xpm_fifo_sync"), { recursive: true });
+writeFileSync(join(ipCardRoot, "rtl", "good.sv"), goodRtl);
+const noCard = runStdout("module-rtl-check.mjs", [ipCardRoot]);
+check(
+  noCard.code === 0 && noCard.output.includes("rtl/ip/xpm_fifo_sync/timing.json") &&
+    noCard.output.includes("没有 timing.json"),
+  `IP 目录没有 timing.json → 警告但不拦门禁(退出码 ${String(noCard.code)})`,
+  noCard.output.slice(-400)
+);
+writeFileSync(
+  join(ipCardRoot, "rtl", "ip", "xpm_fifo_sync", "timing.json"),
+  `${JSON.stringify({ card: "xpm_fifo_sync @ probe", measured: "2026-09-21", probe: "rtl/ip/xpm_fifo_sync/probe.sv", config: { READ_MODE: "std" } }, null, 2)}\n`
+);
+const withCard = runStdout("module-rtl-check.mjs", [ipCardRoot]);
+check(
+  withCard.code === 0 && !withCard.output.includes("没有 timing.json") && !withCard.output.includes("缺栏目"),
+  "补上完整的 timing.json(四栏齐全)后那条警告消失(卡在就放行)"
+);
+writeFileSync(
+  join(ipCardRoot, "rtl", "ip", "xpm_fifo_sync", "timing.json"),
+  `${JSON.stringify({ card: "xpm_fifo_sync", config: {} }, null, 2)}\n`
+);
+const partialCard = runStdout("module-rtl-check.mjs", [ipCardRoot]);
+check(
+  partialCard.code === 0 && /缺栏目:measured、probe/u.test(partialCard.output),
+  "timing.json 少了 measured / probe → 警告点出缺哪栏(卡片要能复核)",
+  partialCard.output.slice(-300)
+);
+writeFileSync(join(ipCardRoot, "rtl", "ip", "xpm_fifo_sync", "timing.json"), '{ broken json\n');
+const badCard = runStdout("module-rtl-check.mjs", [ipCardRoot]);
+check(
+  badCard.code === 0 && badCard.output.includes("解析不了"),
+  "timing.json 解析不了 → 一样报警告(读不出来的卡等于没有卡)",
+  badCard.output.slice(-300)
+);
+// 直接放一个**文件**在 rtl/ip/ 下时不受这条影响:只有"一个 IP 一个目录"才要求卡
+writeFileSync(join(ipCardRoot, "rtl", "ip", "vendor_models.sv"), "// foreign model\n");
+const withLoose = runStdout("module-rtl-check.mjs", [ipCardRoot]);
+check(
+  withLoose.code === 0 && !withLoose.output.includes("vendor_models.sv/timing.json"),
+  "rtl/ip/ 下的普通文件不当成 IP 目录(不误报)"
+);
+
+// ── 端口类型 / 字面量 / 内部 wire:用户口径(2026-09-21)───────────────────────
+//
+// 三条都是**警告**(写法类,不拦门禁),但都要真的报出来;而且要躲开三个已知的误报来源:
+//   ① 函数 / 任务的形参写 `input logic x` 是正常的;
+//   ② `1'b0` 这种"带宽度"的写法不许报(实测你代码里 223 处);
+//   ③ 声明了但没用到的 wire 不算"内部 wire 用错"(那是没用上)。
+const nameRuleFile = join(SANDBOX, `style-${stamp}.sv`);
+const nameRuleIssues = (body) => {
+  writeFileSync(nameRuleFile, ["`resetall", "`default_nettype none", "module m (", body, ");", "endmodule", "`default_nettype wire", ""].join("\n"));
+  return checkFile(nameRuleFile, false).map((issue) => `${issue.rule}|${issue.message}`);
+};
+const hasIssue = (issues, pattern) => issues.some((line) => pattern.test(line));
+check(
+  hasIssue(nameRuleIssues("    input logic  clk"), /端口类型\|端口方向与类型不搭:input logic → input wire/u),
+  "input 用了 logic → 端口类型警告(提示改成 wire)"
+);
+check(
+  hasIssue(nameRuleIssues("    output wire dout"), /端口类型\|端口方向与类型不搭:output wire → output logic/u),
+  "output 用了 wire → 端口类型警告(提示改成 logic)"
+);
+check(
+  !hasIssue(nameRuleIssues(["    input wire clk,", "    output logic dout"].join("\n")),
+    /端口类型\|端口方向与类型不搭/u
+  ),
+  "规范写法(input wire / output logic)不报"
+);
+check(
+  !hasIssue(nameRuleIssues(["    input wire clk,", "    output logic dout", "    function automatic logic f (", "        input logic x", "    );", "        return x;", "    endfunction"].join("\n")),
+    /端口类型\|端口方向与类型不搭/u
+  ),
+  "函数 / 任务的形参 `input logic` 不当成端口(不误报)"
+);
+check(
+  hasIssue(nameRuleIssues("    assign dout = '0"), /字面量写法\|禁止「'0」/u),
+  "禁止 `'0` 这种无宽度填充写法(报出来)"
+);
+check(
+  hasIssue(nameRuleIssues("    assign dout = 'b0"), /字面量写法\|字面量没带宽度/u),
+  "`'b0` 这种基前不带宽度 → 警告"
+);
+check(
+  !hasIssue(nameRuleIssues("    assign dout = 1'b0"), /字面量写法/u),
+  "`1'b0` 是合法写法(带宽度),不报(否则你代码里 223 处全红)"
+);
+check(
+  !hasIssue(nameRuleIssues("    assign dout = '{default: 1'b0}"), /字面量写法/u),
+  "赋值模式 `'{default: …}`(数组清零用)不当成无宽度填充"
+);
+check(
+  hasIssue(nameRuleIssues(["    input wire clk,", "    output logic dout", "    wire mid;", "    assign mid = clk;"].join("\n")),
+    /内部 wire\|内部 signal 'mid' 用了 wire/u
+  ),
+  "内部 wire 没接实例端口 → 警告(该用 logic)"
+);
+check(
+  !hasIssue(nameRuleIssues(["    input wire clk,", "    output logic dout", "    wire mid;", "    sub u0 (.a(clk), .b(mid));"].join("\n")),
+    /内部 wire/u
+  ),
+  "内部 wire 真的接了实例之间的连接网 → 不报"
+);
+check(
+  !hasIssue(nameRuleIssues(["    input wire clk,", "    output logic dout", "    wire unused_net;"].join("\n")),
+    /内部 wire/u
+  ),
+  "声明了但没用到的 wire → 不报(那是没用上,不是类型问题)"
+);
+
+// ── 结论报告的证据路径校验(module-report-check) ──────────────────────────────
+//
+// 判据来自用户工程里的实际写法(2026-09-21 照 `spec/spec.md` 的 AC 表 + `verif/*.md` 的引用写的):
+//   ① AC 表行里声明的证据位置必须真的在(但只在模块**已经写出结论**之后才要求 —— 还没做到时红线
+//      会变成噪音);② 结论文件引用的路径必须存在;③ 行号后缀(`rtl/x.sv:120-140`)摘掉后再核;
+//   ④ 可再生目录(`work/`)里的东西不在不算错(用户口径:跑一次就重生成)。
+const rcRoot = join(SANDBOX, `report-check-${stamp}`);
+const writeReport = (rel, text) => {
+  mkdirSync(join(rcRoot, dirname(rel)), { recursive: true });
+  writeFileSync(join(rcRoot, rel), text);
+};
+const acSpec = (evidence) => [
+  "# spec",
+  "",
+  "| 编号 | 判据 | 怎么验 | 证据 |",
+  "|---|---|---|---|",
+  `| AC-001 | 逐像素一致 | 独立重推 | \`${evidence}\` |`,
+  ""
+].join("\n");
+writeReport("rtl/good.sv", goodRtl);
+
+// 场景 A:只有 spec(还没做验证)→ AC 里那条还不存在的证据位置只报 info,不判错
+writeReport("spec/spec.md", acSpec("verif/comp_report.md"));
+const notYet = runStdout("module-report-check.mjs", [rcRoot]);
+check(
+  notYet.code === 0 && notYet.output.includes("还不存在"),
+  `还没写结论文件时,AC 里的证据位置缺失只报 info、不判错(退出码 ${String(notYet.code)})`,
+  notYet.output.slice(-300)
+);
+
+// 场景 B:已经有了结论文件,而 AC 声明的证据位置不存在 → 这就是"看着验过了"
+writeReport("spec/spec.md", acSpec("verif/nowhere.md"));
+writeReport("verif/verif.md", "# 验证报告\n\n结论: PASS\n");
+const staleAc = runStdout("module-report-check.mjs", [rcRoot]);
+check(
+  staleAc.code === 1 && staleAc.output.includes("verif/nowhere.md"),
+  `写出结论后 AC 声明的证据位置不存在 → 退 1 并点名(实际 ${String(staleAc.code)})`,
+  staleAc.output.slice(-300)
+);
+
+// 场景 C:结论文件里的引用 —— 行号摘掉再核;可再生的缺失不判错;已退役 IP 的引用要判
+writeReport("spec/spec.md", acSpec("verif/comp_report.md"));
+writeReport("verif/comp_report.md", "# 比对报告\n\n结论: PASS\n");
+writeReport(
+  "verif/verif.md",
+  [
+    "# 验证报告",
+    "",
+    "结论: PASS",
+    "",
+    "- 比对脚本:`verif/comp_report.md`",
+    "- 行号引用:`rtl/good.sv:120-140`(行号不该当文件名)",
+    "- 仿真波形:`verif/work/vsim.wlf`(可再生目录,不在不算错)",
+    "- 已退役的 IP 卡:`rtl/ip/retired_ip/timing.json`",
+    ""
+  ].join("\n")
+);
+const mixed = runStdout("module-report-check.mjs", [rcRoot]);
+check(
+  mixed.code === 1 && mixed.output.includes("rtl/ip/retired_ip/timing.json"),
+  "结论文件引用了不存在的路径 → 退 1(并点名那条)",
+  mixed.output.slice(-400)
+);
+check(
+  !mixed.output.includes("FAIL") || !/FAIL[^\n]*rtl\/good\.sv/u.test(mixed.output),
+  "带行号的引用摘掉行号后再核:文件在就算过"
+);
+check(
+  /verif\/work\/vsim\.wlf[^\n]*可再生/u.test(mixed.output),
+  "可再生目录(work/)里的东西缺失只报 info、不当成错"
+);
+
+// 场景 D:依据的**摘要**变了 → 只警告(不影响退出码);`--record` 之后不再报
+writeReport("spec/spec.md", acSpec("verif/comp_report.md"));
+writeReport("verif/comp_report.md", "# 比对报告\n\n结论: PASS\n");
+writeReport("verif/sim.log", "cycle 0 ok\n");
+writeReport(
+  "verif/verif.md",
+  ["# 验证报告", "", "结论: PASS", "", "- 比对脚本:`verif/comp_report.md`", "- 仿真日志:`verif/sim.log`", ""].join("\n")
+);
+const recordRun = runStdout("module-report-check.mjs", [rcRoot, "--record"]);
+check(
+  recordRun.code === 0 && /sha256=[0-9a-f]{64}/u.test(readFileSync(join(rcRoot, "verif", "verif.md"), "utf8")) &&
+    /旧版本留在/u.test(recordRun.output),
+  "--record 把证据摘要写进报告(覆盖前留旧版本)",
+  recordRun.output.slice(-200)
+);
+const recorded = runStdout("module-report-check.mjs", [rcRoot]);
+check(
+  recorded.code === 0 && !recorded.output.includes("摘要变了"),
+  `记完摘要后不报(重跑同样的输出不该天天报,退出码 ${String(recorded.code)})`
+);
+writeReport("verif/sim.log", "cycle 0 ok\ncycle 1 CHANGED\n");
+const digested = runStdout("module-report-check.mjs", [rcRoot]);
+check(
+  digested.code === 0 && /摘要变了/u.test(digested.output) && /verif\/sim\.log/u.test(digested.output),
+  `依据内容真的变了 → 警告(不判错,退出码 ${String(digested.code)})`,
+  digested.output.slice(-300)
+);
+
+// 场景 E:器件一致性(模块 spec vs 它所属工程 spec,用户口径 2026-09-21:器件只写一处)
+const projRoot = join(SANDBOX, `device-${stamp}`);
+const devMod = join(projRoot, "uart_rx");
+mkdirSync(join(projRoot, "project", "spec"), { recursive: true });
+mkdirSync(join(devMod, "spec"), { recursive: true });
+writeFileSync(join(projRoot, "project", "spec", "spec.md"), "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+writeFileSync(join(devMod, "spec", "spec.md"), "# 模块 spec\n\n- 器件型号:xc7z020clg484-1\n");
+const deviceBad = runStdout("module-report-check.mjs", [devMod]);
+check(
+  deviceBad.code === 0 && /器件\(xc7z020clg484-1\)与工程 spec 器件\(xc7a100tfgg484-2\)不一致/u.test(deviceBad.output),
+  `模块 spec 与工程 spec 的器件不一致 → 警告(不判错,退出码 ${String(deviceBad.code)})`,
+  deviceBad.output.slice(-300)
+);
+writeFileSync(join(devMod, "spec", "spec.md"), "# 模块 spec\n\n- 器件见工程 spec(不重述)\n");
+const deviceOk = runStdout("module-report-check.mjs", [devMod]);
+check(
+  deviceOk.code === 0 && !deviceOk.output.includes("器件两处不一致"),
+  "模块 spec 不重述器件(以工程为准)→ 不报"
+);
 
 // ── F-03:check-patch-file.mjs 不许写死仓库绝对路径 ───────────────────────────
 //

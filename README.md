@@ -10,10 +10,11 @@
 1. 往 DSH 的 agent 预设名单里加一个「**FPGA 开发模式**」,于是新建会话时能和
    `标准 / 极简 / PTC / 创造` 并列地选它。
 2. 在「设置 → FPGA 开发模式」里收**三个必填路径**(Vivado / ModelSim / Verilator)
-   + **一个可选的库映射文件**(ModelSim 的 `modelsim.ini`)+ 两个**可选**的运行时路径
-   (PowerShell 7 / Python 3)+ 两个语言与标准下拉,**外加六份可选模板文件**
+   + **一个可选的库映射文件**(ModelSim 的 `modelsim.ini`)+ **一个可选的运行时路径**
+   (Python 3)+ 两个语言与标准下拉,**外加六份可选模板文件**
    (RTL / 测试平台 / 约束 + 仿真脚本 / 综合脚本 / 比对脚本),并在**这个模式的会话里**
    把它们交给 agent 使用。
+   (终端不在设置里配:用哪个 `pwsh` 由宿主的 shell 执行器自己定,在这里填路径喂不到那儿去 —— 见 `lib/toolchain.js` 的 `FIELDS` 顶上那段注。)
 
 **它不注册任何主界面。** 没有侧边栏入口、没有面板、没有替换官方任何组件——你现有的
 界面一行都不动,只多一个设置分区。
@@ -103,6 +104,7 @@ tools/                        8 个自检 + install.mjs + 依赖安全/锁文件
 | 模块级 | RTL | `node presets/fpga-workbench/tools/module/module-rtl-check.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-new.mjs <模块根> <模块名> --template <测试平台模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起测试平台;默认落 `verif/tb_<模块名下划线形式>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 | 模块级 | 综合 | `node presets/fpga-workbench/tools/module/module-synth-new.mjs <模块根> <模块名> --template <约束模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起约束文件;默认落 `synth/<模块名>.xdc` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
+| 模块级 | 验收 | `node presets/fpga-workbench/tools/module/module-report-check.mjs <模块目录> [--json] [--record]` | 核报告引用的**证据路径是否真的在**:`spec/spec.md` 的 AC 行声明的证据位置 + `verif/*.md` / `synth/*.md` 引用的路径(**只验存在与摘要,不判内容**;行号后缀摘掉再核,可再生目录 `work/` 缺失不判错);`--record` 把当前依据的 sha256 摘要写进报告,之后依据内容变了就告警 | 0 都在 / 1 有引用了却不存在的路径 / 2 用法问题 |
 
 另外两条规则与旧包一致,不要自行加严:
 

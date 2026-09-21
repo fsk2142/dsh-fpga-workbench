@@ -162,6 +162,8 @@ const FILTER_BOX = (props) => typeof props.placeholder === "string" && props.pla
 function createFakeDocument() {
   const stub = {
     inputsCreated: 0,
+    /** 客户端注入的每一份 <style>(`ensureStyles` 注入样式表;自动填充那条规则要能查到)。 */
+    styles: [],
     querySelector: () => null,
     createElement: (tag) => {
       const element = {
@@ -176,6 +178,7 @@ function createFakeDocument() {
       };
       // 数一数建了几个 <input>:设置页**不该**再借文件框弹系统窗口(用户口径:别用弹窗)
       if (tag === "input") stub.inputsCreated += 1;
+      if (tag === "style") stub.styles.push(element);
       stub.lastCreated = element;
       return element;
     },
@@ -446,21 +449,28 @@ const doc = createFakeDocument();
 const nav = { userAgent: "" };
 
 /**
- * 主题的夹具:**元素 → 它的"计算样式"背景色**。
+ * 主题的夹具:**元素 → 它的"计算样式"**。
  *
- * 真浏览器里这份映射由 `getComputedStyle` 提供;替身里由测试自己摆 —— 于是"暗底 / 浅底 /
- * 透明(要向上找祖先)/ 读不到"这几种情形都能直接造出来,不必真有一个浏览器,也不必等系统主题。
+ * 真浏览器里这份映射由 `getComputedStyle` 提供;替身里由测试自己摆 —— 于是"文字浅 / 文字深 /
+ * 暗底 / 浅底 / 两者矛盾 / 透明 / 读不到"这几种情形都能直接造出来,不必真有一个浏览器,
+ * 也不必等系统主题。
+ *
+ * **文字色与背景色分开两张表**:判定函数的首选信号是文字色(暗色主题下正文是浅色),
+ * 背景只是次选 —— 两张表分开才造得出"文字浅 + 背景浅"这种矛盾夹具,断言才有咬人的地方。
  */
 const backgrounds = new Map();
+const textColors = new Map();
 /**
- * 造一个只带背景色的假元素(挂在 `parentElement` 上,模拟祖先链)。
- * @param background - 它的计算样式背景色(`rgb(…)` / `rgba(…)` / `transparent` / 空串)。
+ * 造一个假的元素(挂在 `parentElement` 上,模拟祖先链)。
+ * @param background - 它的计算样式背景色(`rgb(…)` / `rgba(…)` / `transparent` / 空串 / undefined)。
  * @param parent - 祖先;null = 到头了。
+ * @param textColor - 它的计算样式文字色;默认空串 = 读不到(于是判定会往背景那一步走)。
  * @returns 假元素(`style` 是真的,客户端要往上面写 colorScheme)。
  */
-const boxWith = (background, parent = null) => {
+const boxWith = (background, parent = null, textColor = "") => {
   const node = { parentElement: parent, style: {} };
   backgrounds.set(node, background);
+  textColors.set(node, textColor);
   return node;
 };
 /** 模拟系统偏好的当前值 + 订阅者(客户端要在偏好变化时重新判定)。 */
@@ -477,7 +487,7 @@ const flipPreference = (matches) => {
 const brokenBox = { parentElement: null, style: {} };
 const getComputedStyleStub = (node) => {
   if (node === brokenBox) throw new Error("拿不到计算样式");
-  return { backgroundColor: backgrounds.get(node) ?? "" };
+  return { backgroundColor: backgrounds.get(node) ?? "", color: textColors.get(node) ?? "" };
 };
 /** matchMedia 替身:`matches` 是**读的时候**取当前偏好(真 matchMedia 也是随时可读的)。 */
 const matchMediaStub = (query) => ({
@@ -1038,16 +1048,51 @@ try {
 // ── 主题跟随:原生下拉的弹层必须跟着**实际**主题,而不是系统偏好 ────────────────
 //
 // 用户实测:页面是暗色,`<select>` 展开的原生下拉却是白底浅字。给容器加 `color-scheme: light dark`
-// **没用** —— 那等于把选择权交给浏览器偏好,而宿主 DSH 的暗色是它自己的主题开关,不走
-// `prefers-color-scheme`(浏览器眼里的偏好仍然是浅色)。所以改成:读**实际渲染出来的**底色,
-// 把结论显式声明到**容器**和**根元素**上(弹层按根元素渲染,只设容器不生效),卸载时还回去。
-// 下面几条分别盯:判定函数本身、这两处声明、卸载恢复、主题变化跟随。
+// **没用** —— 那等于把选择权交给浏览器偏好。所以:读**实际渲染出来的**东西,把结论显式声明到
+// **容器**和**根元素**上(弹层按根元素渲染,只设容器不生效),卸载时还回去。
+//
+// 判定是**多信号、按可靠性排序**的(见 lib/client.js 的 themeOf):① 文字颜色(暗色主题下正文是
+// **浅色**,方向和背景相反)② 第一个不透明背景色 ③ 宿主的主题标记(class / data-*) ④ 系统偏好。
+// 下面每条都对着其中一个信号打靶,并且**故意让别的信号给出相反答案** —— 这样"顺序错了"也会被抓到。
+// 另外还盯:两处 color-scheme 声明、卸载恢复、主题变化跟随、自动填充那条规则。
 try {
   const themeOf = clientExports.__themeOf;
   check(typeof themeOf === "function", "bundle 导出了主题判定函数(自检要直接打靶)");
 
-  // ① 判定函数:暗底 / 浅底 / 边界 / 透明向上找祖先 / 读不到回退偏好 / 异常兜底
+  // ①-a 首选信号:**文字颜色**。方向与背景相反 —— 暗色主题下正文是浅色。
   preference.matches = false;
+  check(
+    themeOf(boxWith(undefined, null, "rgb(249, 250, 251)")) === "dark",
+    "判定(文字色):浅色文字 → dark(暗色主题下正文是浅的;方向和背景相反)"
+  );
+  check(
+    themeOf(boxWith(undefined, null, "rgb(32, 32, 32)")) === "light",
+    "判定(文字色):深色文字 → light(浅色主题下正文是深的)"
+  );
+
+  // ①-b 文字色**优先于**背景色:两个信号给出相反答案时,必须按文字判(两边的方向都试)
+  check(
+    themeOf(boxWith("rgb(250, 250, 250)", null, "rgb(245, 245, 245)")) === "dark",
+    "判定(优先级):文字浅 + 背景浅(矛盾夹具)→ 按**文字**判 dark"
+  );
+  check(
+    themeOf(boxWith("rgb(20, 20, 20)", null, "rgb(30, 30, 30)")) === "light",
+    "判定(优先级):文字深 + 背景暗(矛盾夹具)→ 按**文字**判 light"
+  );
+
+  // ①-c 文字色要沿祖先链找(元素自己没有文字色时)
+  check(
+    themeOf(boxWith(undefined, boxWith(undefined, null, "rgb(240, 240, 240)"))) === "dark",
+    "判定(文字色):自己没有文字色 → 沿祖先链找到浅字 → dark"
+  );
+
+  // ①-d 文字色必须**完全不透明**才算:半透明的字压在什么底色上都说得通,判不出主题 → 交给背景
+  check(
+    themeOf(boxWith("rgb(250, 250, 250)", null, "rgba(250, 250, 250, 0.5)")) === "light",
+    "判定(文字色):半透明文字不算(跳过),按背景判 light —— 否则浅底会被误判成暗色主题"
+  );
+
+  // ② 次选信号:第一个不透明背景(文字读不出来时用)。原有那几条全部保留,口径不变。
   check(themeOf(boxWith("rgb(24, 26, 32)")) === "dark", "判定:暗背景 → dark");
   check(themeOf(boxWith("rgb(250, 250, 250)")) === "light", "判定:浅背景 → light");
   check(themeOf(boxWith("rgb(127, 127, 127)")) === "dark", "判定:亮度 127(卡在 128 下面)→ dark");
@@ -1055,12 +1100,57 @@ try {
   check(themeOf(boxWith("rgba(0, 0, 0, 0)", boxWith("rgb(20, 20, 20)"))) === "dark", "判定:alpha=0 的层跳过,按暗祖先 → dark");
   check(themeOf(boxWith("transparent", boxWith("rgb(255, 255, 255)"))) === "light", "判定:transparent 跳过,按浅祖先 → light");
   check(themeOf(boxWith("rgb(20, 20, 20)", boxWith("rgb(255, 255, 255)"))) === "dark", "判定:最近那层不透明背景说了算(不看更远的祖先)");
+
+  // ③ 再次:宿主的主题标记。**遍历属性名与值**,不写死属性名 —— 真实宿主至少用了三种写法:
+  // `data-ds-dark-theme`(属性名里带 dark、值是**空串**,见 dsh-client-ui-layout)、
+  // `class="dark"`、`data-theme`。前两个信号都读不出来(配色写成 oklch 之类抠不出 rgb)时才轮到它。
+  /** 摆好假根元素与 body 上的标记(`className` 传 undefined = 摘掉)。 */
+  const setMarkers = (rootClass, bodyAttributes) => {
+    doc.documentElement.className = rootClass;
+    doc.body = bodyAttributes === null ? undefined : { attributes: bodyAttributes, style: {} };
+  };
+  setMarkers("dark", null);
+  preference.matches = false; // 偏好故意说浅色 —— 判出 dark 就说明走的是标记那条,不是兜底
+  check(themeOf(boxWith("")) === "dark", '宿主标记:根元素 class="dark" → dark(偏好是浅色,兜底那条被挡在后面)');
+  setMarkers(undefined, [{ name: "data-theme", value: "dark" }]);
+  check(themeOf(boxWith("")) === "dark", '宿主标记:body 的 data-theme="dark" → dark');
+  setMarkers(undefined, [{ name: "data-ds-dark-theme", value: "" }]);
+  check(
+    themeOf(boxWith("")) === "dark",
+    '宿主标记:属性**名**里带 dark、值是空串也认(body[data-ds-dark-theme] 就是这么标的 —— 只扫属性值会漏掉它)'
+  );
+  setMarkers(undefined, [{ name: "data-color-scheme", value: "dark" }]);
+  check(themeOf(boxWith("")) === "dark", '宿主标记:data-color-scheme="dark" → dark(不写死属性名)');
+  preference.matches = true; // 反过来:偏好说深色,标记说浅色 → 必须按标记
+  setMarkers("theme-light", null);
+  check(themeOf(boxWith("")) === "light", '宿主标记:class="theme-light" → light(系统偏好说 dark 也不听它的)');
+  setMarkers("lightbox", null);
+  check(
+    themeOf(boxWith("")) === "dark",
+    '"lightbox" 这种**不是**标记:按词边界判(不然一个含 light 的类名就能把主题判反)'
+  );
+  setMarkers(undefined, null); // 收尾:标记摘掉,后面的挂载断言不受影响
+
+  // ④ 兜底:一路都读不到就走系统偏好;异常也不许抛(设置页不能因此崩)
   preference.matches = true;
-  check(themeOf(boxWith("")) === "dark", "判定:一路都读不到背景 → 回退系统偏好(dark)");
+  check(themeOf(boxWith("")) === "dark", "判定:一路都读不到 → 回退系统偏好(dark)");
   preference.matches = false;
   check(themeOf(boxWith("")) === "light", "判定:回退到的偏好是浅色 → light");
   check(themeOf(undefined) === "light" && themeOf(null) === "light", "判定:没有元素也不抛错(回退 light)");
   check(themeOf(brokenBox) === "light", "判定:读计算样式抛异常也不抛错(回退 light)—— 设置页不能因此崩");
+
+  // ⑤ 自动填充那条:必须用 inset box-shadow 盖回去,而且颜色**走 CSS 变量、不写死**
+  //(写死颜色 = 暗色主题下把框盖成另一种错色,还不如不写)
+  const styleText = doc.styles.map((sheet) => String(sheet.textContent)).join("\n");
+  check(styleText.includes(":-webkit-autofill"), "样式表里有自动填充(-webkit-autofill)那条处理");
+  check(
+    /:-webkit-autofill\s*\{[^}]*inset 0 0 0 1000px var\(--fpga-set-field-bg\)/u.test(styleText),
+    "自动填充用 inset box-shadow 盖回主题底色,颜色取自 CSS 变量(不是写死的颜色)"
+  );
+  check(
+    /\.fpga-set\s*\{[^}]*--fpga-set-field-bg:/u.test(styleText),
+    "那个 CSS 变量有默认值(定义在 .fpga-set 上,宿主也能覆盖)"
+  );
 
   // ② 挂载:容器与**根元素**都要按判出来的主题显式声明 color-scheme
   //

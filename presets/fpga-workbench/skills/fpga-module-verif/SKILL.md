@@ -263,7 +263,7 @@ python verif/comp.py <参照文件> <输出文件> [--kind hex|text]
 | 起测试平台 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"` | 第一步 |
 | 起仿真脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind run-do` | 第二步 |
 | 起比对脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp` | 第四步 |
-| 跑出来 | `& "<仿真器路径>" -c -do run.do`(在 `verif/` 下;`run.do` 的写法见第二步) | 第二步 |
+| 跑出来 | 按选中的仿真器:ModelSim 是 `& "<仿真器路径>" -c -do run.do`(在 `verif/` 下),选了 XSim 就是 `xvlog`/`xelab`/`xsim` 三步 —— 写法都见第二步 | 第二步 |
 | 看波形 | 用已经确认过的 `verif/run.do` 起 GUI(XSim 用它的 snapshot),不另起一套加载 | 第三步 |
 
 比对脚本按 spec 约定的格式自己写或复用参考模型,不是一条固定命令 —— 判法见第四步。

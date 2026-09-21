@@ -37,27 +37,25 @@ description: 把多个模块接起来之后做系统级仿真时用:写顶层测
 
 ## 本环节要跑的命令
 
-跑法与模块级同一条路 —— 命令写进脚本,一次调用,全程命令行:
+跑法与模块级同一条路(见 `fpga-module-verif` 第二步)—— 命令写进脚本,一次调用,全程命令行,
+在 `project/syssim/` 下跑(脚本、库与日志都落在那里)。
 
-```
-# project/syssim/run.do
-onerror {quit -code 1}
-if {[file exists work]} { catch {vdel -lib work -all} }
-vlib work
-vlog -sv <顶层与各模块源码...> tb_<顶层>.sv
-vsim -c -voptargs="+acc=rn" tb_<顶层>
-run -all
-quit -f
-```
+**跑法用设置里选中的那个仿真器**:是哪个、路径是什么、调用姿势(命令名与参数)是什么,会话开头
+「本机 FPGA 工具链」的**已就绪**清单里都写着,**不得另行挑选一个**;选 XSim 时那条路径是 Vivado
+的 `bin` 目录(不是可执行文件),照清单给的那个姿势跑。
 
-```powershell
-cd <工作区根>/project/syssim
-& "<仿真器路径>" -c -do run.do
-```
+需要脚本文件时,方言跟着选中的工具走 —— 这是脚本格式的差别,不是两种做法:
 
-要人工看波形时,用**已经确认过的那份 `project/syssim/run.do`** 起 GUI(XSim 用它的 snapshot):
-库映射、源码集合与顶层都由那份脚本决定。**不要在 `syssim/` 里直接开 GUI 加载设计** —— TB 在
-时刻 0 会以写方式打开它的 dump 文件,光是加载设计就会把那几个文件清零。
+- **ModelSim / Questa** 用 `.do`:`vlib` / `vlog -sv` / `vsim -c -voptargs="+acc=rn"` /
+  `run -all` / `quit -f` 那一套写进 `project/syssim/run.do`(自带 `templates/run.do` 就是一份
+  `.do`,照它起一份、把源码集合与顶层换成工程的),再按已就绪清单里那条 `-c -do` 的姿势一次调用。
+- **Vivado XSim** 用 `xvlog` / `xelab` / `xsim` 三步(或 `xelab` 出来的 snapshot),
+  **不要跑 `.do`** —— 那是 ModelSim 的方言。
+
+要人工看波形时,用**已经确认过的那份脚本**起 GUI —— ModelSim 是 `project/syssim/run.do`,
+选 XSim 就是 `xelab` 出来的那个 snapshot:库映射、源码集合与顶层都由它决定。**不要在 `syssim/`
+里直接开 GUI 加载设计** —— TB 在时刻 0 会以写方式打开它的 dump 文件,光是加载设计就会把那几个
+文件清零。
 
 ## 判据
 

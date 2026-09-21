@@ -652,6 +652,33 @@ check(run("module-verif-new.mjs", [newFileRoot, "--kind", "comp"]) === 1, "已�
 check(run("module-verif-new.mjs", [newFileRoot, "--kind", "comp", "--force"]) === 0, "--force 才覆盖 comp.py");
 check(run("module-verif-new.mjs", ["--kind", "comp"]) === 2, "漏给模块根(comp)→ 退出码 2");
 
+// comp.py 的判定口径:**"样本数为 0 算不算通过"不是它的事** —— 脚本只管比数据,两边都空就正常
+// 比完 0 个值、退 0(用户裁定:以前那条"0 样本算失败"是判断层的规矩,不该塞进工具里)。
+// 这条断言把口径钉住:规则加回去,它立刻红。顺带钉住另一半 —— 取值真不一致仍然退 1,
+// 否则"改成 0"会退化成永远通过。python 只在 PATH 上找(设置里那个「Python 3」字段就是它);
+// stdio 不开管道(沙箱限制,见文件头)。
+const compFixture = join(SANDBOX, "comp-case");
+mkdirSync(compFixture, { recursive: true });
+const compCase = (name, text) => {
+  const path = join(compFixture, name);
+  writeFileSync(path, text);
+  return path;
+};
+const emptyRef = compCase("empty_ref.hex", "");
+const emptyOut = compCase("empty_out.hex", "\n\n");
+const diffRef = compCase("diff_ref.hex", "0x0001\n");
+const diffOut = compCase("diff_out.hex", "0x0002\n");
+const compStatus = (...args) => spawnSync("python", [bundledCompPath, ...args], { stdio: "ignore" }).status;
+const emptyCode = compStatus(emptyRef, emptyOut);
+check(
+  emptyCode === 0,
+  `comp.py:两边都没有样本 → 正常比完(0 个值)退 0,不再算失败(实际退出码 ${emptyCode};null = PATH 上没有 python)`
+);
+check(
+  compStatus(diffRef, diffOut) === 1,
+  "comp.py:取值不一致仍然退 1(去掉 0 样本那条规则没把判据弄丢)"
+);
+
 // ── module-synth-new:约束落点 ───────────────────────────────────────────────
 check(
   run("module-synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0

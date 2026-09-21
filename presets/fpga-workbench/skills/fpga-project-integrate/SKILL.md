@@ -48,7 +48,7 @@ description: 把一个或多个模块接进 FPGA 工程顶层时用:分配时钟
 | elaborate / 综合看连通性 | Vivado 批处理:`open_project <工程>` → `launch_runs synth_1`(或 `synth_design -rtl` 只做 elaborate) |
 | 机械规范(**顶层自己那份代码**) | `node "<自带命令目录>\module\module-rtl-check.mjs" <顶层所在目录>` |
 | 机械规范(**各模块**) | 对模块清单里每个模块各跑一次:`module-rtl-check.mjs <模块根>` —— **不能拿工作区根当参数** |
-| 看波形(定位接口问题时) | 用该模块**已经确认过的 `verif/run.do`** 起 GUI(见 `fpga-module-verif` 第三步) |
+| 看波形(定位接口问题时) | 用该模块**已经确认过的那份脚本**起 GUI(ModelSim 是 `verif/run.do`,选了 XSim 就是 `xelab` 出来的 snapshot;见 `fpga-module-verif` 第三步) |
 
 **注意 `module-*` 命令的参数是模块根,不是工作区根**:工程根下平铺着 `project/` 与多个模块目录,
 把工作区根传进去只会扫到不相干的东西(它的判据是"一个模块的源码目录")。

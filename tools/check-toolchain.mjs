@@ -620,6 +620,21 @@ check(
   "检测:只有 32 位 bin 的老版本(Quartus II 13)也认(fallback 那一组)"
 );
 
+// Quartus 选项必须**诚实标注**:下拉里有它、检测也认它,但本插件没有它的工程结构 / 约束 / 实现 /
+// 下载那套分支 —— 自带的技能与模板是 Vivado 那套,命令按设置里选中的工具走。标注不写清,用户和
+// agent 都会以为"选了它就走 Quartus 流程"。标注挂在**选项**上(工具之间的差别一律挂选项),
+// 所以断言也读选项的 label/hint,而不是别处的文案。
+const quartusOption = (FIELDS.find((field) => field.key === "synthesizer")?.options ?? []).find(
+  (option) => option.value === "quartus"
+);
+const quartusNote = `${quartusOption?.label ?? ""} ${quartusOption?.hint ?? ""}`;
+const quartusClaims = ["只提供路径", "按设置里选中的工具", "没选它就不会用到"];
+check(
+  quartusClaims.every((claim) => quartusNote.includes(claim)),
+  `Quartus 选项标注了它只被"提供路径与检测"、命令按设置里选中的工具走、没选就不会用到(缺:${quartusClaims.filter((claim) => !quartusNote.includes(claim)).join("、") || "无"})`,
+  quartusOption?.label
+);
+
 // 检测**不回声用户填的值**:已保存的设置和页面上未保存的改动可能不是一回事(用户刚换了
 // 工具还没保存)。宿主回声旧值,现象就是"换完工具点检测,报的还是我原来填的那条路径"。
 // 按当前选中的工具筛选、以及"填没填",由设置页做(它才看得到未保存的改动)。

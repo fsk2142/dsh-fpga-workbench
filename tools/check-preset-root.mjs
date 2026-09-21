@@ -505,6 +505,39 @@ check(
   "验证技能写明:退出码由 run.do 的 gate 决定(所以跑 run.do 的退出码才是判据)"
 );
 
+// 工程级的系统联仿**不许写死某个仿真器**(用户口径 2026-09-20):设置里本来就有仿真器下拉
+// (ModelSim / XSim / 其他 / 不用),会话提示的「已就绪」段已经把选中工具的调用姿势交出来了 ——
+// 技能再自己挑一个就是错的。原来这里贴的是 ModelSim 专用跑法(`& "<仿真器路径>" -c -do run.do`):
+// 选了 XSim 时那条命令根本跑不起来(XSim 要的是 Vivado bin 目录下的 xvlog/xelab/xsim)。
+// 所以钉两条:
+//   · 技能必须写明"跑法用设置里选中的那个仿真器走",并把调用姿势指回会话提示的已就绪段;
+//   · `vsim` 与 `-c -do` 只许出现在条件语境里(= 写的是 ModelSim/Questa 那一支)。
+//     两个方言并列写是允许的(这是脚本格式的差别),把 ModelSim 当成唯一跑法不行。
+const syssimText = readFileSync(join(skillDir, "fpga-project-syssim", "SKILL.md"), "utf8");
+check(/跑法用设置里选中的/u.test(syssimText), "syssim 技能写明跑法用设置里选中的那个仿真器(不写死某一个)");
+check(
+  /已就绪/u.test(syssimText) && /调用姿势/u.test(syssimText),
+  "syssim 技能把调用姿势指回会话提示的「已就绪」段(而不是自己拼一条命令)"
+);
+check(
+  /xvlog/u.test(syssimText) && /xelab/u.test(syssimText) && /xsim/u.test(syssimText),
+  "syssim 技能写明选了 XSim 用 xvlog / xelab / xsim 那一套"
+);
+check(
+  /(不要|不得|别)[^。\n]{0,12}\.do/u.test(syssimText),
+  "syssim 技能写明选了 XSim 不要跑 .do(ModelSim 的方言)"
+);
+// 条件语境的判定照上面 program_hw_devices -verify 那条:命中该写法的行必须带条件词 ——
+// 没有条件词就是把某个仿真器的跑法当成了唯一做法。
+const hardcodedSim = syssimText
+  .split("\n")
+  .filter((line) => /vsim|-c -do/u.test(line))
+  .filter((line) => !/ModelSim|Questa|选中|XSim|已就绪/u.test(line));
+check(
+  hardcodedSim.length === 0,
+  `syssim 技能没有把 ModelSim 的跑法写成唯一做法(无条件行:${hardcodedSim.join(" / ") || "无"})`
+);
+
 // TB 落点是 `verif/tb_<snake>`(stamp.mjs 的 defaultDestination 把驼峰转下划线,UartRx → tb_uart_rx,
 // check-fpga-tools 也在断言这一点)。技能里曾写成 `tb_<模块名>`,照着找会找错文件。
 check(

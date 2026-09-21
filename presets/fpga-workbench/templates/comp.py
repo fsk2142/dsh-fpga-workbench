@@ -3,7 +3,7 @@
 """comp.py - 参照数据与本工具输出的比对:先归一化,再**只比值、不比排版**。
 
 用法: python comp.py <参照文件> <输出文件> [--kind hex|text](默认 hex)
-退出码: 0 = 取值一致;1 = 取值不一致 / 没比上;2 = 参数不全 / 文件读不到
+退出码: 0 = 取值一致(两边都没有样本也算:0 个值就是比完了);1 = 取值不一致;2 = 参数不全 / 文件读不到
 
 实测事故:金标 CRLF、输出 LF,逐字节比导致每行都"不一致",纯排版差异冒充了功能失败 ——
 所以行尾、首尾与行尾空白、十六进制大小写与 0x 前缀、空行先全部抹平,再比值。
@@ -66,9 +66,8 @@ def main():
     if rbom != obom:
         print("format-only difference ignored: UTF-8 BOM")
     unit = "values" if args.kind == "hex" else "lines"
-    if not ref and not out:
-        print("EMPTY: nothing compared -- 0 samples is not a pass")
-        return 1
+    # 两边都没有样本时**不算失败**:0 个值照样比完就退 0 —— 这个脚本只管"比数据"。
+    # (以前这里故意 return 1,是把"样本数为 0 算不算通过"这个判断塞进了工具里。)
 
     def val(i, seq):
         """第 i 个样本的取值;越界(<missing>)也算一处差异,所以少一行不会被当成通过。"""

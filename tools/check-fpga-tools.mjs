@@ -1730,9 +1730,17 @@ const syncPartial = runStderr("sync-installed.mjs", []);
 if (savedProfileDir === undefined) delete process.env.DSH_PROFILE_DIR;
 else process.env.DSH_PROFILE_DIR = savedProfileDir;
 check(
-  syncPartial.code === 1 && /混合状态/u.test(syncPartial.output) && /已写入 \d+\/\d+ 个文件/u.test(syncPartial.output),
-  `sync-installed 半途失败 → 退出码 1 并说清"混合状态 + 已写几个"(实际 ${String(syncPartial.code)})`,
-  syncPartial.output.slice(-300)
+  syncPartial.code === 1 && /正在回滚/u.test(syncPartial.output) && /回滚结果:恢复 \d+ 个/u.test(syncPartial.output) &&
+    /已写入 \d+\/\d+ 个文件/u.test(syncPartial.output),
+  `sync-installed 半途失败 → 退出码 1、说清已写几个、并回滚(N-10;实际 ${String(syncPartial.code)})`,
+  syncPartial.output.slice(-400)
+);
+// 回滚是"恢复旧的 + 把这次新加的**改名**移开"(零删除):沙箱里 cordis.patch.yml 是这次新加的,
+// 失败后它应当以 `.failed-<时间戳>` 的名字留在原地 —— 而不是消失。
+const syncFilesNow = readdirSync(syncInstalled);
+check(
+  syncFilesNow.some((name) => /^cordis\.patch\.yml\.failed-/u.test(name)) && !syncFilesNow.includes("cordis.patch.yml"),
+  `回滚把"这次新加的文件"改名移开(未删除):实际 ${syncFilesNow.join("、")}`
 );
 
 // ── F-03:check-patch-file.mjs 不许写死仓库绝对路径 ───────────────────────────

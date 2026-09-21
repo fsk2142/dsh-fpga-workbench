@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, utimesSy
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  DORMANT_SUFFIX,
   FIELDS,
   NS,
   TEMP_GRACE_MS,
@@ -26,7 +27,9 @@ import {
   cleanupEntry,
   describeEnv,
   detectTools,
+  dormantTargets,
   inspectTools,
+  isDormantPath,
   isMissing,
   legacyMigrationPatch,
   listDirectory,
@@ -894,6 +897,30 @@ check(
 );
 check(listFiles(staleSource).join(",") === "skills/keep-me/SKILL.md", "listFiles 给出相对路径且用 / 分隔");
 
+// ── 停用过期技能入口(第三轮复审 N-11)──────────────────────────────────────
+//
+// 宿主的技能插件没有白名单配置:只要 `SKILL.md` 还在,老技能就照样进活动技能集合 —— 所以
+// "只列出待清理"拦不住加载。这里判的是**该把哪些改名停用**(改名不是删除,可改回)。
+const dormantNow = dormantTargets(diff.stale);
+check(
+  dormantNow.length === 1 && dormantNow[0].from === "skills/gone/SKILL.md" &&
+    dormantNow[0].to === `skills/gone/SKILL.md${DORMANT_SUFFIX}`,
+  `过期技能入口会被改名停用(实际 ${JSON.stringify(dormantNow)})`
+);
+check(
+  dormantTargets(["templates/old.tcl", "verif/old.md", "skills/keep-me/notes.md"]).length === 0,
+  "只动技能入口文件(名叫 SKILL.md 的):模板 / 说明文档不改名(它们不参与加载)"
+);
+check(
+  dormantTargets([`skills/gone/SKILL.md${DORMANT_SUFFIX}`]).length === 0,
+  "已经带停用后缀的不再处理(幂等:重跑不会变成 .disabled-by-plugin.disabled-by-plugin)"
+);
+check(isDormantPath(`skills/gone/SKILL.md${DORMANT_SUFFIX}`) && !isDormantPath("skills/gone/SKILL.md"), "isDormantPath 认停用标记");
+check(
+  !dormantTargets(diff.stale).some((item) => item.from.startsWith("skills/my-own-skill/")),
+  "**用户自己放进 skills/ 的技能永不被停用**(它根本不在 stale 里 —— R-01 边界)"
+);
+
 // 清单丢了(第一次升级 / 清单被删)时就**分不清**"我们的旧技能"与"用户写的技能" ——
 // 那种情况下一个都不列:列错了会让人去清用户的东西。留着最多是多加载一个技能。
 const noManifest = presetFileDiff(staleSource, staleTarget, undefined);
@@ -922,9 +949,17 @@ check(
 // 待清理清单必须**真的**进返回值:只写日志的话设置页看不见,用户也就不会去处置。
 // (lib/index.js import 不了 schemastery,所以这条是源码级断言;行为验证在 .tmp 沙箱里另跑。)
 check(
-  /cleanupEntry\("stale", join\(destination, rel\)\)/u.test(hostSource) &&
+  /cleanupEntry\(isDormantPath\(rel\) \? "dormant" : "stale", join\(destination, rel\)\)/u.test(hostSource) &&
+    /cleanupEntry\("dormant", join\(destination, rel\)\)/u.test(hostSource) &&
     /cleanupEntry\("emptyDir", dir\)/u.test(hostSource),
-  "宿主的待清理清单分两类:过期技能/模板 + 空技能目录(源码级)"
+  "宿主的待清理清单分三类:过期技能/模板 + 已停用的旧技能 + 空技能目录(源码级)"
+);
+// N-11:停用是**改名**(不是删除),而且新名字要记进同步清单 —— 否则下次会被当成"用户自己放的东西"
+check(
+  /function disableDormantSkills\(/u.test(hostSource) &&
+    /renameSync\(abs, target\)/u.test(hostSource) &&
+    /listFiles\(source\), \.\.\.stale, \.\.\.dormant/u.test(hostSource),
+  "宿主把过期技能入口**改名**停用,并把停用后的名字写进同步清单(源码级;绝不删除)"
 );
 check(
   (hostSource.match(/recordPresetSync\(\{[^}]*pendingCleanup/gu) ?? []).length >= 2,

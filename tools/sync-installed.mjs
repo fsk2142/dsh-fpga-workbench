@@ -17,7 +17,7 @@
 //
 // 退出码:内容差异(缺文件 / 内容不一致)算失败(那正是本脚本要来修的);**"已装多出"只报告、
 // 不算失败** —— 它已经不可能由本脚本处置了(不删除),拿它报红只会逼人去恢复删除。
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,6 +30,9 @@ const PROFILE_NAME = process.env.DSH_PROFILE_NAME ?? "desktop";
 const HOME = process.env.USERPROFILE ?? process.env.HOME ?? "";
 const PROFILE_DIR = process.env.DSH_PROFILE_DIR ?? join(HOME, ".dsh", "profiles", PROFILE_NAME);
 const INSTALLED = join(PROFILE_DIR, "node_modules", PACKAGE_NAME);
+
+/** 文件名安全的时间戳(备份目录名与"改名移开"的后缀用)。 */
+const timestamp = () => new Date().toISOString().replace(/[:.]/gu, "-");
 
 const checkOnly = process.argv.includes("--check");
 const prune = process.argv.includes("--prune");
@@ -110,10 +113,21 @@ if (checkOnly) {
     .filter(({ source, target }) => !existsSync(target) || hashOf(source) !== hashOf(target));
 
   // 半途失败**不能静默留下混合树**(第三轮复审 N-10):逐个覆写时,中途出错会得到"一部分新、
-  // 一部分旧"的副本 —— 那种状态重启后行为不确定。如实说清写到哪了、怎么收敛,并让退出码非 0。
+  // 一部分旧"的副本 —— 那种状态重启后行为不确定。做法与 `install.mjs` 同一套:写之前先把**要改的
+  // 那些文件**的旧内容快照到 `<home>/.dsh/.fpga-workbench-backup/sync-<时间戳>/`;失败就回滚
+  // (旧文件按快照写回;这次新加的文件**改名**移开 —— 零删除,不做永久删除)。
+  const backupRoot = join(HOME, ".dsh", ".fpga-workbench-backup", `sync-${timestamp()}`);
+  const snapshotOf = new Map();
   let written = 0;
   try {
     for (const { rel, source, target } of targets) {
+      const before = existsSync(target) ? readFileSync(target) : undefined;
+      snapshotOf.set(rel, before);
+      if (before !== undefined) {
+        const saved = join(backupRoot, rel);
+        mkdirSync(dirname(saved), { recursive: true });
+        writeFileSync(saved, before);
+      }
       mkdirSync(dirname(target), { recursive: true });
       copyFileSync(source, target);
       written += 1;
@@ -121,9 +135,27 @@ if (checkOnly) {
     }
   } catch (error) {
     console.error(`\n同步中断:${error.message}`);
-    console.error(`  已写入 ${written}/${targets.length} 个文件 —— 已装副本现在是**混合状态**(部分新、部分旧)。`);
-    console.error("  **别在这时重启**:本脚本是幂等的,修掉上面那个错误(通常是文件被占用或没有写权限)后");
-    console.error("  重跑同一条命令即可收敛;要退回旧状态就按上面的路径手动处理。");
+    console.error(`  已写入 ${written}/${targets.length} 个文件 —— 正在回滚到运行前的状态(不删除任何东西)。`);
+    const restored = [];
+    const movedAside = [];
+    for (const { rel, target } of targets.slice(0, written)) {
+      const before = snapshotOf.get(rel);
+      try {
+        if (before === undefined) {
+          const aside = `${target}.failed-${timestamp()}`;
+          renameSync(target, aside);
+          movedAside.push(aside);
+        } else {
+          writeFileSync(target, before);
+          restored.push(rel);
+        }
+      } catch (rollbackError) {
+        console.error(`  **回滚这一项失败**:${rel}(${rollbackError.message})`);
+      }
+    }
+    console.error(`  回滚结果:恢复 ${restored.length} 个、把 ${movedAside.length} 个新增文件改名移开(未删除)。`);
+    if (existsSync(backupRoot)) console.error(`  旧内容快照留在:${backupRoot}`);
+    console.error("  修掉上面那个错误(通常是文件被占用或没有写权限)后重跑同一条命令即可;本脚本是幂等的。");
     reportExtras(extraFiles());
     process.exit(1);
   }

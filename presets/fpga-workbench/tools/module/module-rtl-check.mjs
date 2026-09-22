@@ -162,6 +162,26 @@ const EXPECTED_SIGNAL = /(?:^|_)(?:exp|expected|gold|ref|reference)(?:_|$)/iu;
 /** 测试平台的成功标记:出现的每一处都要与 err_cnt 挂钩。 */
 const SUCCESS_MARKER = "ALL TESTS PASSED";
 
+/** 全大写名字当**参数/常量**看(`C_IMG_WIDTH` / `LINE_D` / `FRAME_SZ`):计数器与参数比,不是数据比对。 */
+const PARAM_LIKE = /^[A-Z][A-Z0-9_]*$/u;
+
+/**
+ * 这一行的 `!=` 要不要提醒(N-06 之后 2026-09-22 收窄)。
+ *
+ * 只提醒**同时满足**两点的:① 当判定用(`if` / `while` / `for` / 断言 / 三元);
+ * ② 每一对操作数两侧都是**普通信号** —— 不是全大写参数。
+ * (数值常量、函数返回值、算术表达式根本进不了 `pairs`:操作数必须"长得像标识符"才算一对。)
+ * @param operands - 去掉注释/字符串后的行。
+ * @param pairs - 操作数对(`[左, 右]`)。
+ * @returns 该提醒时为 true。
+ */
+function isVerdictComparison(operands, pairs) {
+  if (pairs.length === 0) return false;
+  const isVerdict = /\b(?:if|while|for)\s*\(|\bassert\b|\?/u.test(operands);
+  if (!isVerdict) return false; // 不算判定:比如 `$display(..., a != b)` 只是打印一个位
+  return pairs.every((pair) => !PARAM_LIKE.test(pair[1]) && !PARAM_LIKE.test(pair[2]));
+}
+
 const NINE_SECTIONS = [
   "Local Parameters", "Types", "Registers", "Combinational Logic", "Sequential Logic",
   "Functions Module", "Task Module", "Module Instantiation", "Assertions"
@@ -344,8 +364,11 @@ export function checkFile(file, isTestbench) {
     //
     // **两侧都要是信号**这条是 2026-09-21 补的(实测踩到):原来只要"整行里出现过 exp_ 命名的标识符"
     // 就判 FAIL,于是 `if (exp_pixel_idx != 0 && …)` 这种**计数/索引比常量**被当成数据比对拦住了 ——
-    // 而那正是上面那句"循环/计数条件可以保留"要放过的。现在按"操作符紧邻的两个操作数"判:
-    // `X != 0`、`(expr % W) != (W-1)` 这类一侧是常量/表达式的,一律只提醒。
+    // 而那正是上面那句"循环/计数条件可以保留"要放过的。现在按"操作符紧邻的两个操作数"判。
+    //
+    // 2026-09-22 再收窄一次(用户口径:那 15 条警告全在计数/索引上,把真问题淹了):**提醒只管两种条件同时满足**——
+    // ① 当判定用(`if` / `while` / `for` / 断言 / 三元);② 两侧都是**普通信号**(不是数值常量、不是
+    // 全大写参数、不是函数返回值/表达式)。除此之外一律静默:计数/索引/返回值比较按既定口径不该提醒。
     if (isTestbench && line.includes("!=")) {
       const operands = codeOnly(line);
       // **一行里所有** `a != b` 都要看(第三轮复审 N-06:只取第一个的话,
@@ -354,8 +377,7 @@ export function checkFile(file, isTestbench) {
       const expectedSide = pairs.some((pair) => EXPECTED_SIGNAL.test(pair[1]) || EXPECTED_SIGNAL.test(pair[2]));
       if (pairs.length > 0 && expectedSide) {
         add("数据比对", number, "数据比对用了 '!='(全 X 时 X != y 求值为 X,if (X) 为假 → 一条错都不报):改用 '!=='");
-      } else if (/(?<![=!])!=(?!=)/u.test(operands)) {
-        // 两侧都是信号但没命中期望值命名 → 提醒;一侧是常量 / 表达式(计数与索引的常见形状)→ 提醒
+      } else if (isVerdictComparison(operands, pairs)) {
         add("!= 待确认", number, "这一行有 '!=':确认是数据比对就改 '!=='(否则全 X 会漏检);循环/计数条件可以保留");
       }
     }

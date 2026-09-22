@@ -639,12 +639,14 @@ writeFileSync(neqLoopPath, goodTb
     "        if (err_cnt == 0)",
     "        while (i != 0) i = i - 1;\n        if (err_cnt == 0)"
   ));
+// 2026-09-22 收窄(用户口径):计数/索引比常量、比参数、函数返回值**不再提醒** ——
+// 实测收窄前 timing_gen 9 条 + line_buffer 6 条警告全是这一类,把真正的数据比对淹了。
 check(
-  blocking(neqLoopPath, true).some((issue) => issue.rule === "!= 待确认"),
-  "循环/计数条件的 '!=' 会被报出来(不是静默放过)"
+  !blocking(neqLoopPath, true).some((issue) => issue.rule === "!= 待确认"),
+  "循环/计数条件(`while (i != 0)`)不再提醒(按既定口径:循环/计数可保留)"
 );
 const neqLoopCode = run("module-rtl-check.mjs", [neqLoopMod]);
-check(neqLoopCode === 0, `循环条件的 '!=' 只报警告 → 退出码 0(不拦门禁;实际 ${neqLoopCode})`);
+check(neqLoopCode === 0, `计数条件静默 → 退出码 0(实际 ${neqLoopCode})`);
 
 // ②b 两侧都要是**信号**才算数据比对(2026-09-21 实测踩到):`exp_pixel_idx != 0` 这种
 //     "计数/索引比常量"原来被当成数据比对拦死,与"循环/计数条件可以保留"的口径冲突。
@@ -663,11 +665,11 @@ check(
   "期望值命名的**计数/索引**比常量(`exp_pixel_idx != 0`)不算数据比对(不判 FAIL)"
 );
 check(
-  blocking(neqConstPath, true).some((issue) => issue.rule === "!= 待确认"),
-  "但那两处 '!=' 仍会提醒一句(不是静默放过)"
+  !blocking(neqConstPath, true).some((issue) => issue.rule === "!= 待确认"),
+  "计数/索引比常量(`exp_pixel_idx != 0`、`(x % W) != (W-1)`)不再提醒(收窄后)"
 );
 const neqConstCode = run("module-rtl-check.mjs", [neqConstMod]);
-check(neqConstCode === 0, `计数/索引比常量只报警告 → 退出码 0(实际 ${neqConstCode})`);
+check(neqConstCode === 0, `计数/索引比常量静默 → 退出码 0(实际 ${neqConstCode})`);
 
 // ②c 一行里有**多个** `!=`:每一个都要看(第三轮复审 N-06)
 //     真正会漏的形状:第一个 `!=` **两侧都是信号**但不是期望值命名(`a != b`),数据比对在后面 ——
@@ -699,6 +701,36 @@ check(
   "同一行两个都是普通信号比较 → 只提醒、不判 FAIL"
 );
 
+// ②d 收窄后的真实形状(取自 timing_gen 9 条 + line_buffer 6 条的同类写法,2026-09-22):
+//     计数比常量 / 比全大写参数 / 函数返回值 / 参数表达式 / 不当判定用 —— 这些都不该再提醒
+const neqShapeMod = join(SANDBOX, "neq-shape-mod");
+mkdirSync(join(neqShapeMod, "rtl"), { recursive: true });
+mkdirSync(join(neqShapeMod, "verif"), { recursive: true });
+const neqShapePath = join(neqShapeMod, "verif", "tb_neq_shape.sv");
+const neqShapes = [
+  "        if (cnt != 0) cnt = cnt + 1;",
+  "        if (cnt != C_IMG_HEIGHT) cnt = cnt + 1;",
+  "        if ($fscanf(fd, \"%h\", mem[i]) != 1) cnt = cnt + 1;",
+  "        if (tran_cnt != FRAME_SZ * TB_FRAME_NUM) cnt = cnt + 1;",
+  "        $display(\"probe %0d\", (sig_a != sig_b));"
+];
+for (const shape of neqShapes) {
+  writeFileSync(neqShapePath, goodTb
+    .replace("module tb_good;", "module tb_neq_shape;")
+    .replace("        if (err_cnt == 0)", `${shape}\n        if (err_cnt == 0)`));
+  check(
+    !blocking(neqShapePath, true).some((issue) => issue.rule === "!= 待确认"),
+    `收窄:这类不再提醒 → ${shape.trim()}`
+  );
+}
+// 反向对照:两侧都是普通信号、又当判定用 → 仍然提醒(不能收窄成"什么都不报")
+writeFileSync(neqShapePath, goodTb
+  .replace("module tb_good;", "module tb_neq_shape;")
+  .replace("        if (err_cnt == 0)", "        if (sig_a != sig_b) err_cnt = err_cnt + 1;\n        if (err_cnt == 0)"));
+check(
+  blocking(neqShapePath, true).some((issue) => issue.rule === "!= 待确认"),
+  "收窄后仍提醒:两侧都是普通信号 + 当判定用"
+);
 // ③ 成功标记必须与 err_cnt 挂钩:无条件打印的 ALL TESTS PASSED 只是字形
 //    (控制头与打印之间夹一行说明也是同一条语句 —— 自带模板就是这种分行写法)
 const tbMarker = (verdict) => [

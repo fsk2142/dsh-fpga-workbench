@@ -600,8 +600,8 @@ check(
   "改动先记在页面上并标出「有未保存的改动」,点保存才落地"
 );
 check(clientSource.includes("放弃改动"), "能丢弃未保存的改动(误改不用凭记忆打回原值)");
-check(clientSource.includes("status?.sections") && clientSource.includes("status?.stages"), "客户端按宿主布局渲染三层设置");
-check(clientSource.includes("field.section") && clientSource.includes("field.stage"), "字段归属完全来自宿主元数据");
+check(clientSource.includes("status?.sections") && clientSource.includes("status?.capabilities"), "客户端按宿主布局渲染三层设置");
+check(clientSource.includes("field.section") && clientSource.includes("field.capability"), "字段归属完全来自宿主元数据");
 check(!clientSource.includes("force.includes(entry.key)"), "切换环节工具不再强制清空路径");
 check(clientSource.includes('role: "tooltip"') && clientSource.includes('"aria-describedby"'), "长说明通过可访问问号提示显示");
 check(clientSource.includes("保存失败:"), "提交抛错时显示保存失败(否则用户以为已经生效)");

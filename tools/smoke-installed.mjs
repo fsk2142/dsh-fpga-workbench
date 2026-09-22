@@ -49,6 +49,14 @@ try {
   check(false, "已装 lib/toolchain.js 能 import", String(error));
 }
 
+let templateLibrary;
+try {
+  templateLibrary = await import(pathToFileURL(`${INSTALLED}\\lib\\template-library.js`).href);
+  check(true, "已装 lib/template-library.js 能 import");
+} catch (error) {
+  check(false, "已装 lib/template-library.js 能 import", String(error));
+}
+
 // ── 2. 模式半侧:同样 import 得动 ───────────────────────────────────────────
 let mode;
 try {
@@ -83,19 +91,23 @@ if (host !== undefined) {
     );
     check(
       payload.sections?.map((section) => section.key).join(",") === "common,module,project",
-      "设置页载荷含通用工具、模块工具、工程工具三个顶层区"
+      "设置页载荷含工具设置、模块工具、工程工具三个顶层区"
+    );
+    check(payload.sections?.[0]?.label === "工具设置", "已装副本第一大块显示为工具设置");
+    check(Array.isArray(payload.toolCards) && payload.toolCards.length >= 10, "已装副本逐项提供全部内置与自定义工具卡");
+    check(
+      payload.capabilities?.filter((capability) => capability.section === "module").length === 4,
+      "设置页载荷含四张模块能力卡"
     );
     check(
-      payload.stages?.filter((stage) => stage.section === "module").length === 5,
-      "设置页载荷含五个可反复切换的模块环节"
+      payload.capabilities?.filter((capability) => capability.section === "project").length === 3,
+      "设置页载荷含三张工程能力卡"
     );
     check(
-      payload.stages?.filter((stage) => stage.section === "project").length === 8,
-      "设置页载荷含八个独立工程环节"
-    );
-    check(
-      Array.isArray(payload.bindings) && payload.bindings.length === (toolchain?.BINDINGS?.length ?? -1),
-      "设置页载荷含全部环节工具绑定"
+      payload.capabilities?.every((capability) =>
+        typeof capability.toolKey === "string" && Array.isArray(capability.toolOptions) && Array.isArray(capability.templates)
+      ),
+      "每张能力卡都带工具选择和模板槽位"
     );
     check(payload.tools.every((tool) => tool.group && tool.control), "每个字段都带分组与控件类型");
     check(payload.tools.every((tool) => tool.control !== "hidden"), "载荷里没有隐藏字段(改名前的旧键不发给设置页)");
@@ -114,9 +126,34 @@ if (host !== undefined) {
     );
     const declaredKeys = new Set(toolchain?.FIELDS?.map((field) => field.key) ?? []);
     check(moving.every(([key]) => declaredKeys.has(key)), "迁移补丁只写已声明的设置键");
-    check(patch.settingsModelVersion === undefined || patch.settingsModelVersion === "2", "迁移补丁使用设置模型版本 2");
+    check(patch.settingsModelVersion === undefined || patch.settingsModelVersion === "3", "迁移补丁使用设置模型版本 3");
   } catch (error) {
     check(false, "statusOf 能跑通", String(error));
+  }
+}
+
+if (host !== undefined && toolchain !== undefined && templateLibrary !== undefined) {
+  try {
+    check(host.TEMPLATE_PATH === "/plugins/fpga-workbench/templates", "已装副本导出分类模板只读接口路径");
+    const hostSource = readFileSync(`${INSTALLED}\\lib\\index.js`, "utf8");
+    check(hostSource.includes("path: TEMPLATE_PATH"), "已装副本实际注册分类模板接口");
+    check(
+      templateLibrary.TEMPLATE_CATEGORIES?.map((category) => category.key).join(",") ===
+        "rtl,constraints,verification,testbench,sim-compile,sim-run,synthesis,implementation,programming",
+      "已装副本包含九个固定模板分类"
+    );
+    const scan = templateLibrary.scanTemplates({
+      capability: "module-rtl",
+      capabilities: toolchain.CAPABILITIES,
+      libraryRoot: ""
+    });
+    check(
+      scan.groups?.length === 1 && scan.groups[0]?.key === "rtl" &&
+        scan.groups[0]?.items?.some((item) => item.source === "builtin" && item.id.startsWith("builtin:rtl/")),
+      "已装副本能按能力扫描分类内置模板"
+    );
+  } catch (error) {
+    check(false, "分类模板接口与内置模板能跑通", String(error));
   }
 }
 
@@ -128,9 +165,9 @@ if (mode !== undefined) {
     check(text.length > 200, `提示段能组装出内容(${text.length} 字符)`);
     check(text.includes("这是能力配置，不是执行顺序"), "提示段明确设置不是自动化流水线");
     check(text.includes("通用工具"), "提示段说明已登记的通用工具");
-    check(text.includes("模块工具环节偏好") && text.includes("工程工具环节偏好"), "提示段分别说明模块与工程环节工具");
+    check(text.includes("模块工具能力偏好") && text.includes("工程工具能力偏好"), "提示段分别说明模块与工程能力工具");
     check(text.includes("语言与标准"), "提示段含「语言与标准」一节");
-    check(text.includes("模块模板"), "提示段含「模块模板」一节");
+    check(text.includes("模板库:"), "提示段说明模板库来源与按需扫描规则");
     check(text.includes("自带的命令"), "提示段含「自带的命令」一节");
   } catch (error) {
     check(false, "提示段能组装", String(error));

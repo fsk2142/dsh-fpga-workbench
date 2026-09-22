@@ -41,6 +41,14 @@ if (host !== undefined) {
   check(typeof host.statusOf === "function", "导出 statusOf(设置页字段定义靠它)");
 }
 
+let toolchain;
+try {
+  toolchain = await import(pathToFileURL(`${INSTALLED}\\lib\\toolchain.js`).href);
+  check(true, "已装 lib/toolchain.js 能 import");
+} catch (error) {
+  check(false, "已装 lib/toolchain.js 能 import", String(error));
+}
+
 // ── 2. 模式半侧:同样 import 得动 ───────────────────────────────────────────
 let mode;
 try {
@@ -68,7 +76,27 @@ try {
 if (host !== undefined) {
   try {
     const payload = host.statusOf(values);
-    check(payload.tools.length === 17, `设置页载荷含 17 个可见字段(实际 ${payload.tools.length})`);
+    const visibleFields = toolchain?.FIELDS?.filter((field) => field.control !== "hidden") ?? [];
+    check(
+      visibleFields.length > 0 && payload.tools.length === visibleFields.length,
+      `设置页载荷覆盖全部可见字段(定义 ${visibleFields.length},实际 ${payload.tools.length})`
+    );
+    check(
+      payload.sections?.map((section) => section.key).join(",") === "common,module,project",
+      "设置页载荷含通用工具、模块工具、工程工具三个顶层区"
+    );
+    check(
+      payload.stages?.filter((stage) => stage.section === "module").length === 5,
+      "设置页载荷含五个可反复切换的模块环节"
+    );
+    check(
+      payload.stages?.filter((stage) => stage.section === "project").length === 8,
+      "设置页载荷含八个独立工程环节"
+    );
+    check(
+      Array.isArray(payload.bindings) && payload.bindings.length === (toolchain?.BINDINGS?.length ?? -1),
+      "设置页载荷含全部环节工具绑定"
+    );
     check(payload.tools.every((tool) => tool.group && tool.control), "每个字段都带分组与控件类型");
     check(payload.tools.every((tool) => tool.control !== "hidden"), "载荷里没有隐藏字段(改名前的旧键不发给设置页)");
     check(payload.tools.filter((tool) => tool.control === "select").every((tool) => tool.options.length > 1), "下拉字段带选项");
@@ -84,10 +112,9 @@ if (host !== undefined) {
         ? "      待迁移的旧键:无(已迁移过,或本来就没填)"
         : `      待迁移的旧键:${moving.map(([key, value]) => `${key}=${value}`).join(", ")}`
     );
-    check(
-      moving.every(([key]) => ["compilerPath", "simulatorPath", "synthesizerPath"].includes(key)),
-      "迁移补丁只写这三个新键"
-    );
+    const declaredKeys = new Set(toolchain?.FIELDS?.map((field) => field.key) ?? []);
+    check(moving.every(([key]) => declaredKeys.has(key)), "迁移补丁只写已声明的设置键");
+    check(patch.settingsModelVersion === undefined || patch.settingsModelVersion === "2", "迁移补丁使用设置模型版本 2");
   } catch (error) {
     check(false, "statusOf 能跑通", String(error));
   }
@@ -96,10 +123,12 @@ if (host !== undefined) {
 if (mode !== undefined) {
   // 直接跑提示段:走的是已装副本里的同一份代码(mode.js 的 sectionText 就调它)
   try {
-    const { describeEnv, probeFilesystem } = await import(pathToFileURL(`${INSTALLED}\\lib\\toolchain.js`).href);
+    const { describeEnv, probeFilesystem } = toolchain;
     const text = describeEnv(values, probeFilesystem);
     check(text.length > 200, `提示段能组装出内容(${text.length} 字符)`);
-    check(text.includes("编译器") && text.includes("仿真器") && text.includes("综合器"), "提示段按工具给出三类工具与路径");
+    check(text.includes("这是能力配置，不是执行顺序"), "提示段明确设置不是自动化流水线");
+    check(text.includes("通用工具"), "提示段说明已登记的通用工具");
+    check(text.includes("模块工具环节偏好") && text.includes("工程工具环节偏好"), "提示段分别说明模块与工程环节工具");
     check(text.includes("语言与标准"), "提示段含「语言与标准」一节");
     check(text.includes("模块模板"), "提示段含「模块模板」一节");
     check(text.includes("自带的命令"), "提示段含「自带的命令」一节");

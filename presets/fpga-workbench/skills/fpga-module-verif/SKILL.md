@@ -92,7 +92,11 @@ cd <模块根>/verif
 
 **Vivado XSim**(选了它就用 Vivado bin 目录下的这三个命令)
 
-```
+```powershell
+# Vivado 系的工具同样要写用户目录(%APPDATA%\Xilinx\xsim 等,在工作区外):
+# 先重定向再跑,省掉"每次都要放行一次"(原理与实测证据见 fpga-module-synth 的「为什么」)
+$env:APPDATA = "<模块根>\verif\.xsim-user"
+New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
 cd <模块根>/verif
 xvlog -sv ../rtl/<源码...> tb_<snake>.sv
 xelab -debug typical tb_<模块名> -s tb_sim

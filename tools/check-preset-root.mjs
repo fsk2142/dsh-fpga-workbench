@@ -834,6 +834,19 @@ check(
   /别自己另造后缀/u.test(lintText) && /_reg/u.test(lintText) && /_ff/u.test(lintText),
   "rtl 技能写明:别自己另造后缀(`_reg` / `_ff` / `_next` 这类)"
 );
+// Vivado 系工具要写工作区外的用户目录(%APPDATA%\Xilinx):两个技能都要写明"先重定向再跑",
+// 否则综合/仿真每次都撞 `[Common 17-354]` / `tclapp::load_apps`,表现成"总要放行一次"(实测 2026-09-22)
+const synthSkillForAppData = readFileSync(join(skillDir, "fpga-module-synth", "SKILL.md"), "utf8");
+check(
+  /\$env:APPDATA\s*=\s*"<模块根>\\synth\\\.vivado-user"/u.test(synthSkillForAppData) &&
+    /为什么要重定向/u.test(synthSkillForAppData) && /例外/u.test(synthSkillForAppData) && /Tcl Store/u.test(synthSkillForAppData),
+  "综合技能写明:跑 Vivado 前把 `$env:APPDATA` 重定向进模块(附为什么 / 例外 / 全局 Tcl Store 那条)"
+);
+const verifSkillText2 = readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8");
+check(
+  /\$env:APPDATA\s*=\s*"<模块根>\\verif\\\.xsim-user"/u.test(verifSkillText2),
+  "验证技能写明:XSim 同样先重定向 `$env:APPDATA`(指向 fpga-module-synth 的原理说明)"
+);
 // IP 卡的四栏之外,检查器还会查"能不能复核"(N-12):技能里必须写明这几条,不然口径又变成两处
 check(
   /非空字符串/u.test(lintText) && /非空对象/u.test(lintText) &&

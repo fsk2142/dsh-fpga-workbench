@@ -80,9 +80,23 @@ node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> 
 **再跑综合**(全程批处理,不弹界面):
 
 ```powershell
+# ① 先把 Vivado 的**用户目录**重定向进本模块(见下)"为什么":这一步让综合不再需要更宽的沙箱权限
+$env:APPDATA = "<模块根>\synth\.vivado-user"
+New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
+# ② 再跑综合(同一行命令里紧接着跑,别换会话)
 & "<综合器路径>" -mode batch -source <综合脚本.tcl> -log <日志路径> -journal <记录路径>
 ```
 
+**为什么要重定向 `$env:APPDATA`(实测,2026-09-22)**:Vivado 每次启动都要往 `%APPDATA%\Xilinx`
+写它自己的用户数据 —— Tcl App Store(`Vivado\tclapp\`、`Common\<版本>\webtalk_info\tclstore.wpc`)、
+`xsim\`、崩溃日志。那全在**工作区外面**,而受限沙箱只允许写工作区,于是综合一开始就报
+`[Common 17-354]` 或 `tclapp::load_apps` 失败 —— 表现就是"每次都要放行一次"。
+把 `APPDATA` 指到模块里之后,这些写入全落在工作区内:实测 `vivado -mode batch` 退 0、
+`<模块根>\synth\.vivado-user\Xilinx\` 里建出了完整用户数据,而真实的 `%APPDATA%\Xilinx` **一个字节没动**。
+
+- 这个目录是**可再生的**,别提交(和 `synth/` 下的 Vivado 工程一样)
+- **例外**:如果你要用**全局**的 Tcl Store 自定义 / `Vivado_init.tcl`,就别重定向 —— 那种情况向用户说明
+  "综合需要写 `%APPDATA%\Xilinx`,请放行一次更宽的权限",并说清原因(别让报错自己冒出来)
 - **`-mode batch` 必须加** —— 不加会拉起图形界面等人操作,无人值守就跑不下去
 - **别手抄**:用上面那条 `--kind synth-script` 起一份,再按工程改(器件预检、失败判定都固化在里面了)
 - 流程:建模块本地工程 → 加 `rtl/`(含 `rtl/ip/` 下的 IP 与 `.xci`)→ 跑 `synth_design` → 写报告

@@ -15,13 +15,17 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, utimesSy
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  BINDINGS,
   DORMANT_SUFFIX,
   FIELDS,
   NS,
+  SETTINGS_SECTIONS,
+  STAGES,
   TEMP_GRACE_MS,
   DETECT_TARGETS,
   CLEANUP_KINDS,
   TEMPLATE_FIELDS,
+  TOOL_CATALOG,
   TOOLS,
   backupChangedFiles,
   cleanupEntry,
@@ -44,6 +48,8 @@ import {
   probeFilesystem,
   queryVersion,
   readdirNames,
+  resolveBinding,
+  resolveBindings,
   resolveTemplates,
   staleShippedFiles,
   statusOf,
@@ -83,208 +89,216 @@ const probeTyped = (dirs, files) => (path, kind) =>
  */
 const missingKeys = (tools) => tools.filter(isMissing).map((tool) => tool.key);
 
-// ── 字段定义 ────────────────────────────────────────────────────────────────
+// ── 三层工具设置模型 ────────────────────────────────────────────────────────
 //
-// 布局按用户要求:每个工具一组 —— 先"用哪个"(下拉),下面紧跟它的路径,语言挂在对应工具下。
+// 这些断言保护用户真正看到的行为,而不是字段总数:每种工具能同时登记、每个环节独立选择,
+// 路径覆盖有固定优先级,auto 与 none 不混为一谈。
+const sectionKeys = SETTINGS_SECTIONS.map((section) => section.key);
+check(sectionKeys.join(",") === "common,module,project", "设置只有通用工具、模块工具、工程工具三个顶层区");
+check(STAGES.filter((stage) => stage.section === "module").length === 5, "模块工具显示五个可反复切换的环节");
+check(STAGES.filter((stage) => stage.section === "project").length === 8, "工程工具显示八个独立环节");
+
+for (const [tool, pathKey, kind] of [
+  ["python", "pythonPath", "file"],
+  ["verilator", "verilatorPath", "file"],
+  ["iverilog", "iverilogPath", "file"],
+  ["modelsim", "modelsimPath", "file"],
+  ["xsim", "xsimPath", "directory"],
+  ["vivado", "vivadoPath", "file"],
+  ["quartus", "quartusPath", "file"]
+]) {
+  check(TOOL_CATALOG[tool]?.pathKey === pathKey && TOOL_CATALOG[tool]?.kind === kind, `${tool} 有独立通用路径与正确类型`);
+}
+
+const STAGE_COMMON_PATHS = {
+  verilatorPath: "C:\\tools\\verilator_bin.exe",
+  iverilogPath: "C:\\tools\\iverilog.exe",
+  modelsimPath: "C:\\tools\\vsim.exe",
+  xsimPath: "C:\\Vivado\\bin",
+  vivadoPath: "C:\\Vivado\\bin\\vivado.bat",
+  quartusPath: "C:\\Quartus\\bin64\\quartus_sh.exe"
+};
+const stageAllPresent = probeTyped(
+  [STAGE_COMMON_PATHS.xsimPath],
+  Object.values(STAGE_COMMON_PATHS).filter((path) => path !== STAGE_COMMON_PATHS.xsimPath)
+);
+const inspectedCommon = new Map(inspectTools(STAGE_COMMON_PATHS, stageAllPresent).map((field) => [field.key, field]));
+check(
+  Object.keys(STAGE_COMMON_PATHS).every((key) => inspectedCommon.get(key)?.present === true),
+  "多套工具路径可以同时保存且互不覆盖"
+);
+
+const rtlBinding = BINDINGS.find((binding) => binding.key === "moduleRtlCompiler");
+const inheritedBinding = resolveBinding(
+  { ...STAGE_COMMON_PATHS, moduleRtlCompilerTool: "verilator" },
+  rtlBinding,
+  stageAllPresent
+);
+check(
+  inheritedBinding.path === STAGE_COMMON_PATHS.verilatorPath && inheritedBinding.source === "common" && inheritedBinding.state === "ready",
+  "环节留空时继承通用路径"
+);
+const overriddenBinding = resolveBinding(
+  {
+    ...STAGE_COMMON_PATHS,
+    moduleRtlCompilerTool: "verilator",
+    moduleRtlCompilerPath: "D:\\wrapped\\verilator.exe"
+  },
+  rtlBinding,
+  probeWith(["D:\\wrapped\\verilator.exe"])
+);
+check(
+  overriddenBinding.path === "D:\\wrapped\\verilator.exe" && overriddenBinding.source === "stage" && overriddenBinding.state === "ready",
+  "环节路径覆盖通用路径"
+);
+check(resolveBinding({ moduleRtlCompilerTool: "auto" }, rtlBinding, probeWith([])).state === "auto", "auto 保留 AI 判断");
+check(resolveBinding({ moduleRtlCompilerTool: "none" }, rtlBinding, probeWith([])).state === "none", "none 明确禁用");
+check(resolveBinding({ moduleRtlCompilerTool: "bogus" }, rtlBinding, probeWith([])).state === "invalid", "非法选择不会假装可用");
+check(resolveBinding({ moduleRtlCompilerTool: "verilator" }, rtlBinding, probeWith([])).state === "missing", "显式工具缺路径时只标记该绑定缺失");
+
+const migratedV2 = legacyMigrationPatch({
+  settingsModelVersion: "",
+  compiler: "iverilog",
+  compilerPath: "C:\\iverilog\\bin\\iverilog.exe",
+  simulator: "xsim",
+  simulatorPath: "C:\\Vivado\\bin",
+  synthesizer: "quartus",
+  synthesizerPath: "C:\\Quartus\\bin64\\quartus_sh.exe",
+  python: "python",
+  pythonPath: "C:\\Python314\\python.exe"
+});
+check(migratedV2.settingsModelVersion === "2", "迁移写入模型版本 2");
+check(migratedV2.iverilogPath?.endsWith("iverilog.exe"), "共享编译路径迁到 Icarus 专属字段");
+check(migratedV2.xsimPath === "C:\\Vivado\\bin", "共享 XSim 路径保持目录语义");
+check(migratedV2.quartusPath?.endsWith("quartus_sh.exe"), "共享综合路径迁到 Quartus 专属字段");
+check(
+  migratedV2.moduleRtlCompilerTool === "iverilog" && migratedV2.projectIntegrateCompilerTool === "iverilog",
+  "旧编译选择迁到相关环节"
+);
+check(
+  migratedV2.moduleVerifSimulatorTool === "xsim" && migratedV2.projectSyssimSimulatorTool === "xsim",
+  "旧仿真选择迁到相关环节"
+);
+check(
+  migratedV2.compilerPath === "" && migratedV2.simulatorPath === "" && migratedV2.synthesizerPath === "",
+  "共享来源键清空防止复活"
+);
+check(
+  Object.keys(legacyMigrationPatch({ settingsModelVersion: "2", compilerPath: "C:\\old.exe" })).length === 0,
+  "版本 2 不重复迁移"
+);
+const promotedV2 = legacyMigrationPatch({ settingsModelVersion: "", verilatorPath: "C:\\old\\verilator_bin.exe" });
+check(promotedV2.verilatorPath === undefined, "老的工具专属字段原地保留、不清空");
+check(promotedV2.moduleRtlCompilerTool === "verilator", "老的工具专属路径可恢复相关环节偏好");
+const ambiguousV2 = legacyMigrationPatch({ settingsModelVersion: "", compilerPath: "C:\\vendor\\compile.exe" });
+check(ambiguousV2.customCompilerPath === "C:\\vendor\\compile.exe", "无法识别的旧路径进入自定义槽位");
+check(ambiguousV2.moduleRtlCompilerTool === "custom-compiler", "无法识别的旧编译器不猜厂商");
+
+const stagedStatus = statusOf({ ...STAGE_COMMON_PATHS, moduleRtlCompilerTool: "verilator" }, stageAllPresent);
+check(stagedStatus.sections.length === 3 && stagedStatus.stages.length === 13, "状态载荷包含三层布局与全部环节");
+check(
+  stagedStatus.bindings.find((binding) => binding.key === "moduleRtlCompiler")?.state === "ready",
+  "状态载荷包含解析后的环节绑定"
+);
+check(stagedStatus.ok === true, "单个环节缺工具不会把整个 FPGA 模式判坏");
+
+const stageEnvText = describeEnv(
+  {
+    ...STAGE_COMMON_PATHS,
+    moduleRtlCompilerTool: "verilator",
+    moduleVerifSimulatorTool: "auto",
+    moduleSynthFpgaTool: "none"
+  },
+  stageAllPresent
+);
+check(stageEnvText.includes("能力配置，不是执行顺序"), "会话提示明确不是流水线");
+check(stageEnvText.includes("RTL") && stageEnvText.includes(STAGE_COMMON_PATHS.verilatorPath), "显式环节首选给出有效路径");
+check(stageEnvText.includes("由 AI 根据当前任务判断"), "auto 的含义写清");
+check(stageEnvText.includes("明确不用"), "none 的含义写清");
+
+// ── 字段定义与存在性判定 ──────────────────────────────────────────────────
 const KEYS = FIELDS.map((field) => field.key);
 const VISIBLE = FIELDS.filter((field) => field.control !== "hidden");
-const REQUIRED_FIELDS = FIELDS.filter((field) => field.required === true);
 const CHOICE_FIELDS = VISIBLE.filter((field) => field.control === "select");
-const OPTIONAL_FIELDS = FIELDS.filter((field) => field.required !== true);
 const HIDDEN_FIELDS = FIELDS.filter((field) => field.control === "hidden");
-check(KEYS.length === 20, `字段共 20 个:17 个可见 + 3 个隐藏旧键(实际 ${KEYS.length})`);
-check(VISIBLE.length === 17, `可见字段 17 个(实际 ${VISIBLE.length})`);
-check(
-  HIDDEN_FIELDS.map((field) => field.key).join(",") === "verilatorPath,modelsimPath,vivadoPath",
-  "三个改名前的旧键作为隐藏字段保留(迁移用)"
-);
-check(!KEYS.includes("cachePath"), "不再有缓存目录字段(产物各归各环节目录)");
-check(
-  REQUIRED_FIELDS.length === 3,
-  `三个路径必填:编译器 / 仿真器 / 综合器(实际 ${REQUIRED_FIELDS.length})`
-);
-check(
-  REQUIRED_FIELDS.map((field) => field.key).join(",") === "compilerPath,simulatorPath,synthesizerPath",
-  "必填的就是那三个路径",
-  REQUIRED_FIELDS.map((field) => field.key).join(",")
-);
-check(
-  REQUIRED_FIELDS.every((field) => field.skips.length > 0),
-  "每个必填项都写清了没就绪会让哪些能力当前不可执行(否则界面上会出现空的清单)"
-);
-// 库映射文件必须是**文件**类型:写成目录,设置页就会给它弹文件夹选择框
-// (用户实际踩到过:选完 .ini,框里填的是那个文件夹)。
-const libraryField = FIELDS.find((field) => field.key === "modelsimIniPath");
-check(libraryField?.kind === "file", "库映射文件按文件类型探/选(否则设置页弹的是文件夹框)");
-check(
-  libraryField?.required === false && (libraryField?.skips ?? []).length === 0,
-  "库映射文件不挡路:缺了用安装目录那份,不报成「当前不可执行」"
-);
-check(
-  OPTIONAL_FIELDS.every((field) => field.skips.length === 0),
-  "可选字段不报'会跳过什么'(它缺了并不跳过任何环节)"
-);
-const GROUPS = [...new Set(VISIBLE.map((field) => field.group))];
-check(GROUPS.length === 6, `可见的分组恰好六个(实际 ${GROUPS.join("、")})`);
-check(
-  GROUPS.join(",") === "脚本工具,编译工具,仿真工具,综合工具,库映射,模板",
-  `分组按重要性排:脚本 → 编译 → 仿真 → 综合 → 库映射 → 模板(实际 ${GROUPS.join(" → ")})`
-);
-// 每个工具组里:先"用哪个",紧跟它的路径 —— 这是用户要的排列
-const ORDER = VISIBLE.map((field) => field.key);
-for (const [choice, path] of [["compiler", "compilerPath"], ["simulator", "simulatorPath"], ["synthesizer", "synthesizerPath"]]) {
-  check(ORDER.indexOf(path) === ORDER.indexOf(choice) + 1, `${choice} 后面紧跟 ${path}`);
-}
-check(CHOICE_FIELDS.length === 6, `六个下拉:三类工具 + 脚本 + RTL 语言 + 仿真语言(实际 ${CHOICE_FIELDS.length})`);
-check(
-  CHOICE_FIELDS.every((field) => {
-    const options = field.options ?? [];
-    return options.length > 1 && options.some((option) => option.value === field.default);
-  }),
-  "每个下拉都有默认值,且默认值本身是合法选项(否则会被判成取值非法)"
-);
-check(
-  CHOICE_FIELDS.every((field) => (field.options ?? []).every((option) => typeof option.label === "string" && option.label !== "")),
-  "下拉选项都写了给人看的标签"
-);
-check(
-  ["compiler", "simulator", "synthesizer"].every((key) =>
-    (FIELDS.find((field) => field.key === key)?.options ?? []).every(
-      (option) => typeof option.needs === "string" && typeof option.usage === "function"
-    )
-  ),
-  "三类工具的下拉:每个选项都指明用哪个路径字段,并带自己的调用姿势(usage 挂在选项上)"
-);
-check(FIELDS.every((field) => typeof field.group === "string" && field.group !== ""), "每个字段都有分组(设置页按它分段)");
-check(
-  CHOICE_FIELDS.every((field) => {
-    const options = field.options ?? [];
-    return options.length > 1 && options.some((option) => option.value === field.default);
-  }),
-  "每个下拉都有默认值,且默认值本身是合法选项(否则会被判成取值非法)"
-);
-check(
-  CHOICE_FIELDS.every((field) => (field.options ?? []).every((option) => typeof option.label === "string" && option.label !== "")),
-  "下拉选项都写了给人看的标签"
-);
-check(
-  ["compiler", "simulator", "synthesizer"].every((key) =>
-    (FIELDS.find((field) => field.key === key)?.options ?? []).every(
-      (option) => typeof option.needs === "string" && typeof option.usage === "function"
-    )
-  ),
-  "三类工具的下拉:每个选项都指明用哪个路径字段,并带自己的调用姿势(usage 挂在选项上)"
-);
+const STAGE_SELECTS = BINDINGS.map((binding) => FIELDS.find((field) => field.key === binding.toolKey));
+const STAGE_OVERRIDES = BINDINGS.map((binding) => FIELDS.find((field) => field.key === binding.pathKey));
 
-// ── 存在性判定 ──────────────────────────────────────────────────────────────
-const empty = inspectTools({}, probeWith([]));
-check(empty.length === 20, "空设置也返回全部字段");
+check(!KEYS.includes("cachePath"), "不再有缓存目录字段(产物各归各环节目录)");
+check(new Set(KEYS).size === KEYS.length, "每个设置键唯一(工具专属路径不会与迁移键重名)");
 check(
-  empty.filter((tool) => tool.control !== "select").every((tool) => tool.configured === false && tool.present === false),
-  "空设置下所有路径字段都未配置且不可用"
+  HIDDEN_FIELDS.map((field) => field.key).join(",") ===
+    "python,compiler,compilerPath,simulator,simulatorPath,synthesizer,synthesizerPath,settingsModelVersion",
+  "旧全局选择/共享路径与模型版本只作为隐藏迁移键"
 );
+check(
+  VISIBLE.every((field) => ["common", "module", "project"].includes(field.section) && field.sectionLabel === SETTINGS_SECTIONS.find((section) => section.key === field.section)?.label),
+  "每个可见字段都有三层布局元数据"
+);
+check(STAGE_SELECTS.every((field) => field?.control === "select" && field.default === "auto"), "十五个环节角色默认都是 auto");
+check(
+  STAGE_SELECTS.every((field) => field.options[0]?.value === "auto" && field.options.at(-1)?.value === "none"),
+  "每个环节选择都明确区分 auto 与 none"
+);
+check(
+  STAGE_OVERRIDES.every((field) => field?.control === "text" && field.advanced === true && typeof field.bindingKey === "string"),
+  "每个环节角色都有可选的高级覆盖路径"
+);
+check(
+  ["verilatorPath", "iverilogPath", "modelsimPath", "xsimPath", "vivadoPath", "quartusPath"].every(
+    (key) => FIELDS.find((field) => field.key === key)?.section === "common"
+  ),
+  "每个内置工具路径都在通用区独立登记"
+);
+check(
+  ["customCompilerName", "customCompilerPath", "customCompilerNotes", "customSimulatorName", "customSimulatorPath", "customSimulatorNotes", "customFpgaToolName", "customFpgaToolPath", "customFpgaToolNotes"].every((key) => KEYS.includes(key)),
+  "三类自定义工具都保留名称、路径和调用说明"
+);
+check(
+  CHOICE_FIELDS.every((field) => (field.options ?? []).length > 1 && (field.options ?? []).some((option) => option.value === field.default)),
+  "每个下拉都有合法默认值"
+);
+check(FIELDS.every((field) => typeof field.group === "string" && field.group !== ""), "每个字段都有分组");
+
+const libraryField = FIELDS.find((field) => field.key === "modelsimIniPath");
+check(libraryField?.kind === "file" && libraryField.section === "common", "库映射文件按文件类型留在通用区");
+
+const empty = inspectTools({}, probeWith([]));
+check(empty.length === FIELDS.length, "空设置也返回全部字段");
 check(
   empty.filter((tool) => tool.control === "select").every((tool) => tool.present === true && tool.path === tool.default),
-  "下拉字段空值也拿得到默认值,且判为合法"
+  "下拉字段空值拿默认值且判为合法"
 );
-check(missingKeys(empty).length === 3, "空设置下三项必填都算未就绪");
+check(missingKeys(empty).length === 0, "通用路径都是能力登记项,空机器不会被全局门禁");
 
-// 旧键兜底:改名不能让用户已经填好的路径消失
-const migrated = inspectTools(
-  { verilatorPath: "C:\\old\\verilator_bin.exe", modelsimPath: "C:\\old\\vsim.exe", vivadoPath: "C:\\old\\vivado.bat" },
-  probeWith(["C:\\old\\verilator_bin.exe", "C:\\old\\vsim.exe", "C:\\old\\vivado.bat"])
-);
-const migratedByKey = new Map(migrated.map((tool) => [tool.key, tool]));
-check(migratedByKey.get("compilerPath")?.path === "C:\\old\\verilator_bin.exe", "旧 verilatorPath 落到 compilerPath");
-check(migratedByKey.get("simulatorPath")?.path === "C:\\old\\vsim.exe", "旧 modelsimPath 落到 simulatorPath");
-check(migratedByKey.get("synthesizerPath")?.path === "C:\\old\\vivado.bat", "旧 vivadoPath 落到 synthesizerPath");
-check(missingKeys(migrated).join(",") === "", "迁移后没有未就绪项(三个路径都齐了)");
+const xsimOverride = inspectTools(
+  { moduleVerifSimulatorTool: "xsim", moduleVerifSimulatorPath: "C:\\Xilinx\\Vivado\\bin" },
+  probeTyped(["C:\\Xilinx\\Vivado\\bin"], [])
+).find((field) => field.key === "moduleVerifSimulatorPath");
+check(xsimOverride?.kind === "directory" && xsimOverride.present === true, "XSim 环节覆盖按目录校验");
+const modelsimOverride = inspectTools(
+  { moduleVerifSimulatorTool: "modelsim", moduleVerifSimulatorPath: "C:\\modeltech\\vsim.exe" },
+  probeTyped([], ["C:\\modeltech\\vsim.exe"])
+).find((field) => field.key === "moduleVerifSimulatorPath");
+check(modelsimOverride?.kind === "file" && modelsimOverride.present === true, "ModelSim 环节覆盖按文件校验");
 
-// 光在 valueOf 里兜底是不够的:设置页的输入框读的是**新键的原始值**,只兜底就会
-// "框是空的、状态却是绿的"(用户实际抓到的 bug)。所以要把值真的搬过去。
-const migration = legacyMigrationPatch({
-  verilatorPath: "C:\\old\\verilator_bin.exe",
-  modelsimPath: "C:\\old\\vsim.exe",
-  vivadoPath: "C:\\old\\vivado.bat"
-});
-check(
-  migration.compilerPath === "C:\\old\\verilator_bin.exe"
-    && migration.simulatorPath === "C:\\old\\vsim.exe"
-    && migration.synthesizerPath === "C:\\old\\vivado.bat",
-  "迁移补丁:旧值写进新键"
-);
-check(
-  migration.verilatorPath === "" && migration.modelsimPath === "" && migration.vivadoPath === "",
-  "迁移补丁:同时清空旧键(否则以后清空新字段时旧值会复活)"
-);
-check(
-  Object.keys(legacyMigrationPatch({ compilerPath: "C:\\new\\v.exe", verilatorPath: "C:\\old" })).length === 0,
-  "新键已有值时不再迁移(幂等)"
-);
-check(Object.keys(legacyMigrationPatch({})).length === 0, "没有旧值时不写任何东西(不无谓改用户配置)");
-const ownWins = inspectTools({ compilerPath: "C:\\new\\v.exe", verilatorPath: "C:\\old\\v.exe" }, probeWith(["C:\\new\\v.exe"]));
-check(ownWins.find((tool) => tool.key === "compilerPath")?.path === "C:\\new\\v.exe", "新键有值时优先用新键(旧键只是兜底)");
-
-const badChoice = inspectTools({ simulator: "not-a-simulator" }, probeWith([]));
-check(
-  badChoice.find((tool) => tool.key === "simulator")?.present === false,
-  "下拉值不在选项里 → 判为不合法(而不是照用)"
-);
-
-// 路径类型随所选工具变:XSim 要的是 Vivado 的 bin **目录**(xvlog/xelab/xsim 三个命令都在里面),
-// ModelSim 要的是 vsim.exe。类型错了设置页会给 XSim 弹文件选择框,填个同名文件也会被判成"已就绪"。
-const xsimTools = new Map(
-  inspectTools({ simulator: "xsim", simulatorPath: "C:\\Xilinx\\Vivado\\bin" }, probeTyped(["C:\\Xilinx\\Vivado\\bin"], []))
-    .map((tool) => [tool.key, tool])
-);
-check(xsimTools.get("simulatorPath")?.kind === "directory", "选 XSim:仿真器路径按目录判定(设置页要弹目录选择框)");
-check(xsimTools.get("simulatorPath")?.present === true, "选 XSim + 填了存在的 bin 目录 → 就绪");
-check(
-  inspectTools(
-    { simulator: "xsim", simulatorPath: "C:\\Xilinx\\Vivado\\bin\\xsim.bat" },
-    probeTyped([], ["C:\\Xilinx\\Vivado\\bin\\xsim.bat"])
-  ).find((tool) => tool.key === "simulatorPath")?.present === false,
-  "选 XSim 却填了个文件 → 未就绪(那个路径里没有 xvlog/xelab/xsim)"
-);
-const modelsimTools = new Map(
-  inspectTools({ simulator: "modelsim", simulatorPath: "C:\\modeltech64\\win64\\vsim.exe" }, probeTyped([], ["C:\\modeltech64\\win64\\vsim.exe"]))
-    .map((tool) => [tool.key, tool])
-);
-check(modelsimTools.get("simulatorPath")?.kind === "file", "选 ModelSim:仍按文件判定(默认姿势不变)");
-check(modelsimTools.get("simulatorPath")?.present === true, "选 ModelSim + 填了存在的 vsim.exe → 就绪");
-
-const partial = inspectTools(
-  { vivadoPath: "C:\\vivado.bat", modelsimPath: "C:\\missing\\vsim.exe" },
-  probeWith(["C:\\vivado.bat"])
-);
-const byKey = new Map(partial.map((tool) => [tool.key, tool]));
-check(byKey.get("synthesizerPath")?.present === true, "存在的路径判为可用(旧键迁过来的也算)");
-check(
-  byKey.get("simulatorPath")?.present === false && byKey.get("simulatorPath")?.configured === true,
-  "路径错:已配置但未就绪"
-);
-check(byKey.get("compilerPath")?.configured === false, "没填的项:未配置");
-check(
-  missingKeys(partial).join(",") === "compilerPath,simulatorPath",
-  `未就绪清单正确(实际 ${missingKeys(partial).join(",")})`
-);
-check(byKey.get("synthesizerPath")?.configured === true, "填了但路径不存在的项:已配置、未就绪");
-
-// 值两端空白要当成没填(否则 "  " 会被当成一条路径)
 const blank = inspectTools({ vivadoPath: "   " }, probeWith([]));
 check(blank.find((tool) => tool.key === "vivadoPath")?.configured === false, "纯空白视同未配置");
 check(blank.find((tool) => tool.key === "vivadoPath")?.path === "", "路径取出去掉首尾空白");
-
-// 探测抛错不能让整页崩
-const throwing = inspectTools({ vivadoPath: "C:\\x" }, () => {
-  throw new Error("boom");
-});
+const throwing = inspectTools({ vivadoPath: "C:\\x" }, () => { throw new Error("boom"); });
 check(throwing.find((tool) => tool.key === "vivadoPath")?.present === false, "探测抛错时按不可用处理,不向外冒泡");
 
-// 全部就绪
-const prepared = { vivadoPath: "C:\\v", modelsimPath: "C:\\m", verilatorPath: "C:\\t", modelsimIniPath: "C:\\l\\modelsim.ini" };
+const prepared = {
+  vivadoPath: "C:\\v",
+  modelsimPath: "C:\\m",
+  verilatorPath: "C:\\t",
+  modelsimIniPath: "C:\\l\\modelsim.ini",
+  moduleRtlCompilerTool: "verilator",
+  moduleVerifSimulatorTool: "modelsim",
+  moduleSynthFpgaTool: "vivado"
+};
 const ready = inspectTools(prepared, probeWith(Object.values(prepared)));
-check(missingKeys(ready).length === 0, "全部就绪时没有缺失项");
+check(missingKeys(ready).length === 0, "已登记工具不会制造全局缺失门禁");
 
 // ── 两侧契约 ────────────────────────────────────────────────────────────────
 //
@@ -307,12 +321,11 @@ check(clientSource.includes('field.control === "select"'), "客户端会按 cont
 check(clientSource.includes("field.options"), "下拉选项来自宿主");
 check(clientSource.includes("field.group"), "分组来自宿主");
 check(clientSource.includes('field.control === "hidden"'), "客户端不渲染隐藏字段(改名前的旧键)");
-// 说明里要给确切文件名,不能含糊成"可执行文件" —— 真实教训:只写"可执行文件",
-// 用户就会去找 Windows 上并不存在的 vivado.exe。
-check(FIELDS.find((field) => field.key === "synthesizerPath")?.hint.includes("vivado.bat"), "综合器说明写了确切文件名 vivado.bat");
-check(FIELDS.find((field) => field.key === "synthesizerPath")?.hint.includes("quartus_sh.exe"), "综合器说明写了 Quartus 的确切文件名 quartus_sh.exe");
-check(FIELDS.find((field) => field.key === "simulatorPath")?.hint.includes("vsim.exe"), "仿真器说明写了确切文件名 vsim.exe");
-check(FIELDS.find((field) => field.key === "compilerPath")?.hint.includes("verilator_bin.exe"), "编译器说明写了确切文件名 verilator_bin.exe");
+// 说明里给确切入口名,并且分别挂在各自工具上。
+check(FIELDS.find((field) => field.key === "vivadoPath")?.hint.includes("vivado.bat"), "Vivado 说明写了确切入口 vivado.bat");
+check(FIELDS.find((field) => field.key === "quartusPath")?.hint.includes("quartus_sh.exe"), "Quartus 说明写了确切入口 quartus_sh.exe");
+check(FIELDS.find((field) => field.key === "modelsimPath")?.hint.includes("vsim.exe"), "ModelSim 说明写了确切入口 vsim.exe");
+check(FIELDS.find((field) => field.key === "verilatorPath")?.hint.includes("verilator_bin.exe"), "Verilator 说明写了确切入口 verilator_bin.exe");
 // 客户端要按宿主返回的 skips 显示"当前不可执行哪些能力",不能自己另写一份清单
 // (只检查几个只可能来自宿主的步骤名,别用"综合"这种会撞上提示文案的词)
 check(clientSource.includes("skips"), "客户端用宿主返回的 skips 渲染提示");
@@ -385,7 +398,7 @@ check(clientSource.includes("可能是旧的"), "来自 PATH 的命中标明可�
 // 字段定义真的发出去了",而不是去 grep 源码。
 const payload = statusOf({});
 const payloadKeys = Object.keys(payload.tools[0]);
-for (const needed of ["key", "label", "hint", "required", "skips", "path", "configured", "present", "group", "control", "options", "default"]) {
+for (const needed of ["key", "label", "hint", "required", "skips", "path", "configured", "present", "group", "control", "section", "sectionLabel"]) {
   check(payloadKeys.includes(needed), `载荷里有 ${needed}(设置页要靠它渲染)`);
 }
 check(!payloadKeys.includes("usage"), "载荷里没有 usage(那是提示段专用,设置页用不上)");
@@ -397,6 +410,10 @@ check(
 check(
   payload.tools.filter((tool) => tool.control === "select").every((tool) => Array.isArray(tool.options) && tool.options.length > 0),
   "下拉字段的选项跟着载荷一起发(客户端不在本地维护选项)"
+);
+check(
+  payload.tools.filter((tool) => tool.control === "select").every((tool) => typeof tool.default === "string"),
+  "下拉字段的默认值跟着载荷一起发"
 );
 
 // 不再往会话提示里注入任何东西 —— 这是刻意的设计决定
@@ -446,8 +463,8 @@ check(readyText.includes("where"), "提示里写明权威来源,不让 agent 去
 // 以前一个字都不提 —— 用户配好、也验证过存在,agent 却只能用 PATH 猜(实测反馈)。
 // 反向也要成立:没配或探不到的一律不出现(可选字段永不制造门禁)。
 check(
-  readyText.includes("可选运行时与库映射") && readyText.includes(prepared.modelsimIniPath),
-  "提示里带上一小段可选项:库映射文件(配了就能用)"
+  readyText.includes("ModelSim 库映射文件") && readyText.includes(prepared.modelsimIniPath),
+  "提示里带上可用的库映射文件"
 );
 const optionalText = describeEnv(
   { ...prepared, pythonPath: "C:\\y\\python.exe" },
@@ -458,7 +475,7 @@ check(optionalText.includes("C:\\y\\python.exe"), "提示里带上 Python 3 的�
 // 写成"已就绪"会让人以为已经强制绑定,那是假承诺。设置页说明与会话提示都要有这句。
 const pythonField = FIELDS.find((field) => field.key === "pythonPath");
 check(
-  String(pythonField?.hint ?? "").includes("不由本插件保证") && String(pythonField?.hint ?? "").includes("只如实报出版本"),
+  String(pythonField?.hint ?? "").includes("不保证宿主终端") && String(pythonField?.hint ?? "").includes("只如实报告版本"),
   "python 那条路径标注:只如实报版本、宿主是否真的用它不保证",
   String(pythonField?.hint)
 );
@@ -511,11 +528,14 @@ check(
   "python(没有版本约束)照常显示路径,但不带「版本未核验」标注"
 );
 
-const halfText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith([]));
-check(halfText.includes("路径不可用(C:\\vivado.bat)"), "填了但用不了:说清原因(不存在,或类型不对)");
-check(halfText.includes("编译器路径:未配置"), "没填的项:说成未配置(要去填)");
-check(halfText.includes("比特流生成"), "未就绪时带上当前不可执行的能力");
-check(!halfText.includes("可选运行时与库映射"), "一个可选项都没配:那一小段不出现(不制造噪音)");
+const halfText = describeEnv(
+  { vivadoPath: "C:\\vivado.bat", moduleSynthFpgaTool: "vivado", moduleRtlCompilerTool: "verilator" },
+  probeWith([])
+);
+check(halfText.includes("路径不可用(C:\\vivado.bat)"), "显式工具路径不可用时说清原因");
+check(halfText.includes("通用路径和环节覆盖路径都未配置"), "显式工具没路径时说成未配置");
+check(halfText.includes("只影响本环节这项能力"), "一个绑定缺失不会扩大成全局门禁");
+check(!halfText.includes("ModelSim 库映射文件"), "一个可选项都没配时不制造噪音");
 
 const noCacheText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith(["C:\\vivado.bat"]));
 check(
@@ -566,8 +586,8 @@ const knownHit = detectTools(
 check(
   knownHit.some(
     (hit) =>
-      hit.field === "simulatorPath" &&
-      hit.option === "modelsim" &&
+      hit.field === "modelsimPath" &&
+      hit.tool === "modelsim" &&
       hit.path === "C:\\modeltech64_2020.4\\win64\\vsim.exe" &&
       hit.source === "known"
   ),
@@ -585,7 +605,7 @@ const bothHit = detectTools(
   listStub({ "C:\\": ["modeltech64_2020.4"] }),
   fakeEnv
 );
-const modelsimHits = bothHit.filter((hit) => hit.option === "modelsim");
+const modelsimHits = bothHit.filter((hit) => hit.tool === "modelsim");
 check(
   modelsimHits.length === 1 && modelsimHits[0].source === "known",
   "检测:有厂商安装位置命中时,不报同一工具的 PATH 命中(免得旧副本顶掉真安装)"
@@ -597,7 +617,7 @@ const xsimHit = detectTools(
   fakeEnv
 );
 check(
-  xsimHit.some((hit) => hit.option === "xsim" && hit.path === "C:\\AMDDesignTools\\2025.2\\Vivado\\bin"),
+  xsimHit.some((hit) => hit.field === "xsimPath" && hit.tool === "xsim" && hit.path === "C:\\AMDDesignTools\\2025.2\\Vivado\\bin"),
   "检测:XSim 报的是 bin 目录(那个字段本来就是目录,不是 xvlog.bat)"
 );
 
@@ -722,39 +742,22 @@ if (realPython === undefined) {
   );
 }
 
-// 每个具体工具(选项里不是"其他"、也不是"不用"的)都必须在检测表里有对应项。这条守卫来自一次真实遗漏:
-// 下拉里有 Quartus、检测表里没有 —— 界面上写着"支持它",一键检测却对它无能为力。
-for (const [selectKey, pathKey] of [
-  ["compiler", "compilerPath"],
-  ["simulator", "simulatorPath"],
-  ["synthesizer", "synthesizerPath"],
-  ["python", "pythonPath"]
-]) {
-  const options = FIELDS.find((field) => field.key === selectKey)?.options ?? [];
-  const missing = options
-    .filter(
-      (option) =>
-        option.value !== "other" &&
-        option.value !== "none" &&
-        !DETECT_TARGETS.some((target) => target.option === option.value && target.field === pathKey)
-    )
-    .map((option) => option.value);
-  check(missing.length === 0, `${selectKey} 的每个具体工具都在检测表里(漏:${missing.join("、") || "无"})`);
+// 每个内置工具都必须有独立检测项；自定义工具只能手填。
+for (const [tool, definition] of Object.entries(TOOL_CATALOG).filter(([, entry]) => entry.nameKey === undefined)) {
+  check(
+    DETECT_TARGETS.some((target) => target.tool === tool && target.field === definition.pathKey),
+    `${tool} 有对应的工具专属检测项`
+  );
 }
 
-// 每个下拉都要有「不用(本机没有这个工具)」:让用户能明确说"这台没有" —— 于是那个字段空着
-// 也不算未就绪,检测也不再反复提醒"没检测到路径"(用户口径:这样就不必一直去探有没有工具)。
-for (const key of ["compiler", "simulator", "synthesizer"]) {
-  const options = FIELDS.find((field) => field.key === key)?.options ?? [];
-  check(options.some((option) => option.value === "none"), `${key} 有「不用」选项`);
-}
 check(
-  statusOf({ compiler: "none" }).missing.includes("compilerPath") === false,
-  "选了「不用」:statusOf 的缺失清单里没有它(那是用户的决定,不是没配好)"
+  BINDINGS.every((binding) => FIELDS.find((field) => field.key === binding.toolKey)?.options.some((option) => option.value === "none")),
+  "每个环节角色都有明确不用选项"
 );
+check(statusOf({ moduleRtlCompilerTool: "none" }).missing.length === 0, "none 是用户决定,不进缺失清单");
 check(
-  describeEnv({ compiler: "none" }, probeWith([])).includes("用户已说明本机没有"),
-  "选了「不用」:提示段如实说本机没有它,而不是列进「当前不可执行」"
+  describeEnv({ moduleRtlCompilerTool: "none" }, probeWith([])).includes("明确不用"),
+  "none 在提示中与自动判断、路径缺失明确区分"
 );
 
 const quartus64 = detectTools(
@@ -763,7 +766,7 @@ const quartus64 = detectTools(
   fakeEnv
 );
 check(
-  quartus64.filter((hit) => hit.option === "quartus").length === 1 &&
+  quartus64.filter((hit) => hit.tool === "quartus").length === 1 &&
     quartus64.some((hit) => hit.path === "C:\\altera\\13.0sp1\\quartus\\bin64\\quartus_sh.exe"),
   "检测:Quartus 认 altera\\<版本>\\quartus\\bin64;bin64 与 bin 同时在时只报 bin64(同一个工具不列两遍)"
 );
@@ -774,23 +777,13 @@ const quartus32 = detectTools(
   fakeEnv
 );
 check(
-  quartus32.some((hit) => hit.option === "quartus" && hit.path === "C:\\altera\\13.0sp1\\quartus\\bin\\quartus_sh.exe"),
+  quartus32.some((hit) => hit.tool === "quartus" && hit.path === "C:\\altera\\13.0sp1\\quartus\\bin\\quartus_sh.exe"),
   "检测:只有 32 位 bin 的老版本(Quartus II 13)也认(fallback 那一组)"
 );
 
-// Quartus 选项必须**诚实标注**:下拉里有它、检测也认它,但本插件没有它的工程结构 / 约束 / 实现 /
-// 下载那套分支 —— 自带的技能与模板是 Vivado 那套,命令按设置里选中的工具走。标注不写清,用户和
-// agent 都会以为"选了它就走 Quartus 流程"。标注挂在**选项**上(工具之间的差别一律挂选项),
-// 所以断言也读选项的 label/hint,而不是别处的文案。
-const quartusOption = (FIELDS.find((field) => field.key === "synthesizer")?.options ?? []).find(
-  (option) => option.value === "quartus"
-);
-const quartusNote = `${quartusOption?.label ?? ""} ${quartusOption?.hint ?? ""}`;
-const quartusClaims = ["只提供路径", "按设置里选中的工具", "没选它就不会用到"];
 check(
-  quartusClaims.every((claim) => quartusNote.includes(claim)),
-  `Quartus 选项标注了它只被"提供路径与检测"、命令按设置里选中的工具走、没选就不会用到(缺:${quartusClaims.filter((claim) => !quartusNote.includes(claim)).join("、") || "无"})`,
-  quartusOption?.label
+  TOOL_CATALOG.quartus.supportNote.includes("只保证路径与检测") && !TOOL_CATALOG.quartus.supportNote.includes("完整工程流程已支持"),
+  "Quartus 把路径可用与完整流程支持分开说明"
 );
 
 // 检测**不回声用户填的值**:已保存的设置和页面上未保存的改动可能不是一回事(用户刚换了
@@ -802,7 +795,7 @@ check(
 // 现在改成"探得到就必须报出来":PATH 上的 vsim.exe 照样报(来源 path),不存在"回声"这条路。
 check(
   detectTools(detectProbe(["C:\\bin\\vsim.exe"]), listStub({ "C:\\": [] }), fakeEnv).some(
-    (hit) => hit.field === "simulatorPath" && hit.path === "C:\\bin\\vsim.exe" && hit.source === "path"
+    (hit) => hit.field === "modelsimPath" && hit.tool === "modelsim" && hit.path === "C:\\bin\\vsim.exe" && hit.source === "path"
   ),
   "检测只报机器上找到的(PATH 命中照样报出来)"
 );
@@ -1299,7 +1292,10 @@ check(langText.includes("仿真语言"), "提示里给出仿真语言");
 check(langText.includes("ModelSim / Questa"), "提示里给出仿真器(默认 ModelSim)");
 check(langText.includes(".sv"), "提示里给出文件扩展名(写代码时要用)");
 
-const xsimText = describeEnv({ ...prepared, simulator: "xsim" }, () => true);
+const xsimText = describeEnv(
+  { ...prepared, xsimPath: "C:\\Vivado\\bin", moduleVerifSimulatorTool: "xsim" },
+  () => true
+);
 check(
   // 断言 XSim 自己的三个命令 —— 别用"同目录"这种词:编译器那句 usage 里也有,会假通过
   xsimText.includes("xvlog") && xsimText.includes("xelab") && xsimText.includes("-runall"),
@@ -1312,19 +1308,25 @@ check(
   "选了 XSim 就不会再拿 vsim 的命令糊弄"
 );
 // 换工具要跟着换命令:三条 usage 各自绑在选项上
-const quartusText = describeEnv({ ...prepared, synthesizer: "quartus" }, () => true);
+const quartusText = describeEnv(
+  { ...prepared, quartusPath: "C:\\Quartus\\quartus_sh.exe", moduleSynthFpgaTool: "quartus" },
+  () => true
+);
 check(quartusText.includes("quartus_sh"), "换综合器后提示里换成对应工具的命令");
-const iverilogText = describeEnv({ ...prepared, compiler: "iverilog" }, () => true);
+const iverilogText = describeEnv(
+  { ...prepared, iverilogPath: "C:\\iverilog\\iverilog.exe", moduleRtlCompilerTool: "iverilog" },
+  () => true
+);
 check(iverilogText.includes("-g2012"), "换编译器后提示里换成对应工具的命令");
 // 仿真器下拉没有 Verilator(用户口径:仿真不用它)。它是**编译器**下拉里的选项(RTL lint 用它),
 // 所以这条按字段分开断言 —— 只看"提示里有 Verilator"会把两件事混在一起。
-const simField = FIELDS.find((field) => field.key === "simulator");
+const simField = FIELDS.find((field) => field.key === "moduleVerifSimulatorTool");
 const simValues = (simField?.options ?? []).map((option) => option.value);
 check(
   !simValues.includes("verilator") && simValues.includes("modelsim") && simValues.includes("xsim"),
   `仿真器下拉只有 ModelSim / XSim(实际:${simValues.join("、") || "无"})`
 );
-const compilerField = FIELDS.find((field) => field.key === "compiler");
+const compilerField = FIELDS.find((field) => field.key === "moduleRtlCompilerTool");
 check(
   (compilerField?.options ?? []).some((option) => option.value === "verilator"),
   "编译器下拉里保留 Verilator(RTL 环节的 lint 用它)"

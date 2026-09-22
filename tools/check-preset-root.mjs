@@ -839,12 +839,14 @@ check(
 const synthSkillForAppData = readFileSync(join(skillDir, "fpga-module-synth", "SKILL.md"), "utf8");
 check(
   /\$env:APPDATA\s*=\s*"<模块根>\\synth\\\.vivado-user"/u.test(synthSkillForAppData) &&
-    /为什么要重定向/u.test(synthSkillForAppData) && /例外/u.test(synthSkillForAppData) && /Tcl Store/u.test(synthSkillForAppData),
+    /为什么要重定向/u.test(synthSkillForAppData) && /例外/u.test(synthSkillForAppData) && /Tcl Store/u.test(synthSkillForAppData) &&
+    /\$oldAppData = \$env:APPDATA/u.test(synthSkillForAppData) && /\} finally \{/u.test(synthSkillForAppData),
   "综合技能写明:跑 Vivado 前把 `$env:APPDATA` 重定向进模块(附为什么 / 例外 / 全局 Tcl Store 那条)"
 );
 const verifSkillText2 = readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8");
 check(
-  /\$env:APPDATA\s*=\s*"<模块根>\\verif\\\.xsim-user"/u.test(verifSkillText2),
+  /\$env:APPDATA\s*=\s*"<模块根>\\verif\\\.xsim-user"/u.test(verifSkillText2) &&
+    /\$oldAppData = \$env:APPDATA/u.test(verifSkillText2) && /\} finally \{/u.test(verifSkillText2),
   "验证技能写明:XSim 同样先重定向 `$env:APPDATA`(指向 fpga-module-synth 的原理说明)"
 );
 // IP 卡的四栏之外,检查器还会查"能不能复核"(N-12):技能里必须写明这几条,不然口径又变成两处

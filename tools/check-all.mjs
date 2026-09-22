@@ -49,9 +49,19 @@ const SAFETY_CHECK = "check-install-safety.mjs";
  * (加载契约、渲染冒烟、已装副本 import),没有一个真的起 DSH 客户端、真的走一次会话。
  * 所以它永远记「未检」,并把"人该怎么检"写在这里 —— 免得被读成"真实客户端已经实测过"。
  */
-const CLIENT_INTEGRATION_HOWTO =
-  "本自检不起真实客户端。人工检:重启 DSH Desktop(让已装副本生效)→ 新建会话选「FPGA 开发模式」" +
-  " → 设置页能读能写 → 会话提示带上本机工具路径";
+  // 第四轮 Q4-13:不做端到端框架,但把"人该怎么检"写成**可照着走的清单**,并要求每次发布把结果
+  // 记进 `docs/CLIENT_CHECKLIST.md`(填过的就替换掉 TODO)—— 免得"自检全绿"被读成"真机验收过了"。
+  const CLIENT_INTEGRATION_HOWTO = [
+    "本自检不起真实客户端。发布前请手动走一遍清单(逐条记结果;真机结果按版本记进 docs/CLIENT_CHECKLIST.md):",
+    "  1) 重启 DSH Desktop(让已装副本生效)→ 新建会话选「FPGA 开发模式」",
+    "  2) 设置页:字段能读能写、保存后重开仍在;工具路径显示正常",
+    "  3) 会话提示:带上本机工具路径与「本模式自带的命令」(含 module-report-check.mjs)",
+    "  4) 技能按需加载:让它读一个技能,内容与 presets/ 下的一致",
+    "  5) 起文件:module-rtl-new / module-verif-new / module-synth-new 各跑一次,落点正确",
+    "  6) 旧技能停用:用户预设目录里造一个清单记过的过期技能,重启后应改名成 *.disabled-by-plugin 且不再加载",
+    "  7) 退出码与错误状态:故意让检查失败(删掉一个被引用的证据文件),确认退非零且点名",
+    "  8) 有厂商工具时:综合与仿真各跑一次真实夹具(Vivado / ModelSim),不能用 Node 单测替代"
+  ].join("\\n");
 
 const run = (file) => {
   const result = spawnSync(process.execPath, [join(TOOLS, file)], {

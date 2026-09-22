@@ -36,6 +36,7 @@ import {
   listEmptySkillDirs,
   listFiles,
   listTempLeftovers,
+  nextManifest,
   newlyReportedCleanup,
   nextReportedCleanup,
   presetFileDiff,
@@ -897,6 +898,24 @@ check(
 );
 check(listFiles(staleSource).join(",") === "skills/keep-me/SKILL.md", "listFiles 给出相对路径且用 / 分隔");
 
+// ── 同步清单要按当前事实一次算清(第四轮复审 Q4-06)──────────────────────────
+//
+// 停用旧技能(改名)与"要不要重新复制内容"是两件事:以前只有 cpSync 那条分支写清单,于是
+// "只剩一个旧技能要停用、其余内容一致"时,清单里不记 `.disabled-by-plugin` → 下次它被当成
+// "用户自己放的东西",待清理与归属都不再真实。
+check(
+  nextManifest(["a.md", "skills/keep/SKILL.md"], ["skills/gone/SKILL.md"], ["skills/gone/SKILL.md.disabled-by-plugin"]).join(",") ===
+    ["a.md", "skills/gone/SKILL.md", "skills/gone/SKILL.md.disabled-by-plugin", "skills/keep/SKILL.md"].join(","),
+  "nextManifest:包内的 + 上次是我们的过期文件 + 这次停用的,都记进清单(排序去重)"
+);
+check(
+  nextManifest(["a.md"], [], []).join(",") === "a.md" && nextManifest([], undefined, undefined).length === 0,
+  "nextManifest:没有过期/停用项时就是包内清单;空输入不炸"
+);
+check(
+  nextManifest(["a.md", "a.md"], ["a.md"], []).join(",") === "a.md",
+  "nextManifest:同一路径只记一次(去重)"
+);
 // ── 停用过期技能入口(第三轮复审 N-11)──────────────────────────────────────
 //
 // 宿主的技能插件没有白名单配置:只要 `SKILL.md` 还在,老技能就照样进活动技能集合 —— 所以
@@ -958,7 +977,8 @@ check(
 check(
   /function disableDormantSkills\(/u.test(hostSource) &&
     /renameSync\(abs, target\)/u.test(hostSource) &&
-    /listFiles\(source\), \.\.\.stale, \.\.\.dormant/u.test(hostSource),
+    /nextManifest\(listFiles\(source\), stale, dormant\)/u.test(hostSource) &&
+    /dormant\.length > 0/u.test(hostSource),
   "宿主把过期技能入口**改名**停用,并把停用后的名字写进同步清单(源码级;绝不删除)"
 );
 check(
@@ -1533,6 +1553,60 @@ check(
   "冒烟失败时走回滚(坏副本不能留在盘上等着被重启加载)"
 );
 
+// ── 同步/安装的事务语义(第四轮复审 Q4-03 / Q4-04 / Q4-05)────────────────────
+//
+// 断言锚在**代码形状**上(注释里出现关键词不算):逐个文件"临时文件 → 读回比对 → 改名就位"、
+// 回滚集合包含**正在写的那一个**、事后校验失败/抛异常也回滚、安装器用窄 try/catch 包住 add 之后。
+const syncTxnSource = stripComments(readFileSync(join(ROOT, "tools", "sync-installed.mjs"), "utf8"));
+check(
+  /writeFileSync\(temporary, bytes\)/u.test(syncTxnSource) &&
+    /readFileSync\(temporary\)\.equals\(bytes\)/u.test(syncTxnSource) &&
+    /renameSync\(temporary, target\)/u.test(syncTxnSource),
+  "sync-installed 逐文件:临时文件 → 读回逐字节比对 → 改名就位(半截目标结构上不会出现;Q4-03)"
+);
+check(
+  /inFlight === undefined \? writtenTargets : \[\.\.\.writtenTargets, inFlight\]/u.test(syncTxnSource),
+  "sync-installed 回滚集合包含**正在写的那一个**(Q4-03)"
+);
+check(
+  /同步后校验抛异常[\s\S]{0,200}?rollback\(\)/u.test(syncTxnSource) &&
+    /FAIL: 同步后仍有[\s\S]{0,300}?rollback\(\)/u.test(syncTxnSource),
+  "sync-installed 事后校验抛异常 / 不通过都回滚,不说“重启生效”(Q4-04)"
+);
+const installSource2 = stripComments(readFileSync(join(ROOT, "tools", "install.mjs"), "utf8"));
+check(
+  /try \{[\s\S]{0,400}?const after = verify\(\)[\s\S]{0,1200}?catch \(error\) \{\s*rollback\(/u.test(installSource2),
+  "install.mjs 用窄 try/catch 包住 add 之后的校验与冒烟,异常也走 rollback(Q4-05)"
+);
+check(
+  /backup === undefined[\s\S]{0,600}?renameSync\(INSTALLED, stray\)/u.test(installSource2),
+  "首次安装失败时把坏副本**改名隔离**(没有旧版本可恢复,也不留在盘上;Q4-05)"
+);
+// ── 用到的 node:fs 符号必须都导入(第四轮复审 1.1 的根因守卫)──────────────────
+//
+// 实测踩过:`lib/index.js` 里加了 `renameSync(...)` 却忘了加进 `import {...} from "node:fs"` ——
+// `node --check` 只查语法、不查未定义标识符;运行时抛的 ReferenceError 又被外层 catch 吞成一条警告,
+// 于是"停用旧技能"这条路径**完全失效而自检全绿**。判据:用到的名字 ⊆ 导入的名字。
+const FS_SYMBOLS = [
+  "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "cpSync", "existsSync", "lstatSync", "mkdirSync",
+  "openSync", "readFileSync", "readdirSync", "realpathSync", "renameSync", "rmSync", "statSync", "symlinkSync",
+  "unlinkSync", "writeFileSync"
+];
+for (const file of guarded) {
+  const text = stripComments(readFileSync(file, "utf8"));
+  const rel = relative(ROOT, file).split(sep).join("/");
+  const imported = new Set(
+    [...text.matchAll(/import\s*\{([^}]+)\}\s*from\s*["']node:fs["']/gu)]
+      .flatMap((match) => match[1].split(",").map((piece) => piece.trim().split(/\s+as\s+/u).pop()))
+  );
+  if (imported.size === 0) continue; // 这个文件没用具名导入(或压根不碰 node:fs)
+  const missing = FS_SYMBOLS.filter((name) => new RegExp(`(?<![\\w.$])${name}\\s*\\(`, "u").test(text) && !imported.has(name));
+  check(
+    missing.length === 0,
+    `${rel} 用到的 node:fs 符号都写在导入表里(实测踩过:忘了导入 → 运行时 ReferenceError 被吞)`,
+    missing.length === 0 ? undefined : `缺:${missing.join("、")}`
+  );
+}
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");
 if (failures.length > 0) process.exitCode = 1;
 

@@ -1,12 +1,12 @@
 //==================================================================================//
-// File Name    : tb_<module_snake>.sv                                               //
-// Module Name  : <ModuleName> Testbench                                              //
-// Created Date : <DATE>                                                              //
-// Updated Date : <DATE>                                                              //
-// Version      : v1.0                                                                //
-// Author       : <Author>                                                            //
-// Copyright    : Copyright (c) YYYY <Author>. All rights reserved.                   //
-// Open Source  : This file is proprietary and NOT open source.                       //
+// File Name    : tb_<module_snake>.sv                                              //
+// Module Name  : <ModuleName> Testbench                                            //
+// Created Date : <DATE>                                                            //
+// Updated Date : <DATE>                                                            //
+// Version      : v1.0                                                              //
+// Author       : <Author>                                                          //
+// Copyright    : Copyright (c) YYYY <Author>. All rights reserved.                 //
+// Open Source  : This file is proprietary and NOT open source.                     //
 //==================================================================================//
 // TB conventions (current workflow) - every item is measured, keep all six:
 //  1. Write compare data to the output path confirmed in spec/spec.md (the
@@ -41,12 +41,16 @@ module tb_<module_snake>;
   integer err_cnt = 0;
 
   //----------------------------------------------------------------------------//
-  // Clock contract: the scaffold uses 250 MHz (4.000 ns) by default.
+  // Clock contract: the scaffold uses 100 MHz (10.000 ns) by default — **the same
+  // number as `synth/<ModuleName>.xdc`**(`create_clock -period`). Two templates must
+  // not disagree: a 250 MHz TB driving a design that is timed at 100 MHz makes any
+  // post-synthesis timing conclusion meaningless. (Fifth review 2.2; guarded by
+  // check-fpga-tools so the two stay equal.)
   // This is only the TB clock period/protocol pace, not physical timing proof.
-  // If the module confirms another target or multiple clocks, update this TB
-  // and record the approved periods in spec/spec.md and synth/<ModuleName>.xdc.
+  // If the module confirms another target or multiple clocks, change **both** files
+  // together and record the approved periods in spec/spec.md.
   //----------------------------------------------------------------------------//
-  localparam time CLK_PERIOD = 4ns;
+  localparam time CLK_PERIOD = 10ns;
   localparam integer WATCHDOG_CYCLES = 2_500_000;
   string comparison_output_file = "<COMPARISON_OUTPUT>";
   logic clk = 1'b0;

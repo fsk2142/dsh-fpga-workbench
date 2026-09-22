@@ -88,25 +88,73 @@ export function fieldsFromSpec(specPath) {
 }
 
 /**
- * 按「模块 spec → 工程 spec」的顺序读器件与顶层名。
+ * 按「**工程 spec 优先** → 模块 spec」的顺序读器件,顶层名只认模块自己的 spec。
+ *
+ * 器件(用户口径:器件只写一处,工程是权威 —— 第四轮复审 Q4-01):
+ *   - 兄弟工程 spec(`<模块根的兄弟>/project/spec/spec.md`)里有器件 → **以它为准**;
+ *     模块 spec 也写了、但**不一致** → 返回 `conflict`(调用方**拒绝生成**,不替用户选一个);
+ *   - 工程 spec 没有(独立模块) → 用模块 spec 自己写的;
+ *   - 两处都没有 → `part` 为 `undefined`(调用方拒绝生成)。
+ * 顶层名(Q4-02):**只认模块 spec**。工程 spec 里那个是整个工程的顶层(如 `system_top`),
+ * 借过来会写进模块综合脚本 —— 模块名才是这里该用的兜底(见 `main()`)。
  * @param root - 模块根。
- * @returns `{ specPath, part, top, partSource }`;`partSource` 是器件从哪读到的(`"module"` / `"project"` / `undefined`)。
+ * @returns `{ specPath, projectSpecPath, part, top, partSource, conflict }`;
+ *   `conflict` 为 `{ module, project, projectSpecPath }`(只在不同时为 `undefined` 之外的对象)。
  */
 export function readSpecFields(root) {
   const specPath = join(root, "spec", "spec.md");
+  const projectSpecPath = join(root, "..", "project", "spec", "spec.md");
   const mine = fieldsFromSpec(specPath);
-  if (mine.part !== undefined) return { specPath, ...mine, partSource: "module" };
-  // 模块 spec 没写器件(按新口径这本来就是常态):看工程的 spec —— 模块根与 `project/` 是兄弟
-  const projectSpec = join(root, "..", "project", "spec", "spec.md");
-  const fromProject = fieldsFromSpec(projectSpec);
-  return {
-    specPath,
-    part: fromProject.part,
-    top: mine.top ?? fromProject.top,
-    partSource: fromProject.part === undefined ? undefined : "project"
-  };
+  const fromProject = fieldsFromSpec(projectSpecPath);
+
+  if (fromProject.part !== undefined && mine.part !== undefined && mine.part.toLowerCase() !== fromProject.part.toLowerCase()) {
+    // 两处都写了、还不一样:器件以工程为准,模块那份是错的 —— 拒绝,并把两处都列出来
+    return {
+      specPath,
+      projectSpecPath,
+      part: fromProject.part,
+      top: mine.top,
+      partSource: "project",
+      conflict: { module: mine.part, project: fromProject.part, projectSpecPath }
+    };
+  }
+  if (fromProject.part !== undefined) {
+    return { specPath, projectSpecPath, part: fromProject.part, top: mine.top, partSource: "project" };
+  }
+  return { specPath, projectSpecPath, part: mine.part, top: mine.top, partSource: mine.part === undefined ? undefined : "module" };
 }
 
+/**
+ * 器件串**完不完整**(第四轮 Q4-11):"正则匹配到"不等于"能喂给 Vivado 的 `-part`"。
+ *
+ * 实测形状:spec 里只写族名简称(`XC7A100T`)也匹配得上,于是脚本会生成 `set PART "XC7A100T"` ——
+ * 那不是一个合法 part(Vivado 需要器件+封装+速度等级)。不能硬编码"7 系列专用"的正则(会误伤别的族),
+ * 只按**形状**判:必须有速度等级分隔,且它前面那段以"字母+数字"结尾(封装码,如 `fgg484` / `ffva1156` /
+ * `ffvc1156`)。拿不准的就**拒绝生成**,让人把完整型号写进 spec。
+ * @param part - 解析出来的器件串。
+ * @returns 看起来是完整器件串时为 true。
+ */
+export function partLooksComplete(part) {
+  if (typeof part !== "string") return false;
+  const [device = "", ...rest] = part.split("-");
+  if (rest.length === 0) return false; // 没有分隔:`XC7A100T`、`xcku040`、`xczu7ev`
+  // 封装码:器件段自带(`xc7a100tfgg484`)或单独一段(`xcku040-ffva1156-…`)—— 都是"字母 + ≥3 位数字"
+  const hasPackage = /[a-z]+\d{3,}$/iu.test(device) || rest.some((segment) => /^[a-z]+\d{3,}$/iu.test(segment));
+  // 速度等级:单独一段纯数字(可带一个后缀字母),如 `-2` / `-1` / `-2` + `-e`
+  const hasSpeed = rest.some((segment) => /^\d+[a-z]?$/iu.test(segment));
+  return hasPackage && hasSpeed;
+}
+/** 判据的边界用例(自检直接调它,不用起文件):真实 spec + 常见残缺写法。 */
+export const PART_SHAPE_CASES = [
+  { part: "xc7a100tfgg484-2", complete: true },
+  { part: "xc7z020clg484-1", complete: true },
+  { part: "xcku040-ffva1156-2-e", complete: true },
+  { part: "xczu7ev-ffvc1156-2-e", complete: true },
+  { part: "XC7A100T", complete: false },
+  { part: "xcku040", complete: false },
+  { part: "xc7a100t-2", complete: false },
+  { part: "xcku040-ffva1156", complete: false }
+];
 /** 取一行里所有像器件型号的词。 */
 function partTokens(line) {
   return line.match(PART_RE) ?? [];
@@ -130,20 +178,40 @@ function main() {
   if (args.kind !== "synth-script") return stampFile({ ...args, kind: "xdc" });
   // 漏给模块根时不去读 spec(那会拼出一个不存在的路径):交给 stampFile 如实报参数错
   const spec = args.root === undefined ? {} : readSpecFields(args.root);
+  // 两处器件**不一致**就拒绝(第四轮复审 Q4-01):器件以工程 spec 为准,模块那份是错的 ——
+  // 自动挑一个(无论挑哪个)都会把"两份规格打架"这件事藏起来,而 IP 是按其中一个定制的。
+  if (spec.conflict !== undefined) {
+    console.error("两处器件型号不一致,先不起综合脚本:");
+    console.error(`  工程 spec:${spec.conflict.projectSpecPath} → ${spec.conflict.project}`);
+    console.error(`  模块 spec:${spec.specPath} → ${spec.conflict.module}`);
+    console.error("  器件只写一处(工程 spec 是权威):把模块 spec 里那份删掉,或在工程 spec 里改对;再跑本命令。");
+    return 2;
+  }
+  // 器件串**不完整**也拒绝(第四轮 Q4-11):`set PART "XC7A100T"` 这种不是合法 part,
+  // 到综合时才报错、且看不出根因 —— 让人先把完整型号(器件+封装+速度等级)写进 spec。
+  if (args.root !== undefined && spec.part !== undefined && !partLooksComplete(spec.part)) {
+    console.error(`器件串不完整,先不起综合脚本:解析到的是 ${spec.part}`);
+    console.error("  要写完整型号,例如 xc7a100tfgg484-2(器件 + 封装 + 速度等级)——");
+    console.error(`  工程 spec:${spec.projectSpecPath} 或模块 spec:${spec.specPath}`);
+    return 2;
+  }
   // 器件定不下来就**拒绝**:留着模板里的默认器件等于拿一个看起来可信的错值去综合(见文件头)。
   if (args.root !== undefined && spec.part === undefined) {
     console.error("器件没定,先不起综合脚本(继承模板默认器件会拿错器件去综合):");
     console.error(`  模块 spec:${spec.specPath} 里没有器件型号`);
-    console.error("  工程 spec(<模块根的兄弟目录>/project/spec/spec.md)里也没有");
+    console.error(`  工程 spec:${spec.projectSpecPath} 里也没有`);
     console.error("  器件只写一处(用户口径):写进工程 spec,或写进这个模块的 spec;再跑本命令。");
     return 2;
   }
-  // 顶层名 spec 里没有 → 按模块名填(本模式约定 `rtl/<模块名>.sv` 就是顶层,不是猜)
+  // 顶层名:只认**模块自己的** spec,没有就按模块名填(第四轮复审 Q4-02:工程 spec 里那个是
+  // 整个工程的顶层 `system_top`,借过来会写进模块综合脚本;本模式约定 `rtl/<模块名>.sv` 才是顶层)
   const top = spec.top ?? args.name;
   if (args.root !== undefined && spec.top === undefined && top !== undefined) {
     console.log(`(spec 里没写「顶层模块名:」,按模块名填了 ${top};要用别的名字就在 spec 里写明)`);
   }
-  if (spec.partSource === "project") console.log(`(器件 ${spec.part} 取自工程 spec)`);
+  if (spec.partSource === "project") {
+    console.log(`(器件 ${spec.part} 取自工程 spec:${spec.projectSpecPath})`);
+  }
   return stampFile({ ...args, template: args.template ?? BUNDLED_RUN_SYNTH, part: spec.part, top });
 }
 

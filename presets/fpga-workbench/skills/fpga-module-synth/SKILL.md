@@ -56,7 +56,7 @@ description: 综合 FPGA 模块并判定"综合门禁 + 综合后时序"能否�
   否则工具会把跨域路径算成未约束(判据要求 `unconstrained_path_count = 0`)
 - **不写**:管脚分配、IO 标准与电平、input/output delay —— 那些是板子的事,
   在工程级 `fpga-project-constraints` 里
-- 模块级 I/O 延迟不适用,判据里记 `MODULE_SCOPE_NOT_APPLICABLE`
+- 模块级 I/O 延迟不适用,判据里记 `NOT_APPLICABLE`
 
 ## 本环节要跑的命令
 
@@ -81,10 +81,16 @@ node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> 
 
 ```powershell
 # ① 先把 Vivado 的**用户目录**重定向进本模块(见下)"为什么":这一步让综合不再需要更宽的沙箱权限
+$oldAppData = $env:APPDATA
 $env:APPDATA = "<模块根>\synth\.vivado-user"
 New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
-# ② 再跑综合(同一行命令里紧接着跑,别换会话)
-& "<综合器路径>" -mode batch -source <综合脚本.tcl> -log <日志路径> -journal <记录路径>
+# ② 再跑综合;**跑完必须还原**(第四轮 Q4-09:环境变量会留在这个 PowerShell 会话里,
+#    不还原的话后续命令会继续用上一个模块的用户目录)
+try {
+  & "<综合器路径>" -mode batch -source <综合脚本.tcl> -log <日志路径> -journal <记录路径>
+} finally {
+  $env:APPDATA = $oldAppData
+}
 ```
 
 **为什么要重定向 `$env:APPDATA`(实测,2026-09-22)**:Vivado 每次启动都要往 `%APPDATA%\Xilinx`
@@ -117,7 +123,7 @@ New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
 2. 需要的时钟**都在**(缺一个都不行)
 3. `missing_clock_count`、`unconstrained_path_count`、`no_clock_path_count` **全为 0**
 
-`timing_exception_count` 记下来供后续查看;模块级 I/O 延迟属 `MODULE_SCOPE_NOT_APPLICABLE`。
+`timing_exception_count` 记下来供后续查看;模块级 I/O 延迟属 `NOT_APPLICABLE`。
 
 **没有统一的 200 / 250 / 300 MHz 阈值。** 实测 Fmax 是**记录下来的观察值**,不是门禁 ——
 因此不得为了让某个数字好看去改约束。

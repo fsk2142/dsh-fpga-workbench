@@ -59,7 +59,7 @@
 # ---------------------------------------------------------------------------- #
 # 2. Clock constraints -- MODULE level (the one section a module fills in)     #
 # ---------------------------------------------------------------------------- #
-create_clock -name clk -period 10.000 [get_ports clk]
+create_clock -name clk -period 10.000 [get_ports clk]   ;# 与 templates/tb.sv 的 CLK_PERIOD 同源(第五轮 2.2):改一个必须改另一个
 #
 # ---------------------------------------------------------------------------- #
 # 3. Configuration commands (CFG) -- PROJECT level                             #

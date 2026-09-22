@@ -70,7 +70,7 @@ ModelSim / Vivado XSim / Verilator、路径是什么,都写在那里。**不得�
 **别手抄 `run.do`**:用模板起一份(它把踩过的坑固化了,起完按工程改):
 
 ```powershell
-node "<预设>/tools/module/module-verif-new.mjs" <模块根> --kind run-do
+node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind run-do
 cd <模块根>/verif
 & "<仿真器路径>" -c -do "do run.do; quit -f"
 ```
@@ -95,12 +95,17 @@ cd <模块根>/verif
 ```powershell
 # Vivado 系的工具同样要写用户目录(%APPDATA%\Xilinx\xsim 等,在工作区外):
 # 先重定向再跑,省掉"每次都要放行一次"(原理与实测证据见 fpga-module-synth 的「为什么」)
+$oldAppData = $env:APPDATA
 $env:APPDATA = "<模块根>\verif\.xsim-user"
 New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
 cd <模块根>/verif
-xvlog -sv ../rtl/<源码...> tb_<snake>.sv
-xelab -debug typical tb_<模块名> -s tb_sim
-xsim tb_sim -runall
+try {
+  xvlog -sv ../rtl/<源码...> tb_<snake>.sv
+  xelab -debug typical tb_<模块名> -s tb_sim
+  xsim tb_sim -runall
+} finally {
+  $env:APPDATA = $oldAppData   # 跑完立刻还原(第四轮 Q4-09):三条命令在同一隔离上下文里跑完就还回去
+}
 ```
 
 只写各仿真器**通用**的几条(各工具自己的坑写在该选项的说明里,见会话开头的调用姿势):

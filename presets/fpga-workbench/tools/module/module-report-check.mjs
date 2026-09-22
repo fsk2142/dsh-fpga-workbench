@@ -40,7 +40,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { writeFileRecoverable } from "../lib/stamp.mjs";
+import { realEscape, writeFileRecoverable } from "../lib/stamp.mjs";
 // 器件从 spec 里怎么读,**复用综合脚本那一套**(不各写一份,免得两个工具读法不一致)
 import { fieldsFromSpec } from "./module-synth-new.mjs";
 
@@ -48,7 +48,7 @@ import { fieldsFromSpec } from "./module-synth-new.mjs";
 const REPORT_DIRS = ["spec", "verif", "synth"];
 
 /** 报告里会被引用的路径前缀 —— 只认这四个环节目录,别的(如 `C:\...`、`../x`)不当证据路径。 */
-const EVIDENCE_PREFIX = /^(?:spec|rtl|verif|synth)\//u;
+const EVIDENCE_PREFIX = /^(?:spec|rtl|verif|synth)[\\/]/u;
 
 /** AC 表行:`| AC-001 | … |`。 */
 const AC_ROW = /^\s*\|\s*(AC-[0-9]+)\s*\|/u;
@@ -95,7 +95,9 @@ export function evidenceTokens(text) {
     let raw = match[1].trim();
     if (!EVIDENCE_PREFIX.test(raw)) continue;
     if (raw.includes("<") || raw.includes("*") || /\s/u.test(raw)) continue;
-    raw = raw.replace(LINE_SUFFIX, "");
+    // Windows 反斜杠写法(`verif\run.do`)也算引用 —— 统一成 `/` 再核(第五轮 2.6:只认正斜杠时,
+    // 手写报告里的反斜杠路径整条抽不出来,存在性检查等于没跑)
+    raw = raw.replace(/\\/gu, "/").replace(LINE_SUFFIX, "");
     if (raw === "" || seen.has(raw)) continue;
     seen.add(raw);
     out.push({ raw, safe: isSafeRelative(raw) });
@@ -111,6 +113,20 @@ export function evidenceTokens(text) {
  * @param path - 反引号里摘出来的字符串(模块根相对)。
  * @returns 安全时为 true。
  */
+/**
+ * 这条相对路径**真实落在模块根里面**吗(junction / symlink 也能识破)。
+ *
+ * 第四轮复审 Q4-07:词法检查(`isSafeRelative`)挡不住"模块内的链接指向模块外" —— 实测:`verif/linked`
+ * 是指向模块外目录的 junction 时,`verif/linked/sample.txt` 字面上没问题,`--record` 却会**读模块外文件**
+ * 并给它记摘要。这里复用 `stamp.mjs` 的 `realEscape`(只做两次 realpath:模块根 + 目标最近的已存在父路径),
+ * 真实落点在外面就返回 false,调用方据此 FAIL 且**不对它做 existsSync / statSync / readFileSync**。
+ * @param moduleRoot - 模块根(词法路径)。
+ * @param rel - 模块根相对路径(`/` 分隔,已过 `isSafeRelative`)。
+ * @returns 真实落点在模块根内时为 true。
+ */
+export function staysInsideModule(moduleRoot, rel) {
+  return realEscape(moduleRoot, join(moduleRoot, rel)) === undefined;
+}
 export function isSafeRelative(path) {
   if (path.includes("\u0000")) return false;
   if (isAbsolute(path) || /^[A-Za-z]:/u.test(path) || path.startsWith("\\\\")) return false;
@@ -123,7 +139,7 @@ export function isSafeRelative(path) {
  * 为什么不用 mtime(实测):mtime 版会把"重跑了一次工具"之后的每个输出文件都报一遍(某模块一次
  * 14 条),而绝大多数内容根本没变 —— 那种量级的警告几天就没人看了。摘要只认内容。
  */
-const DIGEST_BLOCK = /<!-- evidence-digest:start -->([\s\S]*?)<!-- evidence-digest:end -->/u;
+const DIGEST_BLOCK = /<!-- evidence-digest:start -->([\s\S]*?)<!-- evidence-digest:end -->/gu;
 
 /**
  * 一条引用算不算"依据"(摘要只对依据算)。
@@ -221,8 +237,8 @@ export function auditReports(moduleRoot) {
 
   // 越界引用(含 `..` / 绝对路径):一律如实报,不算"存在与否"的问题(复审 N-05)
   const invalid = [];
-  const noteInvalid = (file, token, ac) => {
-    invalid.push({ file, path: token.raw, ac, reason: "证据路径必须留在模块根里面(不许 `..` / 绝对路径)" });
+  const noteInvalid = (file, token, ac, reason) => {
+    invalid.push({ file, path: token.raw, ac, reason: reason ?? "证据路径必须留在模块根里面(不许 `..` / 绝对路径)" });
   };
 
   // ── ① spec 的 AC 行:证据位置是**声明**;声明的落点不存在时,只有"已经写出结论"才算问题 ──
@@ -237,6 +253,11 @@ export function auditReports(moduleRoot) {
           continue;
         }
         const path = token.raw;
+        // 真实落点也必须在模块里(junction / symlink 能骗过词法检查 —— 第四轮复审 Q4-07)
+        if (!staysInsideModule(moduleRoot, path)) {
+          noteInvalid("spec/spec.md", token, ac, `证据路径的真实落点越出模块根(junction/symlink):${path}`);
+          continue;
+        }
         if (existsSync(join(moduleRoot, path))) continue;
         const soft = !concluded || REGENERABLE.test(path);
         missing.push({
@@ -268,6 +289,10 @@ export function auditReports(moduleRoot) {
     for (const token of evidenceTokens(text)) {
       if (!token.safe) {
         noteInvalid(rel, token, "");
+        continue;
+      }
+      if (!staysInsideModule(moduleRoot, token.raw)) {
+        noteInvalid(rel, token, "", `证据路径的真实落点越出模块根(junction/symlink):${token.raw}`);
         continue;
       }
       paths.push(token.raw);
@@ -344,6 +369,40 @@ function main() {
     // 把"变了"这件事一笔勾销 —— 那正是本工具要抓的"结论还成立吗"。这种文件默认**不写**,
     // 列出来让人先判断;确实确认过、要接受新版本,再加 `--accept-changed`。
     const acceptChanged = args.includes("--accept-changed");
+    // 第四轮 Q4-10:`--record` 先做与检查模式**同一套**的路径合法性预检 —— 报告里有字面越界或
+    // 真实落点越界的引用时**拒绝写入**,别让"记录成功"掩盖"报告里有不合法引用"
+    // (命令成功 ≠ 报告合规)。顺带把"引用了但找不到"的条数报出来(info,不拦)。
+    const illegalRefs = [];
+    let absentRefs = 0;
+    const scanRel = ["spec/spec.md"];
+    for (const dir of REPORT_DIRS) {
+      try {
+        for (const name of readdirSync(join(moduleRoot, dir))) {
+          if (name.toLowerCase().endsWith(".md") && !/explore/iu.test(name)) scanRel.push(`${dir}/${name}`);
+        }
+      } catch {
+        /* 目录不在:没有可扫的 */
+      }
+    }
+    for (const rel of scanRel) {
+      if (!existsSync(join(moduleRoot, rel))) continue;
+      const text = readFileSync(join(moduleRoot, rel), "utf8");
+      for (const token of evidenceTokens(text)) {
+        if (!token.safe || !staysInsideModule(moduleRoot, token.raw)) {
+          illegalRefs.push(`${rel} → ${token.raw}`);
+          continue;
+        }
+        if (!existsSync(join(moduleRoot, token.raw))) absentRefs += 1;
+      }
+    }
+    if (illegalRefs.length > 0) {
+      console.error("报告里有**不合法/越界**的证据引用,--record 拒绝写入(先修引用再记摘要):");
+      for (const item of illegalRefs) console.error(`  ${item}`);
+      return 1;
+    }
+    if (absentRefs > 0) {
+      console.error(`注意:有 ${absentRefs} 条引用的路径现在找不到 —— 摘要只记**存在的**那些(不存在的仍旧不记)。`);
+    }
     const targets = [];
     for (const dir of REPORT_DIRS) {
       for (const rel of (() => {
@@ -358,7 +417,13 @@ function main() {
         const text = readFileSync(join(moduleRoot, rel), "utf8");
         const entries = [];
         const stale = [];
+        const skippedUnsafe = [];
         for (const path of evidencePaths(text)) {
+          // --record 同样**不许读模块外**(Q4-07):真实落点越界就跳过,不 stat、不 readFileSync
+          if (!staysInsideModule(moduleRoot, path)) {
+            skippedUnsafe.push(path);
+            continue;
+          }
           if (!isEvidenceFile(moduleRoot, path)) continue;
           const digest = sha256Of(join(moduleRoot, path));
           if (digest === undefined) continue;
@@ -367,8 +432,13 @@ function main() {
           if (recorded !== undefined && recorded !== digest) stale.push(path);
         }
         if (entries.length === 0 && !DIGEST_BLOCK.test(text)) continue;
-        targets.push({ rel, text, entries, stale });
+        targets.push({ rel, text, entries, stale, skippedUnsafe });
       }
+    }
+    const unsafe = targets.filter((item) => item.skippedUnsafe.length > 0);
+    if (unsafe.length > 0) {
+      console.error("这些报告引用了**越出模块根**的路径(真实落点在外面),不记摘要:");
+      for (const item of unsafe) console.error(`  ${item.rel} → ${item.skippedUnsafe.join("、")}`);
     }
     const blocked = targets.filter((item) => item.stale.length > 0);
     if (blocked.length > 0 && !acceptChanged) {
@@ -427,7 +497,7 @@ function main() {
     if (!device.ok) notes.push("器件两处不一致");
     const summary = [
       `${hard.length} 条:报告/AC 引用了不存在或越界的证据路径`,
-      invalid.length > 0 ? `其中 ${invalid.length} 条越界(不许 \`..\` / 绝对路径)` : ""
+      invalid.length > 0 ? `其中 ${invalid.length} 条越界(不许 \`..\` / 绝对路径 / junction 真实落点)` : ""
     ].filter((s) => s !== "").join(",");
     console.log(
       hard.length === 0

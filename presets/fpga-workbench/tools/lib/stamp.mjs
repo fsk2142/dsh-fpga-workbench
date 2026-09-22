@@ -275,6 +275,13 @@ export function stampFile(options) {
     );
     return 2;
   }
+  // 模块名只收**一段**(第五轮 3.4:以前 `module-rtl-new <根> a/b` 会拼出 `rtl/a/b.sv` —— 逃逸被
+  // 后面的边界检查挡住,但与"模块名是一段"这个约定不一致;判据与骨架共用同一个函数,不再两处各写)。
+  const nameProblem = copyAsIs || name === undefined ? undefined : moduleNameError(name);
+  if (nameProblem !== undefined) {
+    console.error(`模块名不合法(${nameProblem}):${name}`);
+    return 2;
+  }
   if (!existsSync(template)) {
     console.error(`模板不存在:${template}`);
     console.error("模板路径看会话开头「本机 FPGA 工具链」的模板一节(用户配的那份或插件自带那份)。");
@@ -404,4 +411,25 @@ export function parseStampArgs(argv) {
     force: argv.includes("--force"),
     dryRun: argv.includes("--dry-run")
   };
+}
+
+/**
+ * 模块名必须是**单个目录段** —— 它会在根目录下当同名子目录用(`join(root, name)`)。
+ *
+ * 为什么必须挡:实测过 `--modules "..\..\evil"`,骨架真建到了根目录**之外**,退出码还是 0;
+ * 绝对路径会被 `join` 拼成 `<根>\C:\...` 这种废路径,抛异常崩掉。挡在拼路径之前,并说清合法范围。
+ * 根目录本身是用户显式指定的落点,不在此列 —— 这里只管拿模块名拼出来的子路径。
+ *
+ * **这里只挡字面**(名字本身长什么样)。名字合法、但 `<根>/<名字>` 已经是一个指向根外的
+ * junction / 符号链接时,挡它的是落盘前的真实路径预检({@link applyScaffold} → `preflight`)。
+ *
+ * @param name - `--modules` 里的一个名字(已 trim、空串已被滤掉)。
+ * @returns 不合法时返回给用户看的原因;合法返回 undefined。
+ */
+export function moduleNameError(name) {
+  if (isAbsolute(name)) return "这是绝对路径";
+  if (name.includes("/") || name.includes("\\")) return "带了路径分隔符";
+  if (name === "." || name === "..") return "`.` / `..` 指向根目录本身或它的上级";
+  if (name.includes(":")) return "带了盘符或冒号";
+  return undefined;
 }

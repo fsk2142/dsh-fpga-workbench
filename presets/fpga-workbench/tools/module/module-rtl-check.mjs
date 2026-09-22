@@ -59,6 +59,18 @@ const WARN_ONLY = new Set(["Tab 字符", "代码行非英文", "行尾混用", "
  * `function` / `task` 到 `endfunction` / `endtask` 之间跳过(实测踩过:模板里的
  * `function automatic logic saturate (input logic …)` 会被这条误报)。
  */
+/**
+ * IP 时序卡里**可识别的测量字段**白名单(第四轮 Q4-12)。
+ *
+ * 为什么要有它:判据原来是"除 `config` 外存在任意 number" → `{"dummy": 1}` 也算过。那只能证明
+ * **结构完整**,证明不了"测过"。这里按现役卡的实际字段收敛(延迟/占用拍/边界/跨口正确性几类),
+ * 值还要合法(有限、非负)。脚本不假装懂物理意义 —— 最终"这个数是不是真测出来的"由 agent 查日志或重跑判定。
+ */
+const MEASURED_FIELDS = [
+  "read_latency", "read_latency_a", "read_latency_b", "write_latency", "pop_latency", "push_latency",
+  "addr_to_dout_edges", "addr_to_doutb_edges", "push_to_dout", "rd_en_to_next", "empty_lag",
+  "rst_busy_cycles", "cross_port_correct", "underflow_seen", "overflow_seen", "fwft", "dout_reset_value"
+];
 const PORT_TYPE = /^\s*(input|output|inout)\s+(wire|logic|reg|tri)\b/u;
 
 /** 无宽度的填充写法(`'0` / `'1` / `'x` / `'z`)—— 用户禁止:宽度对不上时是把隐患藏起来。 */
@@ -129,18 +141,17 @@ function ipCardEntries(ipDir) {
             problems.push(`probe 指的探针找不到:${probeRel}(要写模块根相对的路径,且文件真的在)`);
           }
         }
-        // "有实测数值"才是卡的意义:一个数字都没有 → 这张卡没说测到了什么。
-        // 判**类型**(不是拿 JSON.stringify 去正则找数字:JSON 里数字不带引号,正则会全判错 —— 实测踩过)。
-        // `config` 里的是配置值(几路、什么模式),不是实测结果,所以不算数。
-        const hasNumber = (value) => {
-          if (typeof value === "number") return true;
-          if (Array.isArray(value)) return value.some(hasNumber);
-          if (value !== null && typeof value === "object") return Object.values(value).some(hasNumber);
-          return false;
-        };
-        const measured = Object.entries(parsed).filter(([key]) => key !== "config").map(([, value]) => value);
-        if (!measured.some(hasNumber)) {
-          problems.push("卡里一个实测数值都没有(config 里的配置值不算)—— 至少写一条测到的数(读延迟、复位占用拍等)");
+        // "有实测数值"才是卡的意义 —— 而且要是**可识别的测量字段**(第四轮 Q4-12:光"有个数字"的话
+        // `dummy: 1` 也能过,那只是**结构完整**,不是"测过"。脚本不假装懂物理意义,但至少要认得出
+        // 它写的是哪一类量,并且值合法(有限、非负)。`config` 里的是配置值(几路、什么模式),不算数。
+        const measuredOk = MEASURED_FIELDS.some(
+          (key) => typeof parsed[key] === "number" && Number.isFinite(parsed[key]) && parsed[key] >= 0
+        );
+        if (!measuredOk) {
+          problems.push(
+            `没有任何**可识别的实测字段**(白名单:${MEASURED_FIELDS.slice(0, 8).join(" / ")} …)—— ` +
+              "写个普通数字不算「测过」:结构完整 ≠ 测量已核验"
+          );
         }
         if (problems.length > 0) return warn(`timing.json 不完整:${problems.join(";")}`);
       } catch (error) {
@@ -166,20 +177,27 @@ const SUCCESS_MARKER = "ALL TESTS PASSED";
 const PARAM_LIKE = /^[A-Z][A-Z0-9_]*$/u;
 
 /**
- * 这一行的 `!=` 要不要提醒(N-06 之后 2026-09-22 收窄)。
+ * 把一行的 `!=` 比较**逐对**分类(第四轮 Q4-08 + 第五轮 2.1)。
  *
- * 只提醒**同时满足**两点的:① 当判定用(`if` / `while` / `for` / 断言 / 三元);
- * ② 每一对操作数两侧都是**普通信号** —— 不是全大写参数。
- * (数值常量、函数返回值、算术表达式根本进不了 `pairs`:操作数必须"长得像标识符"才算一对。)
+ * 判据(三档):
+ *   · `"data"` —— 当判定用,且**至少有一对**两侧都是普通信号、其中一侧是期望值命名 → 判 FAIL;
+ *   · `"confirm"` —— 当判定用,且**至少有一对**两侧都是普通信号(没命中期望值命名)→ 提醒一句;
+ *   · `"quiet"` —— 其余(不是判定用的场合;或每一对都涉及全大写参数 / 数值常量 / 函数返回值)。
+ *
+ * 为什么逐对而不是整行投票:一行里可以同时有"计数比参数"和"数据比对",
+ * `every` 会让前面的参数比较把后面的数据比对一起吞掉(Q4-08 实测)。
  * @param operands - 去掉注释/字符串后的行。
  * @param pairs - 操作数对(`[左, 右]`)。
- * @returns 该提醒时为 true。
+ * @returns `"data"` / `"confirm"` / `"quiet"`。
  */
-function isVerdictComparison(operands, pairs) {
-  if (pairs.length === 0) return false;
-  const isVerdict = /\b(?:if|while|for)\s*\(|\bassert\b|\?/u.test(operands);
-  if (!isVerdict) return false; // 不算判定:比如 `$display(..., a != b)` 只是打印一个位
-  return pairs.every((pair) => !PARAM_LIKE.test(pair[1]) && !PARAM_LIKE.test(pair[2]));
+function classifyNeq(operands, pairs) {
+  if (pairs.length === 0) return "quiet";
+  if (!/\b(?:if|while|for)\s*\(|\bassert\b|\?/u.test(operands)) return "quiet"; // 不是判定:如 `$display(..., a != b)`
+  const isPlain = (pair) => !PARAM_LIKE.test(pair[1]) && !PARAM_LIKE.test(pair[2]);
+  const plain = pairs.filter(isPlain);
+  if (plain.length === 0) return "quiet";
+  const named = plain.some((pair) => EXPECTED_SIGNAL.test(pair[1]) || EXPECTED_SIGNAL.test(pair[2]));
+  return named ? "data" : "confirm";
 }
 
 const NINE_SECTIONS = [
@@ -347,7 +365,7 @@ export function checkFile(file, isTestbench) {
     }
 
     // ── 复位一律高有效(2026-09-02 裁决) ──
-    const lowReset = /if\s*\(\s*[!~]\s*rst\w*\b|negedge\s+rst\w*\b|if\s*\(\s*~?\s*rst_n\b/u.exec(line);
+    const lowReset = /if\s*\(\s*[!~]\s*rst\w*\b|negedge\s+rst\w*\b|if\s*\(\s*~?\s*rst_n\b|posedge\s+rst_n\b/u.exec(line);
     if (lowReset !== null) {
       add("复位极性", number, `低有效复位用法:「${lowReset[0]}」(本项目 rst/rst_* 一律高有效)`);
     }
@@ -366,18 +384,22 @@ export function checkFile(file, isTestbench) {
     // 就判 FAIL,于是 `if (exp_pixel_idx != 0 && …)` 这种**计数/索引比常量**被当成数据比对拦住了 ——
     // 而那正是上面那句"循环/计数条件可以保留"要放过的。现在按"操作符紧邻的两个操作数"判。
     //
-    // 2026-09-22 再收窄一次(用户口径:那 15 条警告全在计数/索引上,把真问题淹了):**提醒只管两种条件同时满足**——
-    // ① 当判定用(`if` / `while` / `for` / 断言 / 三元);② 两侧都是**普通信号**(不是数值常量、不是
-    // 全大写参数、不是函数返回值/表达式)。除此之外一律静默:计数/索引/返回值比较按既定口径不该提醒。
+    // 2026-09-22 再收窄并**逐对分类**(用户口径 + 第四轮 Q4-08 / 第五轮 2.1):
+    //   · 一整行里有多个 `!=` 时,**每一对各自分类** —— 不能先对整行投票(`every`):那样一行里
+    //     `cnt != MAX_COUNT && dut_data != exp_data` 会因为第一对是"计数比全大写参数"而把后面
+    //     真正的数据比对一起吞掉;
+    //   · 只有当**当判定用**(`if` / `while` / `for` / 断言 / 三元)**且**这一对两侧都是普通信号时,
+    //     才可能是"会漏检"的比较:期望值命名的判 FAIL,其余提醒;涉及全大写参数/数值常量/返回值/
+    //     表达式的一律静默(计数/索引/返回值比较按既定口径不该提醒)。
     if (isTestbench && line.includes("!=")) {
       const operands = codeOnly(line);
       // **一行里所有** `a != b` 都要看(第三轮复审 N-06:只取第一个的话,
       // `i != 0 && dut_data != exp_data` 会把真正的数据比对漏成"待确认")
       const pairs = [...operands.matchAll(/([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*(?<![=!])!=(?!=)\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)/gu)];
-      const expectedSide = pairs.some((pair) => EXPECTED_SIGNAL.test(pair[1]) || EXPECTED_SIGNAL.test(pair[2]));
-      if (pairs.length > 0 && expectedSide) {
+      const verdict = classifyNeq(operands, pairs);
+      if (verdict === "data") {
         add("数据比对", number, "数据比对用了 '!='(全 X 时 X != y 求值为 X,if (X) 为假 → 一条错都不报):改用 '!=='");
-      } else if (isVerdictComparison(operands, pairs)) {
+      } else if (verdict === "confirm") {
         add("!= 待确认", number, "这一行有 '!=':确认是数据比对就改 '!=='(否则全 X 会漏检);循环/计数条件可以保留");
       }
     }

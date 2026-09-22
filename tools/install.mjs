@@ -99,8 +99,22 @@ function runAdd() {
  */
 function restore(backup) {
   if (backup === undefined) {
-    console.log("本来就没有旧副本(首次安装),不涉及回滚。");
-    return true;
+    // 首次安装失败(第四轮复审 Q4-05):没有旧副本可恢复,但**坏副本不能留在盘上** ——
+    // 重启就会加载它。改名隔离(不删除),并如实说明"没有恢复旧版本,只是把它移开了"。
+    try {
+      if (!existsSync(INSTALLED)) {
+        console.log("本来就没有旧副本(首次安装),而且这次也没装出东西来 —— 无需回滚。");
+        return true;
+      }
+      const stray = `${INSTALLED}.failed-${timestamp()}`;
+      renameSync(INSTALLED, stray);
+      console.log(`首次安装失败:没有旧版本可恢复,已把这次装出来的副本改名移开(**未删除**):${stray}`);
+      pendingCleanup.push(cleanupEntry("partial", stray));
+      return false; // 盘上**没有**已装副本了 —— 调用方别说成"状态已恢复"
+    } catch (error) {
+      console.error(`隔离失败副本时出错:${error.message}(**没有删除任何东西**)`);
+      return false;
+    }
   }
   try {
     if (existsSync(INSTALLED)) {
@@ -210,32 +224,37 @@ if (checkOnly) {
     process.exit(1);
   }
 
-  // 6. 校验 + 冒烟:**任何一步不过都回到运行前的状态**(第三轮复审 N-02)。
+  // 6. 校验 + 冒烟:**任何一步不过、或**抛异常**,都回到运行前的状态**(第三轮 N-02 + 第四轮 Q4-05)。
   //
-  // 以前只有 `add` 失败才回滚:pnpm "返回成功但少拷了文件"、或新副本一加载就炸时,坏副本**留在盘上**,
-  // 重启就是黑屏 —— 而备份明明还在旁边。现在两条路都走同一个 rollback:把半成品改名移开、备份改回原名。
+  // 以前只处理"返回失败":`verify()` 自己可能抛(JSON 解析、读文件、权限),而那条路径绕过了 rollback ——
+  // 坏副本留在盘上,重启就是黑屏。这里用一个**很窄**的 try/catch 包住 add 之后的整段,异常与返回失败
+  // 走同一个 rollback;首次安装没有旧副本时,rollback 只把坏副本改名隔离并如实说清"没恢复旧版本"。
   console.log("");
   const rollback = (what) => {
     console.error(`\n失败:${what}`);
-    console.error("正在回到运行前的状态(把新副本移开、备份改回原名)—— 重启不会用到坏副本。");
+    console.error("正在回到运行前的状态(把新副本移开;有旧副本就改回原名)—— 重启不会用到坏副本。");
     if (!restore(backup)) {
-      console.error("**回滚没成功**,盘上现在可能是混合状态:请在你自己的终端里手动跑:");
+      console.error("**回滚没完成**(详见上面):盘上现在可能没有可用副本,请在你自己的终端里手动跑:");
       console.error(`  ${RECOVERY}`);
     }
     reportLeftovers();
     process.exit(1);
   };
-  const after = verify();
-  if (after.length !== 0) {
-    rollback(`已装副本与源不一致(pnpm 又跳过了拷贝):${after.join(" | ")}`);
-  }
-  console.log("PASS: 已装副本与源逐字节一致。");
-  // 光"字节一致"还不够 —— 再在真实解析环境里加载一遍(宿主半侧 import + 客户端 bundle
-  // 的工厂函数执行)。这一步能抓住"文件都对、但一加载就炸"的情况,而那种情况重启后就是黑屏。
-  console.log("\n冒烟测试:在 profile 的解析环境里加载一遍…\n");
-  const smoke = spawnSync(process.execPath, [join(ROOT, "tools", "smoke-installed.mjs")], { stdio: "inherit" });
-  if ((smoke.status ?? 1) !== 0) {
-    rollback("冒烟测试没过(新副本在这个解析环境里加载不起来)");
+  try {
+    const after = verify();
+    if (after.length !== 0) {
+      rollback(`已装副本与源不一致(pnpm 又跳过了拷贝):${after.join(" | ")}`);
+    }
+    console.log("PASS: 已装副本与源逐字节一致。");
+    // 光"字节一致"还不够 —— 再在真实解析环境里加载一遍(宿主半侧 import + 客户端 bundle
+    // 的工厂函数执行)。这一步能抓住"文件都对、但一加载就炸"的情况,而那种情况重启后就是黑屏。
+    console.log("\n冒烟测试:在 profile 的解析环境里加载一遍…\n");
+    const smoke = spawnSync(process.execPath, [join(ROOT, "tools", "smoke-installed.mjs")], { stdio: "inherit" });
+    if ((smoke.status ?? 1) !== 0) {
+      rollback("冒烟测试没过(新副本在这个解析环境里加载不起来)");
+    }
+  } catch (error) {
+    rollback(`安装后的校验/冒烟抛了异常:${error.message}`);
   }
   console.log("\n重启 DSH Desktop 生效。");
   reportLeftovers();

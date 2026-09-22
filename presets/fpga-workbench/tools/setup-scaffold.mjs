@@ -26,7 +26,7 @@ import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } 
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { realEscape, writeFileRecoverable } from "./lib/stamp.mjs";
+import { moduleNameError, realEscape, writeFileRecoverable } from "./lib/stamp.mjs";
 
 /**
  * 本模式的工作区指令文件名。
@@ -115,6 +115,11 @@ export function planScaffold(root, options = {}) {
     });
     for (const name of options.modules ?? []) moduleAt(join(root, name));
   } else {
+    // 第五轮 3.6:`--modules` 在 module 模式下**不适用**(那是一次建多个模块,属工程骨架)——
+    // 以前静默忽略,用户以为自己指定了却没生效。说一句,别让人猜。
+    if ((options.modules ?? []).length > 0) {
+      console.log("(忽略 --modules:--kind module 只建当前根这一个模块的骨架;要一次建多个请用 --kind project)");
+    }
     moduleAt(root);
   }
 
@@ -344,26 +349,7 @@ export function applyScaffold(plan, options = {}) {
   return { created: [...state.dirs, ...state.files], skipped: state.skipped, backups: state.backups };
 }
 
-/**
- * 模块名必须是**单个目录段** —— 它会在根目录下当同名子目录用(`join(root, name)`)。
- *
- * 为什么必须挡:实测过 `--modules "..\..\evil"`,骨架真建到了根目录**之外**,退出码还是 0;
- * 绝对路径会被 `join` 拼成 `<根>\C:\...` 这种废路径,抛异常崩掉。挡在拼路径之前,并说清合法范围。
- * 根目录本身是用户显式指定的落点,不在此列 —— 这里只管拿模块名拼出来的子路径。
- *
- * **这里只挡字面**(名字本身长什么样)。名字合法、但 `<根>/<名字>` 已经是一个指向根外的
- * junction / 符号链接时,挡它的是落盘前的真实路径预检({@link applyScaffold} → `preflight`)。
- *
- * @param name - `--modules` 里的一个名字(已 trim、空串已被滤掉)。
- * @returns 不合法时返回给用户看的原因;合法返回 undefined。
- */
-export function moduleNameError(name) {
-  if (isAbsolute(name)) return "这是绝对路径";
-  if (name.includes("/") || name.includes("\\")) return "带了路径分隔符";
-  if (name === "." || name === "..") return "`.` / `..` 指向根目录本身或它的上级";
-  if (name.includes(":")) return "带了盘符或冒号";
-  return undefined;
-}
+
 
 /** 会吃掉后一个参数的选项 —— 它们的值不是位置参数。 */
 const VALUE_FLAGS = ["--kind", "--modules"];

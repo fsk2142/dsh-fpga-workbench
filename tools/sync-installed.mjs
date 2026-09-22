@@ -17,7 +17,7 @@
 //
 // 退出码:内容差异(缺文件 / 内容不一致)算失败(那正是本脚本要来修的);**"已装多出"只报告、
 // 不算失败** —— 它已经不可能由本脚本处置了(不删除),拿它报红只会逼人去恢复删除。
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -112,36 +112,32 @@ if (checkOnly) {
     .map((rel) => ({ rel, source: join(ROOT, rel), target: join(INSTALLED, rel) }))
     .filter(({ source, target }) => !existsSync(target) || hashOf(source) !== hashOf(target));
 
-  // 半途失败**不能静默留下混合树**(第三轮复审 N-10):逐个覆写时,中途出错会得到"一部分新、
-  // 一部分旧"的副本 —— 那种状态重启后行为不确定。做法与 `install.mjs` 同一套:写之前先把**要改的
-  // 那些文件**的旧内容快照到 `<home>/.dsh/.fpga-workbench-backup/sync-<时间戳>/`;失败就回滚
-  // (旧文件按快照写回;这次新加的文件**改名**移开 —— 零删除,不做永久删除)。
+  // 整个过程是**一个事务**(第三轮 N-10 + 第四轮 Q4-03/Q4-04):
+  //   · 写之前先把要改的文件的旧内容快照到 `<home>/.dsh/.fpga-workbench-backup/sync-<时间戳>/`;
+  //   · 每个文件**先写临时文件 → 读回逐字节比对 → 同目录改名就位**(`copyFileSync` 不是事务,
+  //     磁盘满/中断时目标可能是半截 —— 改名就位之后"半截目标"结构上不可能出现);
+  //   · 失败(含**正在写的那一个**)按快照写回旧内容;这次新加的文件**改名** `.failed-<时间戳>` 移开;
+  //     没来得及清掉的临时文件按零删除规则**列出来**;
+  //   · 循环跑完后的 `compareTree` 校验**失败或抛异常**也走同一套回滚,且不再打印"重启生效"。
   const backupRoot = join(HOME, ".dsh", ".fpga-workbench-backup", `sync-${timestamp()}`);
   const snapshotOf = new Map();
+  const writtenTargets = [];
+  const leftoverTemps = [];
+  let inFlight;
   let written = 0;
-  try {
-    for (const { rel, source, target } of targets) {
-      const before = existsSync(target) ? readFileSync(target) : undefined;
-      snapshotOf.set(rel, before);
-      if (before !== undefined) {
-        const saved = join(backupRoot, rel);
-        mkdirSync(dirname(saved), { recursive: true });
-        writeFileSync(saved, before);
-      }
-      mkdirSync(dirname(target), { recursive: true });
-      copyFileSync(source, target);
-      written += 1;
-      console.log(`  写入 ${rel}`);
-    }
-  } catch (error) {
-    console.error(`\n同步中断:${error.message}`);
-    console.error(`  已写入 ${written}/${targets.length} 个文件 —— 正在回滚到运行前的状态(不删除任何东西)。`);
+
+  /** 回到运行前的状态:按快照写回旧文件、把这次新加的改名移开;**目录等"不是文件"的不动**。 */
+  const rollback = () => {
     const restored = [];
     const movedAside = [];
-    for (const { rel, target } of targets.slice(0, written)) {
+    const candidates = inFlight === undefined ? writtenTargets : [...writtenTargets, inFlight];
+    for (const { rel, target } of candidates) {
       const before = snapshotOf.get(rel);
       try {
+        const exists = existsSync(target);
+        if (exists && !statSync(target).isFile()) continue; // 被别的东西占着(目录等):不是我们写的,不碰
         if (before === undefined) {
+          if (!exists) continue; // 本来没有、这次也没写出来:什么都不用做
           const aside = `${target}.failed-${timestamp()}`;
           renameSync(target, aside);
           movedAside.push(aside);
@@ -154,14 +150,61 @@ if (checkOnly) {
       }
     }
     console.error(`  回滚结果:恢复 ${restored.length} 个、把 ${movedAside.length} 个新增文件改名移开(未删除)。`);
+    if (leftoverTemps.length > 0) console.error(`  没来得及清掉的临时文件(**未删除**,可自行处置):${leftoverTemps.join("、")}`);
     if (existsSync(backupRoot)) console.error(`  旧内容快照留在:${backupRoot}`);
+    return { restored, movedAside };
+  };
+
+  try {
+    let sequence = 0;
+    for (const item of targets) {
+      const { rel, source, target } = item;
+      inFlight = item;
+      sequence += 1;
+      const before = existsSync(target) ? readFileSync(target) : undefined; // 目标被目录占着会在这里抛
+      snapshotOf.set(rel, before);
+      if (before !== undefined) {
+        const saved = join(backupRoot, rel);
+        mkdirSync(dirname(saved), { recursive: true });
+        writeFileSync(saved, before);
+      }
+      const bytes = readFileSync(source);
+      const temporary = `${target}.tmp-${process.pid}-${sequence}`;
+      mkdirSync(dirname(target), { recursive: true });
+      try {
+        writeFileSync(temporary, bytes);
+        if (!readFileSync(temporary).equals(bytes)) throw new Error(`临时文件读回不一致:${temporary}`);
+        renameSync(temporary, target); // 同目录改名就位:半截目标不会出现
+      } catch (error) {
+        if (existsSync(temporary)) leftoverTemps.push(temporary);
+        throw error;
+      }
+      writtenTargets.push(item);
+      written += 1;
+      inFlight = undefined;
+      console.log(`  写入 ${rel}`);
+    }
+  } catch (error) {
+    console.error(`\n同步中断:${error.message}`);
+    console.error(`  已写入 ${written}/${targets.length} 个文件 —— 正在回滚到运行前的状态(不删除任何东西)。`);
+    rollback();
     console.error("  修掉上面那个错误(通常是文件被占用或没有写权限)后重跑同一条命令即可;本脚本是幂等的。");
     reportExtras(extraFiles());
     process.exit(1);
   }
   console.log(`\n已写入 ${written} 个文件(共 ${files.length} 个,其余一致、跳过)。`);
 
-  const after = compareTree(ROOT, INSTALLED);
+  // 事后校验:不通过或**抛异常**都回滚(Q4-04)—— 绝不留下"没过校验却说重启生效"的新树。
+  let after;
+  try {
+    after = compareTree(ROOT, INSTALLED);
+  } catch (error) {
+    console.error(`\n同步后校验抛异常:${error.message}`);
+    console.error("  正在回滚到运行前的状态(不删除任何东西)。");
+    rollback();
+    reportExtras(extraFiles());
+    process.exit(1);
+  }
   const remaining = blockingOf(after);
   if (remaining.length === 0) {
     const extras = extrasOf(after).length;
@@ -169,9 +212,13 @@ if (checkOnly) {
     console.log("(这不是 pnpm 安装:依赖声明与锁文件本来就有这个包,只是内容旧了。");
     console.log(" 下次正常 pnpm 操作会用同源内容重链一次,无害。)");
   } else {
-    console.log(`\nFAIL: 同步后仍有 ${remaining.length} 项内容差异:`);
-    for (const item of remaining) console.log(`  ${item}`);
-    process.exitCode = 1;
+    // Q4-04:校验不通过也**回滚**,并且绝不说"重启生效"
+    console.error(`\nFAIL: 同步后仍有 ${remaining.length} 项内容差异:`);
+    for (const item of remaining) console.error(`  ${item}`);
+    console.error("  正在回滚到运行前的状态(不删除任何东西)。");
+    rollback();
+    reportExtras(extraFiles());
+    process.exit(1);
   }
   reportExtras(extraFiles());
 }

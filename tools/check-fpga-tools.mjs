@@ -25,6 +25,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
+import { PART_SHAPE_CASES, partLooksComplete } from "../presets/fpga-workbench/tools/module/module-synth-new.mjs";
 import { INSTRUCTION_FILE, applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
 import { TEMP_GRACE_MS, listTempLeftovers } from "../lib/toolchain.js";
@@ -723,6 +724,37 @@ for (const shape of neqShapes) {
     `收窄:这类不再提醒 → ${shape.trim()}`
   );
 }
+// ⑤ 逐对分类(第四轮 Q4-08 + 第五轮 2.1):
+//    FAIL 分支**也要**套收窄(期望值命名的**计数**比全大写参数不算数据比对),
+//    但同一行里另一对真正的数据比对**不能被吞掉**(整行 every 就会吞)。
+for (const shape of [
+  "        if (exp_cnt != DEPTH) cnt = 0;",
+  "        if (exp_pixel_idx != DEPTH) idx = 0;"
+]) {
+  writeFileSync(neqShapePath, goodTb
+    .replace("module tb_good;", "module tb_neq_shape;")
+    .replace("        if (err_cnt == 0)", `${shape}\n        if (err_cnt == 0)`));
+  check(
+    !blocking(neqShapePath, true).some((issue) => issue.rule === "数据比对"),
+    `期望值命名的计数比全大写参数**不判 FAIL**(收窄漏套的回归)→ ${shape.trim()}`
+  );
+}
+// 同一行:前一对是计数比参数,后一对才是真数据比对 → 必须仍然 FAIL(Q4-08)
+writeFileSync(neqShapePath, goodTb
+  .replace("module tb_good;", "module tb_neq_shape;")
+  .replace("        if (err_cnt == 0)", "        if (cnt != MAX_COUNT && dut_data != exp_data) err_cnt = err_cnt + 1;\n        if (err_cnt == 0)"));
+check(
+  blocking(neqShapePath, true).some((issue) => issue.rule === "数据比对"),
+  "同行的参数比较**不许**吞掉后面的数据比对(逐对分类;Q4-08)"
+);
+// 同一行:前一对计数比参数,后一对是普通信号判定 → 后面那对仍要提醒
+writeFileSync(neqShapePath, goodTb
+  .replace("module tb_good;", "module tb_neq_shape;")
+  .replace("        if (err_cnt == 0)", "        if (cnt != MAX_COUNT && sig_a != sig_b) err_cnt = err_cnt + 1;\n        if (err_cnt == 0)"));
+check(
+  blocking(neqShapePath, true).some((issue) => issue.rule === "!= 待确认"),
+  "同行的参数比较**不许**吞掉后面普通信号对的提醒(Q4-08)"
+);
 // 反向对照:两侧都是普通信号、又当判定用 → 仍然提醒(不能收窄成"什么都不报")
 writeFileSync(neqShapePath, goodTb
   .replace("module tb_good;", "module tb_neq_shape;")
@@ -916,6 +948,22 @@ const bundledRunSynth = readFileSync(join(TEMPLATES, "run_synth.tcl"), "utf8");
 // 预检于是打了 WARN 就跳过 = 从来没真跑过)。行为已用真 Vivado 复核(见 run_synth.tcl 头注)。
 // 断言钉在**真的 regexp 命令行**上,不是钉在模板文本里出现过这几个词 —— 否则上面那段解释性
 // 注释就能把断言喂饱(这么写的第一版就被注释蒙过去了,咬人验证时才发现)。
+// 自带模板的时钟必须**同一个数**(第五轮 2.2):tb.sv 的 CLK_PERIOD 与 constraints.xdc 的
+// `create_clock -period` 是同一份"默认节拍"的两处写法 —— 4ns vs 10ns 会让仿真按 250 MHz 跑、
+// 时序却按 100 MHz 收,综合后时序结论直接失去意义。
+const bundledTbHeader = readFileSync(join(TEMPLATES, "tb.sv"), "utf8").split("\n").slice(0, 10);
+check(
+  bundledTbHeader.every((line) => line.length <= 86),
+  `自带 tb.sv 的前 10 行都不超过 86 列(与 rtl.sv 的横幅约定一致;实际最长 ${Math.max(...bundledTbHeader.map((line) => line.length))} 列)`
+);
+const bundledTbClock = readFileSync(join(TEMPLATES, "tb.sv"), "utf8");
+const bundledXdcClock = readFileSync(join(TEMPLATES, "constraints.xdc"), "utf8");
+const tbPeriod = /CLK_PERIOD\s*=\s*(\d+(?:\.\d+)?)\s*ns/u.exec(bundledTbClock)?.[1];
+const xdcPeriod = /create_clock[^\n]*-period\s+(\d+(?:\.\d+)?)/u.exec(bundledXdcClock)?.[1];
+check(
+  tbPeriod !== undefined && xdcPeriod !== undefined && Number(tbPeriod) === Number(xdcPeriod),
+  `自带 tb.sv 与 constraints.xdc 的默认时钟周期一致(tb=${String(tbPeriod)}ns / xdc=${String(xdcPeriod)}ns)`
+);
 check(
   /proc xci_part/u.test(bundledRunSynth) &&
     /regexp[^\n]*"DEVICE"/u.test(bundledRunSynth) &&
@@ -1008,8 +1056,14 @@ check(
 );
 // 真实 spec 的形状(2026-09-21 实测踩到):除了「目标器件」字段行,**修订历史表**里还会留旧器件,
 // 字段行同一行还带括号里的族名(`(Artix-7 XC7A100T,-2,…)`)—— 不处理就会判成"说不清"而拒绝生成。
+//
+// **注意(第五轮 1.2)**:`readSpecFields()` 在「工程有器件 + 模块也有器件 + 不一致」时判 conflict → 退 2。
+// 所以这条用例必须用**没有兄弟工程**的模块根(下面那个独立根),否则它走进的是冲突分支、
+// 而不是"字段行怎么读" —— 焦点就糊了。
+const realShapeRoot = join(SANDBOX, `synth-realshape-${stamp}`);
+mkdirSync(join(realShapeRoot, "spec"), { recursive: true });
 writeFileSync(
-  join(projSynthMod, "spec", "spec.md"),
+  join(realShapeRoot, "spec", "spec.md"),
   [
     "# spec:uart_rx", "",
     "| 版本 | 日期 | 变更 |",
@@ -1020,8 +1074,9 @@ writeFileSync(
     "- 顶层模块名:uart_rx", ""
   ].join("\n")
 );
-const realShapeCode = run("module-synth-new.mjs", [projSynthMod, "uart_rx", "--kind", "synth-script", "--force"]);
-const realShapeText = existsSync(projSynthScript) ? readFileSync(projSynthScript, "utf8") : "";
+const realShapeScript = join(realShapeRoot, "synth", "run_synth.tcl");
+const realShapeCode = run("module-synth-new.mjs", [realShapeRoot, "uart_rx", "--kind", "synth-script"]);
+const realShapeText = existsSync(realShapeScript) ? readFileSync(realShapeScript, "utf8") : "";
 check(
   realShapeCode === 0 && realShapeText.includes('set PART "xc7a100tfgg484-2"') && !realShapeText.includes("xcku3p"),
   `真实 spec 形状(字段行 + 族名 + 历史行)→ 取字段行那个器件(退出码 ${String(realShapeCode)})`,
@@ -1450,8 +1505,8 @@ writeFileSync(
 );
 const hollowCard = runStdout("module-rtl-check.mjs", [ipCardRoot]);
 check(
-  hollowCard.code === 0 && /探针找不到/u.test(hollowCard.output) && /config 要是非空对象/u.test(hollowCard.output) && /数值都没有/u.test(hollowCard.output),
-  "空洞的卡(config 空、探针不在、没有数值)→ 三条都点出来(N-12)",
+  hollowCard.code === 0 && /探针找不到/u.test(hollowCard.output) && /config 要是非空对象/u.test(hollowCard.output) && /可识别的实测字段/u.test(hollowCard.output),
+  "空洞的卡(config 空、探针不在、没有可识别实测字段)→ 三条都点出来(N-12/Q4-12)",
   hollowCard.output.slice(-400)
 );
 writeFileSync(
@@ -1538,6 +1593,20 @@ check(
 check(
   !hasIssue(nameRuleIssues("    assert property (@(posedge clk) rst |=> !done);"), /恒真断言/u),
   "真正要守的性质(前后件不是同一标识符)不报恒真断言"
+);
+// 第五轮 3.3:`posedge rst_n`(命名像低有效却当复位时钟沿)也要被复位规则抓到
+check(
+  hasIssue(nameRuleIssues("    always_ff @(posedge rst_n) begin end"), /复位极性/u),
+  "`posedge rst_n` 这种写法进「复位极性」(命名与用法矛盾;第五轮 3.3)"
+);
+// 第五轮 3.4:模块名只收一段 —— 带路径分隔符的模块名要退 2(以前会拼出 rtl/a/b.sv)
+const nameProbeRoot = join(SANDBOX, `name-rule-${stamp}`);
+mkdirSync(nameProbeRoot, { recursive: true });
+const nameProbe = runStderr("module-rtl-new.mjs", [nameProbeRoot, "a/b", "--template", join(TEMPLATES, "rtl.sv")]); // 提示走 stderr
+check(
+  nameProbe.code === 2 && /模块名不合法/u.test(nameProbe.output) && !existsSync(join(nameProbeRoot, "rtl", "a")),
+  `模块名带 / → 退 2 且不落文件(第五轮 3.4;实际 ${String(nameProbe.code)})`,
+  nameProbe.output.slice(-200)
 );
 check(
   hasIssue(nameRuleIssues(["    input wire clk,", "    output logic dout", "    wire mid;", "    assign mid = clk;"].join("\n")),
@@ -1748,6 +1817,107 @@ check(
   usBad.output.slice(-300)
 );
 
+// 场景 H:第四轮复审 Q4-01 / Q4-02 —— 器件以工程 spec 为准;模块 top 不许借工程的
+const q4Root = join(SANDBOX, `q4-device-${stamp}`);
+const q4Mod = join(q4Root, "uart_rx");
+mkdirSync(join(q4Root, "project", "spec"), { recursive: true });
+mkdirSync(join(q4Mod, "spec"), { recursive: true });
+const q4ProjectSpec = join(q4Root, "project", "spec", "spec.md");
+const q4ModuleSpec = join(q4Mod, "spec", "spec.md");
+const q4Script = join(q4Mod, "synth", "run_synth.tcl");
+const q4Run = () => runStdout("module-synth-new.mjs", [q4Mod, "uart_rx", "--kind", "synth-script", "--force"]);
+writeFileSync(q4ProjectSpec, "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n- 顶层模块名:system_top\n");
+
+// Q4-01a:两份器件**不一致** → 拒绝(退 2),不写脚本,两处来源都点出来
+writeFileSync(q4ModuleSpec, "# 模块 spec\n\n- 器件型号:xczu7ev-ffvc1156-2-e\n");
+const q4Conflict = runStderr("module-synth-new.mjs", [q4Mod, "uart_rx", "--kind", "synth-script", "--force"]); // 拒绝信息走 stderr
+check(
+  q4Conflict.code === 2 && /两处器件型号不一致/u.test(q4Conflict.output) &&
+    q4Conflict.output.includes("xc7a100tfgg484-2") && q4Conflict.output.includes("xczu7ev-ffvc1156-2-e") &&
+    !existsSync(q4Script),
+  `两处器件冲突 → 退 2、列两处来源、不落脚本(Q4-01;实际 ${String(q4Conflict.code)})`,
+  q4Conflict.output.slice(-300)
+);
+
+// Q4-01b:模块不重述器件 → 用工程那份;且 **TOP 必须是模块名**(不是工程 spec 的 system_top,Q4-02)
+writeFileSync(q4ModuleSpec, "# 模块 spec\n\n- 器件见工程 spec(不重述)\n");
+const q4Project = q4Run();
+const q4Text = existsSync(q4Script) ? readFileSync(q4Script, "utf8") : "";
+check(
+  q4Project.code === 0 && q4Text.includes('set PART "xc7a100tfgg484-2"'),
+  `模块不写器件 → 用工程 spec 的器件(Q4-01;实际 ${String(q4Project.code)})`,
+  q4Text.split("\n").filter((line) => line.startsWith("set ")).join(" | ")
+);
+check(
+  q4Text.includes('set TOP "uart_rx"') && !q4Text.includes("system_top"),
+  "工程 spec 的顶层名**不许**当模块 top 的后备(Q4-02:应为 uart_rx)"
+);
+
+// Q4-01c:两份写的是**同一个**器件 → 正常生成(不误报冲突)
+writeFileSync(q4ProjectSpec, "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+writeFileSync(q4ModuleSpec, "# 模块 spec\n\n- 器件型号:XC7A100TFGG484-2\n");
+const q4Same = q4Run();
+check(q4Same.code === 0, `两份器件相同(只看大小写差异)→ 不误报冲突(实际 ${String(q4Same.code)})`, q4Same.output.slice(-200));
+
+// Q4-07:模块内的 junction 指向模块外 → 引用的**真实落点**越界,FAIL 且 --record 不读它
+if (makeJunction(q4Mod, "verif") === false && !existsSync(join(q4Mod, "verif"))) {
+  console.log("ok    (跳过)本机造不出 junction,Q4-07 的定向用例未跑");
+} else {
+  writeFileSync(join(junctionOutside, "sample.txt"), "OUTSIDE-SENTINEL\n");
+  writeFileSync(join(q4Mod, "verif", "verif.md"), "# 验证报告\n\n结论: PASS\n\n- 外部引用:`verif/linked/sample.txt`\n");
+  const q4Escape = runStdout("module-report-check.mjs", [q4Mod]);
+  check(
+    q4Escape.code === 1 && /真实落点越出模块根/u.test(q4Escape.output) && q4Escape.output.includes("verif/linked/sample.txt"),
+    `证据路径真实落点在模块外(junction)→ FAIL 并点名(Q4-07;实际 ${String(q4Escape.code)})`,
+    q4Escape.output.slice(-300)
+  );
+  const q4Record = runStdout("module-report-check.mjs", [q4Mod, "--record"]);
+  check(
+    !/sha256=[0-9a-f]{64}/u.test(readFileSync(join(q4Mod, "verif", "verif.md"), "utf8")),
+    "--record 不读模块外文件、不给它记摘要(Q4-07)"
+  );
+}
+// Q4-11 的判据边界(真实 spec 形状 + 四种残缺写法)—— 直接调纯函数,不起文件
+check(
+  PART_SHAPE_CASES.every((item) => partLooksComplete(item.part) === item.complete),
+  `器件串完整性判据:4 个真实型号算完整、4 种残缺写法(简称/缺封装/缺速度级)不算 ` +
+    `(实际 ${PART_SHAPE_CASES.map((item) => `${item.part}=${String(partLooksComplete(item.part))}`).join(", ")})`
+);
+// 场景 I:第四轮第三批(Q4-10/11/13)
+const q43Root = join(SANDBOX, `q43-${stamp}`);
+const q43Mod = join(q43Root, "uart_rx");
+mkdirSync(join(q43Mod, "spec"), { recursive: true });
+mkdirSync(join(q43Mod, "verif"), { recursive: true });
+// Q4-11:只有族名简称的器件串**不能**当完整 part 用(会生成 set PART "XC7A100T",Vivado 不认)
+writeFileSync(join(q43Mod, "spec", "spec.md"), "# 模块 spec\n\n- 器件型号:XC7A100T\n");
+const q43Short = runStderr("module-synth-new.mjs", [q43Mod, "uart_rx", "--kind", "synth-script"]);
+check(
+  q43Short.code === 2 && /器件串不完整/u.test(q43Short.output) && q43Short.output.includes("XC7A100T"),
+  `器件串只有族名简称 → 拒绝生成(Q4-11;实际 ${String(q43Short.code)})`,
+  q43Short.output.slice(-250)
+);
+writeFileSync(join(q43Mod, "spec", "spec.md"), "# 模块 spec\n\n- 器件型号:xc7a100t-2\n");
+const q43NoPkg = runStderr("module-synth-new.mjs", [q43Mod, "uart_rx", "--kind", "synth-script"]);
+check(q43NoPkg.code === 2, `器件串缺封装(只有器件+速度等级)→ 也拒绝(Q4-11;实际 ${String(q43NoPkg.code)})`);
+// Q4-10:报告里有越界引用时 `--record` 必须先拒绝,不许"成功返回"
+writeFileSync(join(q43Mod, "spec", "spec.md"), "# 模块 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+writeFileSync(join(q43Mod, "verif", "sim.log"), "cycle 0 ok\n");
+writeFileSync(join(q43Mod, "verif", "verif.md"), "# 验证报告\n\n结论: PASS\n\n- 依据:`verif/sim.log`\n- 越界:`verif/../../outside.txt`\n");
+const q43Record = runStderr("module-report-check.mjs", [q43Mod, "--record"]);
+check(
+  q43Record.code === 1 && /拒绝写入/u.test(q43Record.output) &&
+    !/sha256=[0-9a-f]{64}/u.test(readFileSync(join(q43Mod, "verif", "verif.md"), "utf8")),
+  `--record 遇到越界引用 → 退 1 且不写摘要(Q4-10;实际 ${String(q43Record.code)})`,
+  q43Record.output.slice(-250)
+);
+// Q4-13:真机检查表在仓库里,且覆盖那几件"自检跑不到"的事
+const checklistPath = join(ROOT, "docs", "CLIENT_CHECKLIST.md");
+const checklistText = existsSync(checklistPath) ? readFileSync(checklistPath, "utf8") : "";
+check(
+  checklistText.split("\n").filter((line) => /^\|\s*\d+\s*\|/u.test(line)).length >= 8 &&
+    /重启 DSH Desktop/u.test(checklistText) && /NOT_TESTED/u.test(checklistText),
+  "docs/CLIENT_CHECKLIST.md 存在、有 8 条检查、并写着 NOT_TESTED 的记账方式(第四轮 Q4-13)"
+);
 // 场景 G:sync-installed 半途失败 → 必须说清"混合状态"、退出码非 0(第三轮复审 N-10)
 //   造法:在沙箱 profile 里把本该写文件的位置**放成目录**(copyFileSync 对它必然 EPERM),
 //   且它排在写入顺序的第二个 —— 于是恰好是"写了一个、第二个失败"的半途状态。
@@ -1774,6 +1944,36 @@ check(
   syncFilesNow.some((name) => /^cordis\.patch\.yml\.failed-/u.test(name)) && !syncFilesNow.includes("cordis.patch.yml"),
   `回滚把"这次新加的文件"改名移开(未删除):实际 ${syncFilesNow.join("、")}`
 );
+
+// 第五轮 2.6:反斜杠写法的引用也要抽出来核(以前只认正斜杠 → 整条漏检)
+writeFileSync(join(scopeRoot, "verif", "bs.log"), "cycle 0 ok\n");
+writeFileSync(join(scopeRoot, "verif", "verif.md"), ["# 验证报告", "", "结论: PASS", "", "- 反斜杠引用:`verif\\bs.log`", ""].join("\n"));
+const backslashOk = runStdout("module-report-check.mjs", [scopeRoot]);
+check(
+  backslashOk.code === 0 && /1 条证据路径/u.test(backslashOk.output),
+  "报告里用反斜杠写引用(`verif\\bs.log`)也能抽出来核(第五轮 2.6)",
+  backslashOk.output.slice(-200)
+);
+writeFileSync(join(scopeRoot, "verif", "verif.md"), ["# 验证报告", "", "结论: PASS", "", "- 反斜杠引用:`verif\\gone.log`", ""].join("\n"));
+const backslashBad = runStdout("module-report-check.mjs", [scopeRoot]);
+check(
+  backslashBad.code === 1 && /verif\/gone\.log/u.test(backslashBad.output),
+  "反斜杠引用指向不存在的文件 → FAIL 并点名(统一成 / 展示)",
+  backslashBad.output.slice(-200)
+);
+// 第五轮 3.7:报告里误留两段摘要块 → `--record` 之后只应剩一段
+writeFileSync(join(scopeRoot, "verif", "bs.log"), "cycle 0 ok\n");
+writeFileSync(
+  join(scopeRoot, "verif", "verif.md"),
+  [
+    "# 验证报告", "", "结论: PASS", "", "- 依据:`verif/bs.log`", "",
+    "<!-- evidence-digest:start -->", "旧段: verif/bs.log  sha256=" + "0".repeat(64), "<!-- evidence-digest:end -->", "",
+    "<!-- evidence-digest:start -->", "又一段: verif/bs.log  sha256=" + "1".repeat(64), "<!-- evidence-digest:end -->", ""
+  ].join("\n")
+);
+runStdout("module-report-check.mjs", [scopeRoot, "--record", "--accept-changed"]);
+const digestBlocks = (readFileSync(join(scopeRoot, "verif", "verif.md"), "utf8").match(/evidence-digest:start/gu) ?? []).length;
+check(digestBlocks === 1, `两段摘要块 → --record 之后只剩一段(第五轮 3.7;实际 ${String(digestBlocks)} 段)`);
 
 // ── F-03:check-patch-file.mjs 不许写死仓库绝对路径 ───────────────────────────
 //

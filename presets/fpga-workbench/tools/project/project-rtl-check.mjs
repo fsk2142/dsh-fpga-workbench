@@ -15,19 +15,20 @@
 //     ③ 成功标记必须与 err_cnt 挂钩(无条件打印 ALL TESTS PASSED 与"成百条断言违例"可以同时成立)。
 //
 // 用法:node project-rtl-check.mjs [<用户指定工程目录>] [--json]
-// 扫 src/rtl/ 的平铺 RTL、src/sim/ 的专用模块简单仿真，以及根 sim/ 的工程级仿真。
+// 扫 src/rtl/ 的平铺 RTL、src/sim/ 的专用模块简单仿真，以及根 sim/ 的工程级仿真；
+// 另外查工程根 ip/<ip>/timing.json(IP 时序卡)—— 那是**警告**(见 ipCardEntries)。
 // 退出码:0 全部通过(可以只有警告) / 1 有 FAIL / 2 用法或环境错误。
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /**
  * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
  *
- * `ip` 是刻意加的:外来代码(厂商 IP、他人提供的模块)放在 `rtl/ip/` 下,它们不按本模块的格式
+ * `ip` 是刻意加的:外来代码(厂商 IP、他人提供的模块)放在 `ip/` 下,它们不按本工程的格式
  * 规范书写(文件头、九个小节块、断言都不是厂商的写法)。不跳过就会成片误报,而"为让检查过就
- * 重排厂商代码"是绝对不能做的事。检查器只管**本模块自有代码**。
+ * 重排厂商代码"是绝对不能做的事。检查器只管**本工程自有代码**。
  */
 const SKIP_DIRS = new Set([
   "history", ".xil", ".git", "__pycache__", "work", "_synth_gate", "_ip_gen",
@@ -84,15 +85,16 @@ const WIDTHLESS_BASE = /(?<![\w)\]])'[bhdox]/iu;
 
 
 /**
- * `rtl/ip/` 下每个 IP 目录的时序卡(见 `fpga-project-rtl` 的「IP 时序卡」)。
+ * 工程根 `ip/` 下每个 IP 目录的时序卡(见 `fpga-project-rtl` 的「IP 时序卡」)。
  *
  * 卡是"给人看的前提"(实测出来的读/写延迟、复位占用拍、配置、探针),**缺了不拦门禁** ——
  * 所以它是警告;但它必须被看见:换实现/换器件时读的正是这张卡(实测踩过:FIFO 从厂商 IP 换成
  * XPM 宏,读延迟从 k+2 变 k+1,输出对齐器会少一拍)。只认 `timing.json` 这个名字。
- * @param ipDir - `<模块根>/rtl/ip`。
+ * @param ipDir - `<工程根>/ip`。
+ * @param projectRoot - 工程根(probe 路径相对它核验)。
  * @returns 每个 IP 目录一条检查结果(形状与 {@link checkFile} 的文件项一致,便于一起打印)。
  */
-function ipCardEntries(ipDir) {
+function ipCardEntries(ipDir, projectRoot) {
   let names;
   try {
     names = readdirSync(ipDir, { withFileTypes: true });
@@ -104,11 +106,11 @@ function ipCardEntries(ipDir) {
     .map((entry) => entry.name)
     .sort()
     .map((name) => {
-      const shown = `rtl/ip/${name}/timing.json`;
+      const shown = `ip/${name}/timing.json`;
       const card = join(ipDir, name, "timing.json");
       const warn = (message) => ({ file: shown, issues: [{ rule: "IP 卡", line: 0, message }] });
       if (!existsSync(card)) {
-        return warn(`rtl/ip/${name}/ 下没有 timing.json —— 这个 IP 的时序前提(读/写延迟、复位占用拍、配置)没有实测记录;测一份再往下走(格式见 fpga-project-rtl 的「IP 时序卡」)`);
+        return warn(`ip/${name}/ 下没有 timing.json —— 这个 IP 的时序前提(读/写延迟、复位占用拍、配置)没有实测记录;测一份再往下走(格式见 fpga-project-rtl 的「IP 时序卡」,量法同 fpga-module-rtl)`);
       }
       try {
         const parsed = JSON.parse(readFileSync(card, "utf8"));
@@ -130,13 +132,12 @@ function ipCardEntries(ipDir) {
         if (typeof parsed.config !== "object" || parsed.config === null || Object.keys(parsed.config).length === 0) {
           problems.push("config 要是非空对象(不写配置,这卡就说不清是在什么配置下测的)");
         }
-        // 探针必须真的在模块里(相对模块根):不然这张卡说的"谁测的"没法复核
+        // 探针必须真的在工程里(相对工程根):不然这张卡说的"谁测的"没法复核
         if (typeof parsed.probe === "string" && parsed.probe.trim() !== "") {
           const probeRel = parsed.probe.split(/\s+/u)[0].replace(/^\.\//u, "");
-          const moduleRoot = resolve(ipDir, "..", "..");
           const inside = !probeRel.split(/[\\/]+/u).includes("..") && !/^[A-Za-z]:/u.test(probeRel) && !probeRel.startsWith("\\\\");
-          if (!inside || !existsSync(join(moduleRoot, probeRel))) {
-            problems.push(`probe 指的探针找不到:${probeRel}(要写模块根相对的路径,且文件真的在)`);
+          if (!inside || !existsSync(join(projectRoot, probeRel))) {
+            problems.push(`probe 指的探针找不到:${probeRel}(要写工程根相对的路径,且文件真的在)`);
           }
         }
         // "有实测数值"才是卡的意义 —— 而且要是**可识别的测量字段**(第四轮 Q4-12:光"有个数字"的话
@@ -560,10 +561,14 @@ function main() {
     console.error("src/rtl、src/sim 与 sim/ 下没有 .v/.sv 源码:", root);
     return 2;
   }
-  const report = targets.map(([file, isTb]) => ({
-    file: relative(root, file).split(sep).join("/"),
-    issues: checkFile(file, isTb)
-  }));
+  const report = [
+    ...targets.map(([file, isTb]) => ({
+      file: relative(root, file).split(sep).join("/"),
+      issues: checkFile(file, isTb)
+    })),
+    // IP 时序卡:工程根 ip/ 下每个 IP 一张(与文件项同形一起打印)
+    ...ipCardEntries(join(root, "ip"), root)
+  ];
   const failures = report.flatMap((entry) => entry.issues.filter(isFailure));
   const warnings = report.flatMap((entry) => entry.issues.filter((issue) => !isFailure(issue)));
   if (asJson) {

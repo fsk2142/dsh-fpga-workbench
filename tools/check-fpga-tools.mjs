@@ -26,6 +26,11 @@ import { fileURLToPath } from "node:url";
 
 import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
 import { PART_SHAPE_CASES, partLooksComplete } from "../presets/fpga-workbench/tools/module/module-synth-new.mjs";
+import {
+  hasDigestBlock,
+  recordedDigests,
+  withDigests
+} from "../presets/fpga-workbench/tools/module/module-report-check.mjs";
 import { INSTRUCTION_FILE, applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
 import { TEMP_GRACE_MS, listTempLeftovers } from "../lib/toolchain.js";
@@ -34,6 +39,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
 // 级别落到目录上:模块级命令在 tools/module/,工程级命令在 tools/project/
 const MODULE_TOOLS = join(TOOLS, "module");
+const PROJECT_TOOLS = join(TOOLS, "project");
 const TEMPLATES = join(ROOT, "presets", "fpga-workbench", "templates");
 const SANDBOX = join(ROOT, ".tmp", `fpga-tools-check-${String(process.pid)}`);
 // 沙箱名带进程号。**开头/结尾都不再删沙箱**(用户定案:绝不永久删除)—— 只把上次留下的列出来。
@@ -615,7 +621,7 @@ check(
 // setup-scaffold 是两级共用(在 tools/ 顶层、名字不带级别前缀);其余被调用的都是模块级命令
 // cwd 可选:验"落点"的断言要能规定"当前目录"在哪,否则相对路径落到哪看不出来(也脏了仓库根)。
 const run = (script, args, cwd) => {
-  const path = existsSync(join(TOOLS, script)) ? join(TOOLS, script) : join(MODULE_TOOLS, script);
+  const path = [join(TOOLS, script), join(MODULE_TOOLS, script), join(PROJECT_TOOLS, script)].find((candidate) => existsSync(candidate)) ?? join(TOOLS, script);
   return spawnSync(process.execPath, [path, ...args], { stdio: "ignore", cwd }).status;
 };
 
@@ -988,8 +994,8 @@ check(
 //
 // stdio 不能开管道(沙箱限制,见文件头):stderr 也重定向到**文件句柄**再读。
 const runStderr = (script, args) => {
-  // 解析顺序:预设的工具目录 → 仓库根 tools/(install / sync-installed 这些在仓库层)
-  const path = [join(MODULE_TOOLS, script), join(TOOLS, script), join(ROOT, "tools", script)].find((candidate) => existsSync(candidate)) ?? join(TOOLS, script);
+  // 解析顺序:预设的工具目录(按级别分目录) → 仓库根 tools/
+  const path = [join(MODULE_TOOLS, script), join(PROJECT_TOOLS, script), join(TOOLS, script), join(ROOT, "tools", script)].find((candidate) => existsSync(candidate)) ?? join(TOOLS, script);
   const log = join(SANDBOX, `stderr-${script}-${String(Date.now())}.log`);
   const fd = openSync(log, "w");
   const code = spawnSync(process.execPath, [path, ...args], { stdio: ["ignore", "ignore", fd] }).status;
@@ -999,8 +1005,8 @@ const runStderr = (script, args) => {
 // 同一个道理,但收 **stdout** —— 检查器把正常结论(ok / warn / PASS)写在 stdout,只有用法错误与
 // 落盘失败走 stderr。用 runStderr 去读一条警告会什么都读不到(实测踩过:断言像在测空气)。
 const runStdout = (script, args) => {
-  // 解析顺序:预设的工具目录 → 仓库根 tools/(install / sync-installed 这些在仓库层)
-  const path = [join(MODULE_TOOLS, script), join(TOOLS, script), join(ROOT, "tools", script)].find((candidate) => existsSync(candidate)) ?? join(TOOLS, script);
+  // 解析顺序:预设的工具目录(按级别分目录) → 仓库根 tools/
+  const path = [join(MODULE_TOOLS, script), join(PROJECT_TOOLS, script), join(TOOLS, script), join(ROOT, "tools", script)].find((candidate) => existsSync(candidate)) ?? join(TOOLS, script);
   const log = join(SANDBOX, `stdout-${script}-${String(Date.now())}.log`);
   const fd = openSync(log, "w");
   const code = spawnSync(process.execPath, [path, ...args], { stdio: ["ignore", fd, "ignore"] }).status;
@@ -1618,6 +1624,46 @@ check(
   "rtl/ip/ 下的普通文件不当成 IP 目录(不误报)"
 );
 
+// ── project-rtl-check:工程树入口 + 根 ip/ 时序卡 ──────────────────────────────
+//
+// 工程 IP 在根 `ip/`(不是 `rtl/ip/`);时序卡相对**工程根**核验探针。
+const projIpRoot = join(SANDBOX, `project-rtl-${stamp}`);
+mkdirSync(join(projIpRoot, "src", "rtl"), { recursive: true });
+mkdirSync(join(projIpRoot, "src", "sim"), { recursive: true });
+mkdirSync(join(projIpRoot, "sim"), { recursive: true });
+mkdirSync(join(projIpRoot, "ip", "xpm_fifo_sync"), { recursive: true });
+writeFileSync(join(projIpRoot, "src", "rtl", "good.sv"), goodRtl);
+writeFileSync(join(projIpRoot, "src", "sim", "tb_good.sv"), goodTb);
+const projNoCard = runStdout("project-rtl-check.mjs", [projIpRoot]);
+check(
+  projNoCard.code === 0 &&
+    projNoCard.output.includes("ip/xpm_fifo_sync/timing.json") &&
+    projNoCard.output.includes("没有 timing.json") &&
+    !projNoCard.output.includes("rtl/ip/"),
+  `工程 IP 卡查根 ip/(不是 rtl/ip/),缺卡只警告(退出码 ${String(projNoCard.code)})`,
+  projNoCard.output.slice(-300)
+);
+writeFileSync(join(projIpRoot, "ip", "xpm_fifo_sync", "probe.sv"), "// probe\n");
+writeFileSync(
+  join(projIpRoot, "ip", "xpm_fifo_sync", "timing.json"),
+  `${JSON.stringify(
+    { card: "xpm_fifo_sync @ probe", measured: "2026-09-22", probe: "ip/xpm_fifo_sync/probe.sv", config: { READ_MODE: "std" }, read_latency: 2 },
+    null,
+    2
+  )}\n`
+);
+const projWithCard = runStdout("project-rtl-check.mjs", [projIpRoot]);
+check(
+  projWithCard.code === 0 && !projWithCard.output.includes("没有 timing.json") && !projWithCard.output.includes("探针找不到"),
+  "工程 IP 补上完整 timing.json(探针相对工程根)后警告消失"
+);
+const projNoRtl = join(SANDBOX, `project-rtl-noroot-${stamp}`);
+mkdirSync(join(projNoRtl, "src"), { recursive: true });
+check(
+  runStdout("project-rtl-check.mjs", [projNoRtl]).code === 2,
+  "工程没有 src/rtl/ → 退出码 2"
+);
+
 // ── 端口类型 / 字面量 / 内部 wire:用户口径(2026-09-21)───────────────────────
 //
 // 三条都是**警告**(写法类,不拦门禁),但都要真的报出来;而且要躲开三个已知的误报来源:
@@ -2058,6 +2104,75 @@ writeFileSync(
 runStdout("module-report-check.mjs", [scopeRoot, "--record", "--accept-changed"]);
 const digestBlocks = (readFileSync(join(scopeRoot, "verif", "verif.md"), "utf8").match(/evidence-digest:start/gu) ?? []).length;
 check(digestBlocks === 1, `两段摘要块 → --record 之后只剩一段(第五轮 3.7;实际 ${String(digestBlocks)} 段)`);
+
+// ── F5-01:摘要正则不得因共享 lastIndex 交替漏读 ───────────────────────────────
+{
+  const sample =
+    "# 报告\n\n结论: PASS\n\n" +
+    "<!-- evidence-digest:start -->\n" +
+    "verif/a.txt  sha256=" + "a".repeat(64) + "\n" +
+    "verif/b.txt  sha256=" + "b".repeat(64) + "\n" +
+    "<!-- evidence-digest:end -->\n";
+  const first = recordedDigests(sample);
+  const second = recordedDigests(sample);
+  const third = recordedDigests(sample);
+  check(
+    first.size === 2 && second.size === 2 && third.size === 2 &&
+      first.get("verif/a.txt") === second.get("verif/a.txt") &&
+      second.get("verif/b.txt") === third.get("verif/b.txt"),
+    "recordedDigests 连续调用结果稳定(不再 true/false 交替漏读)"
+  );
+  check(hasDigestBlock(sample) && hasDigestBlock(sample) && hasDigestBlock(sample), "hasDigestBlock 连续调用稳定");
+  const once = withDigests("# x\n", [["p", "e".repeat(64)]]);
+  const twice = withDigests(once, [["p", "e".repeat(64)]]);
+  check(once === twice, "withDigests 对同一 entries 幂等");
+  const rewritten = withDigests(sample, [["verif/a.txt", "c".repeat(64)]]);
+  check(
+    recordedDigests(rewritten).get("verif/a.txt") === "c".repeat(64) &&
+      !recordedDigests(rewritten).has("verif/b.txt"),
+    "withDigests 替换摘要块内容(旧条目不再残留)"
+  );
+  const multi =
+    "# r\n" +
+    "<!-- evidence-digest:start -->\na  sha256=" + "1".repeat(64) + "\n<!-- evidence-digest:end -->\n" +
+    "<!-- evidence-digest:start -->\nb  sha256=" + "2".repeat(64) + "\n<!-- evidence-digest:end -->\n";
+  const merged = recordedDigests(multi);
+  check(merged.size === 2 && merged.get("a") === "1".repeat(64) && merged.get("b") === "2".repeat(64), "多段摘要块全部读入(不只第一块)");
+  const collapsed = withDigests(multi, [["a", "1".repeat(64)], ["b", "2".repeat(64)]]);
+  check((collapsed.match(/evidence-digest:start/gu) ?? []).length === 1, "withDigests 把多段收成一段");
+}
+
+// F5-01 负向:两份依据都变了时 --record 必须两条都拦住,且不写回
+{
+  const f5Root = join(SANDBOX, `f5-digest-${stamp}`);
+  mkdirSync(join(f5Root, "verif"), { recursive: true });
+  mkdirSync(join(f5Root, "spec"), { recursive: true });
+  writeFileSync(join(f5Root, "spec", "spec.md"), "# spec\n");
+  writeFileSync(join(f5Root, "verif", "a.txt"), "A0\n");
+  writeFileSync(join(f5Root, "verif", "b.txt"), "B0\n");
+  writeFileSync(join(f5Root, "verif", "verif.md"), "# 验证报告\n\n结论: PASS\n\n- 依据 a:`verif/a.txt`\n- 依据 b:`verif/b.txt`\n");
+  const rec0 = runStdout("module-report-check.mjs", [f5Root, "--record"]);
+  check(rec0.code === 0, `先记两份摘要(退出码 ${String(rec0.code)})`, rec0.output.slice(-200));
+  writeFileSync(join(f5Root, "verif", "a.txt"), "A1\n");
+  writeFileSync(join(f5Root, "verif", "b.txt"), "B1\n");
+  const bothChanged = runStdout("module-report-check.mjs", [f5Root]);
+  check(
+    bothChanged.code === 0 &&
+      bothChanged.output.includes("verif/a.txt") &&
+      bothChanged.output.includes("verif/b.txt") &&
+      /摘要变了/.test(bothChanged.output),
+    "两份依据都变时两份都要报出来(不许只报一半)",
+    bothChanged.output.slice(-300)
+  );
+  const before = readFileSync(join(f5Root, "verif", "verif.md"), "utf8");
+  const blocked = runStderr("module-report-check.mjs", [f5Root, "--record"]);
+  const after = readFileSync(join(f5Root, "verif", "verif.md"), "utf8");
+  check(
+    blocked.code === 1 && before === after && blocked.output.includes("verif/a.txt") && blocked.output.includes("verif/b.txt"),
+    `--record 任一依据已变 → 拒绝写入且两条都点名(退出码 ${String(blocked.code)})`,
+    blocked.output.slice(-300)
+  );
+}
 
 // ── F-03:check-patch-file.mjs 不许写死仓库绝对路径 ───────────────────────────
 //

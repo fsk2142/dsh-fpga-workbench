@@ -139,7 +139,15 @@ export function isSafeRelative(path) {
  * 为什么不用 mtime(实测):mtime 版会把"重跑了一次工具"之后的每个输出文件都报一遍(某模块一次
  * 14 条),而绝大多数内容根本没变 —— 那种量级的警告几天就没人看了。摘要只认内容。
  */
-const DIGEST_BLOCK = /<!-- evidence-digest:start -->([\s\S]*?)<!-- evidence-digest:end -->/gu;
+/**
+ * 摘要块:**单次读取**用不带 `g` 的实例,**整段删除**用带 `g` 的实例。
+ *
+ * 第五轮 F5-01:带 `g` 的正则 `exec()`/`test()` 共享 `lastIndex`,同一文本连续调用会
+ * `true → false → true → false` 静默漏读(实测)。读摘要与清摘要必须拆开,且每份报告
+ * 只解析一次(调用方先取 Map,循环里查 Map,不要在证据循环里反复 exec)。
+ */
+const DIGEST_BLOCK_ONE = /<!-- evidence-digest:start -->([\s\S]*?)<!-- evidence-digest:end -->/u;
+const DIGEST_BLOCK_ALL = /<!-- evidence-digest:start -->([\s\S]*?)<!-- evidence-digest:end -->/gu;
 
 /**
  * 一条引用算不算"依据"(摘要只对依据算)。
@@ -169,18 +177,25 @@ function sha256Of(abs) {
   }
 }
 
-/** 从报告正文里读回摘要块(`{ path: sha256 }`)。 */
+/**
+ * 从报告正文里读回摘要块(`{ path: sha256 }`)。
+ *
+ * 多块时**全部合并**(后块覆盖前块同名路径);写回时 `withDigests` 会收成一块。
+ * 连续调用结果必须稳定 —— 不用带 `g` 的共享实例做 `.exec()`(F5-01)。
+ */
 export function recordedDigests(text) {
-  const block = DIGEST_BLOCK.exec(text)?.[1] ?? "";
   const out = new Map();
-  for (const line of block.split(/\r?\n/u)) {
-    const match = /^\s*(\S+)\s+sha256=([0-9a-f]{64})\s*$/u.exec(line);
-    if (match !== null) out.set(match[1], match[2]);
+  for (const match of String(text ?? "").matchAll(DIGEST_BLOCK_ALL)) {
+    const block = match[1] ?? "";
+    for (const line of block.split(/\r?\n/u)) {
+      const parsed = /^\s*(\S+)\s+sha256=([0-9a-f]{64})\s*$/u.exec(line);
+      if (parsed !== null) out.set(parsed[1], parsed[2]);
+    }
   }
   return out;
 }
 
-/** 把摘要块写进报告正文(已有块就替换,没有就追加)。 */
+/** 把摘要块写进报告正文(已有块就替换,没有就追加;多块收成一块)。 */
 export function withDigests(text, entries) {
   const block = [
     "<!-- evidence-digest:start -->",
@@ -188,8 +203,13 @@ export function withDigests(text, entries) {
     "<!-- evidence-digest:end -->",
     ""
   ].join("\n");
-  const body = text.replace(DIGEST_BLOCK, "").replace(/\n*$/u, "\n");
+  const body = String(text ?? "").replace(DIGEST_BLOCK_ALL, "").replace(/\n*$/u, "\n");
   return `${body}\n${block}`;
+}
+
+/** 报告里是否已有摘要块(单次判断,不用共享 `g` 实例的 `.test()`)。 */
+export function hasDigestBlock(text) {
+  return DIGEST_BLOCK_ONE.test(String(text ?? ""));
 }
 
 /**
@@ -286,6 +306,8 @@ export function auditReports(moduleRoot) {
     // 这份报告**写出结论**了吗:写了才算"给判定撑腰的文档",它引用的路径缺失才是错。
     // 草稿(没有 `结论:` 行)里引用还没落地的路径是正常的 —— 以前不分青红皂白判 FAIL(复审 N-09)。
     const isConclusion = /^\s*结论\s*[:：]/mu.test(text);
+    // 每份报告只解析一次摘要(F5-01):循环里反复 exec 共享 /g 正则会交替漏读
+    const digests = recordedDigests(text);
     for (const token of evidenceTokens(text)) {
       if (!token.safe) {
         noteInvalid(rel, token, "");
@@ -315,7 +337,7 @@ export function auditReports(moduleRoot) {
       }
       // ── ③ 依据的摘要对不上:报告写完之后那份依据**内容**变了(只警告,不判错)──
       if (!isEvidenceFile(moduleRoot, path)) continue;
-      const recorded = recordedDigests(text).get(path);
+      const recorded = digests.get(path);
       if (recorded === undefined) continue; // 没记过摘要 = 还没启用这一步,不猜
       const current = sha256Of(abs);
       if (current !== undefined && current !== recorded) changed.push({ file: rel, path, recorded, current });
@@ -419,6 +441,7 @@ function main() {
         const entries = [];
         const stale = [];
         const skippedUnsafe = [];
+        const digests = recordedDigests(text); // 每份报告只解析一次(F5-01)
         for (const path of evidencePaths(text)) {
           // --record 同样**不许读模块外**(Q4-07):真实落点越界就跳过,不 stat、不 readFileSync
           if (!staysInsideModule(moduleRoot, path)) {
@@ -429,10 +452,10 @@ function main() {
           const digest = sha256Of(join(moduleRoot, path));
           if (digest === undefined) continue;
           entries.push([path, digest]);
-          const recorded = recordedDigests(text).get(path);
+          const recorded = digests.get(path);
           if (recorded !== undefined && recorded !== digest) stale.push(path);
         }
-        if (entries.length === 0 && !DIGEST_BLOCK.test(text)) continue;
+        if (entries.length === 0 && !hasDigestBlock(text)) continue;
         targets.push({ rel, text, entries, stale, skippedUnsafe });
       }
     }

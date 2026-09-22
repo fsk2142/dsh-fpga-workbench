@@ -61,7 +61,7 @@ description: 在需要验证 FPGA 工程的模块接口、背压、跨时钟或�
 跑法用设置里选中的那个仿真器走。命令写进脚本,在 **`sim/`** 下一次调用,全程命令行;
 调用姿势以会话开头的**已就绪**清单为准,不在本技能里重新探测工具:
 
-- **ModelSim / QuestaSim**:`.do`(`vlib` / `vlog` / `vsim -c` / `run -all` / `quit -f`)写在 `sim/run.do`
+- **ModelSim / QuestaSim**:先 `sim/compile.do`(`vlib` / `vlog`),再 `sim/run.do`(`vsim -c` / `run -all` / `quit -f`);两份脚本**按设置里选中的「仿真编译/运行」模板抄改**(路径见会话提示;工程级没有 `*-new` 起文件命令,不要对工程根跑 `module-verif-new`),`quit` 与成败 gate 写进 `.do`
 - **Vivado XSim**:`xvlog` / `xelab` / `xsim` 三步;**不要跑 `.do`**(那是 ModelSim 方言)
 
 看波形用**已经确认过的那份脚本**起 GUI;不要在 `sim/` 里裸开 GUI 加载设计(dump 会被清零)。

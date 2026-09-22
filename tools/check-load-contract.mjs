@@ -353,6 +353,7 @@ const hostValues = {
   projectProgrammingTemplate: "",
   projectSimulationTool: "auto",
   projectTestbenchTemplate: "",
+  projectSimulationCompileTemplate: "",
   projectSimulationRunTemplate: "",
   projectVerificationTool: "auto",
   projectVerificationTemplate: "",
@@ -470,10 +471,11 @@ const capabilityFixtures = [
     ]
   },
   {
-    key: "project-simulation", section: "project", label: "系统仿真工具", hint: "用于系统级测试平台与运行。",
+    key: "project-simulation", section: "project", label: "系统仿真工具", hint: "用于系统级测试平台与运行；编译与运行模板分开。",
     toolKey: "projectSimulationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
       templateSlot("projectTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog_testbench.sv"),
+      templateSlot("projectSimulationCompileTemplate", "sim-compile", "仿真编译脚本", "simulation/compile/modelsim_compile.do"),
       templateSlot("projectSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim_run.do")
     ]
   },

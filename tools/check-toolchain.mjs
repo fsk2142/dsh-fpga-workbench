@@ -16,6 +16,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BINDINGS,
+  CAPABILITIES,
   DORMANT_SUFFIX,
   FIELDS,
   NS,
@@ -26,6 +27,7 @@ import {
   CLEANUP_KINDS,
   TEMPLATE_FIELDS,
   TOOL_CATALOG,
+  TOOL_GROUPS,
   TOOLS,
   backupChangedFiles,
   cleanupEntry,
@@ -50,6 +52,8 @@ import {
   readdirNames,
   resolveBinding,
   resolveBindings,
+  resolveCapability,
+  resolveCapabilities,
   resolveTemplates,
   staleShippedFiles,
   statusOf,
@@ -94,10 +98,26 @@ const missingKeys = (tools) => tools.filter(isMissing).map((tool) => tool.key);
 // 这些断言保护用户真正看到的行为,而不是字段总数:每种工具能同时登记、每个环节独立选择,
 // 路径覆盖有固定优先级,auto 与 none 不混为一谈。
 const sectionKeys = SETTINGS_SECTIONS.map((section) => section.key);
-check(sectionKeys.join(",") === "common,module,project", "设置只有通用工具、模块工具、工程工具三个顶层区");
-check(STAGES.filter((stage) => stage.section === "module").length === 5, "模块工具显示五个可反复切换的环节");
-check(STAGES.filter((stage) => stage.section === "project").length === 8, "工程工具显示八个独立环节");
-
+check(sectionKeys.join(",") === "common,module,project", "设置只有工具设置、模块工具、工程工具三个顶层区");
+check(SETTINGS_SECTIONS[0]?.label === "工具设置", "第一大块改名为工具设置");
+check(
+  TOOL_GROUPS.map((group) => group.key).join(",") === "script,compiler,simulator,fpga",
+  "工具设置按脚本、编译、仿真、FPGA 四类列出"
+);
+check(
+  CAPABILITIES.filter((item) => item.section === "module").map((item) => item.key).join(",") ===
+    "module-rtl,module-simulation,module-verification,module-gate",
+  "模块设置是四张能力卡"
+);
+check(
+  CAPABILITIES.filter((item) => item.section === "project").map((item) => item.key).join(",") ===
+    "project-main,project-simulation,project-verification",
+  "工程设置是三张能力卡"
+);
+check(
+  !FIELDS.some((field) => field.control !== "hidden" && field.pathKey?.endsWith("Path")),
+  "能力卡没有覆盖路径"
+);
 for (const [tool, pathKey, kind] of [
   ["python", "pythonPath", "file"],
   ["verilator", "verilatorPath", "file"],
@@ -110,7 +130,7 @@ for (const [tool, pathKey, kind] of [
   check(TOOL_CATALOG[tool]?.pathKey === pathKey && TOOL_CATALOG[tool]?.kind === kind, `${tool} 有独立通用路径与正确类型`);
 }
 
-const STAGE_COMMON_PATHS = {
+const REGISTERED_PATHS = {
   verilatorPath: "C:\\tools\\verilator_bin.exe",
   iverilogPath: "C:\\tools\\iverilog.exe",
   modelsimPath: "C:\\tools\\vsim.exe",
@@ -118,45 +138,131 @@ const STAGE_COMMON_PATHS = {
   vivadoPath: "C:\\Vivado\\bin\\vivado.bat",
   quartusPath: "C:\\Quartus\\bin64\\quartus_sh.exe"
 };
-const stageAllPresent = probeTyped(
-  [STAGE_COMMON_PATHS.xsimPath],
-  Object.values(STAGE_COMMON_PATHS).filter((path) => path !== STAGE_COMMON_PATHS.xsimPath)
+const allRegisteredPresent = probeTyped(
+  [REGISTERED_PATHS.xsimPath],
+  Object.values(REGISTERED_PATHS).filter((path) => path !== REGISTERED_PATHS.xsimPath)
 );
-const inspectedCommon = new Map(inspectTools(STAGE_COMMON_PATHS, stageAllPresent).map((field) => [field.key, field]));
+const inspectedCommon = new Map(inspectTools(REGISTERED_PATHS, allRegisteredPresent).map((field) => [field.key, field]));
 check(
-  Object.keys(STAGE_COMMON_PATHS).every((key) => inspectedCommon.get(key)?.present === true),
+  Object.keys(REGISTERED_PATHS).every((key) => inspectedCommon.get(key)?.present === true),
   "多套工具路径可以同时保存且互不覆盖"
 );
 
-const rtlBinding = BINDINGS.find((binding) => binding.key === "moduleRtlCompiler");
-const inheritedBinding = resolveBinding(
-  { ...STAGE_COMMON_PATHS, moduleRtlCompilerTool: "verilator" },
-  rtlBinding,
-  stageAllPresent
+const rtlCapability = CAPABILITIES.find((capability) => capability.key === "module-rtl");
+const registeredCapability = resolveCapability(
+  { ...REGISTERED_PATHS, moduleRtlTool: "verilator" },
+  rtlCapability,
+  allRegisteredPresent
 );
 check(
-  inheritedBinding.path === STAGE_COMMON_PATHS.verilatorPath && inheritedBinding.source === "common" && inheritedBinding.state === "ready",
-  "环节留空时继承通用路径"
+  registeredCapability.path === REGISTERED_PATHS.verilatorPath &&
+    registeredCapability.source === "registry" &&
+    registeredCapability.state === "ready",
+  "能力卡只引用顶部已登记工具路径"
 );
-const overriddenBinding = resolveBinding(
+const ignoredLegacyOverride = resolveCapability(
   {
-    ...STAGE_COMMON_PATHS,
-    moduleRtlCompilerTool: "verilator",
+    ...REGISTERED_PATHS,
+    moduleRtlTool: "verilator",
     moduleRtlCompilerPath: "D:\\wrapped\\verilator.exe"
   },
-  rtlBinding,
-  probeWith(["D:\\wrapped\\verilator.exe"])
+  rtlCapability,
+  allRegisteredPresent
 );
 check(
-  overriddenBinding.path === "D:\\wrapped\\verilator.exe" && overriddenBinding.source === "stage" && overriddenBinding.state === "ready",
-  "环节路径覆盖通用路径"
+  ignoredLegacyOverride.path === REGISTERED_PATHS.verilatorPath && ignoredLegacyOverride.source === "registry",
+  "旧阶段覆盖路径不再影响能力卡"
 );
-check(resolveBinding({ moduleRtlCompilerTool: "auto" }, rtlBinding, probeWith([])).state === "auto", "auto 保留 AI 判断");
-check(resolveBinding({ moduleRtlCompilerTool: "none" }, rtlBinding, probeWith([])).state === "none", "none 明确禁用");
-check(resolveBinding({ moduleRtlCompilerTool: "bogus" }, rtlBinding, probeWith([])).state === "invalid", "非法选择不会假装可用");
-check(resolveBinding({ moduleRtlCompilerTool: "verilator" }, rtlBinding, probeWith([])).state === "missing", "显式工具缺路径时只标记该绑定缺失");
+check(resolveCapability({ moduleRtlTool: "auto" }, rtlCapability, probeWith([])).state === "auto", "auto 保留 AI 判断");
+check(resolveCapability({ moduleRtlTool: "none" }, rtlCapability, probeWith([])).state === "none", "none 明确禁用");
+check(resolveCapability({ moduleRtlTool: "bogus" }, rtlCapability, probeWith([])).state === "invalid", "非法选择不会假装可用");
+check(resolveCapability({ moduleRtlTool: "verilator" }, rtlCapability, probeWith([])).state === "missing", "显式工具缺路径时只标记该能力缺失");
+check(resolveCapabilities({}, probeWith([])).length === 7, "一次解析七张能力卡");
 
-const migratedV2 = legacyMigrationPatch({
+// ── v1 / v2 → v3 无损迁移 ──────────────────────────────────────────────────
+const migratedAgreement = legacyMigrationPatch({
+  settingsModelVersion: "2",
+  moduleRtlCompilerTool: "verilator",
+  moduleVerifSimulatorTool: "modelsim",
+  moduleVerifScriptTool: "python",
+  moduleSynthFpgaTool: "vivado",
+  projectIntegrateFpgaTool: "vivado",
+  projectConstraintsFpgaTool: "vivado",
+  projectImplFpgaTool: "vivado",
+  projectTimingFpgaTool: "vivado",
+  projectBoardFpgaTool: "vivado",
+  projectReleaseFpgaTool: "vivado",
+  projectSyssimSimulatorTool: "modelsim",
+  projectSyssimScriptTool: "python"
+});
+check(migratedAgreement.settingsModelVersion === "3", "迁移写入模型版本 3");
+check(
+  migratedAgreement.moduleRtlTool === "verilator" &&
+    migratedAgreement.moduleSimulationTool === "modelsim" &&
+    migratedAgreement.moduleVerificationTool === "python" &&
+    migratedAgreement.moduleGateTool === "vivado",
+  "v2 模块阶段选择迁到四张能力卡"
+);
+check(
+  migratedAgreement.projectMainTool === "vivado" &&
+    migratedAgreement.projectSimulationTool === "modelsim" &&
+    migratedAgreement.projectVerificationTool === "python",
+  "v2 工程阶段选择迁到三张能力卡"
+);
+
+const migratedConflict = legacyMigrationPatch({
+  settingsModelVersion: "2",
+  projectIntegrateFpgaTool: "vivado",
+  projectImplFpgaTool: "quartus"
+});
+const conflictWarnings = JSON.parse(migratedConflict.settingsMigrationWarnings ?? "[]");
+check(migratedConflict.projectMainTool === "auto", "工程厂商工具冲突时不猜，回到 auto");
+check(conflictWarnings.some((warning) => warning.includes("工程主工具")), "工程厂商工具冲突留下迁移提醒");
+check(!conflictWarnings.some((warning) => warning.includes("\\")), "迁移提醒不泄露完整旧路径");
+
+const sharedOverride = "D:\\wrapped\\verilator.exe";
+const migratedOverride = legacyMigrationPatch({
+  settingsModelVersion: "2",
+  moduleRtlCompilerTool: "verilator",
+  moduleRtlCompilerPath: sharedOverride,
+  projectIntegrateCompilerTool: "verilator",
+  projectIntegrateCompilerPath: sharedOverride
+});
+check(migratedOverride.verilatorPath === sharedOverride, "同一工具的旧覆盖路径一致时迁入顶部工具登记");
+
+const conflictingOverride = legacyMigrationPatch({
+  settingsModelVersion: "2",
+  moduleRtlCompilerTool: "verilator",
+  moduleRtlCompilerPath: "D:\\one\\verilator.exe",
+  projectIntegrateCompilerTool: "verilator",
+  projectIntegrateCompilerPath: "E:\\two\\verilator.exe"
+});
+const overrideWarnings = JSON.parse(conflictingOverride.settingsMigrationWarnings ?? "[]");
+check(conflictingOverride.verilatorPath === undefined, "旧覆盖路径冲突时不迁入顶部工具登记");
+check(overrideWarnings.some((warning) => warning.includes("Verilator")), "旧覆盖路径冲突留下工具名提醒");
+
+const migratedTemplates = legacyMigrationPatch({
+  settingsModelVersion: "2",
+  rtlTemplatePath: "C:\\old\\rtl.sv",
+  tbTemplatePath: "C:\\old\\tb.sv",
+  xdcTemplatePath: "C:\\old\\constraints.xdc",
+  runDoTemplatePath: "C:\\old\\run.do",
+  synthScriptTemplatePath: "C:\\old\\run_synth.tcl",
+  compScriptTemplatePath: "C:\\old\\comp.py"
+});
+check(
+  migratedTemplates.moduleRtlTemplate === "C:\\old\\rtl.sv" && migratedTemplates.projectRtlTemplate === "C:\\old\\rtl.sv",
+  "旧 RTL 模板分别继承给模块与工程"
+);
+check(
+  migratedTemplates.moduleSimulationRunTemplate === "C:\\old\\run.do" &&
+    migratedTemplates.projectSimulationRunTemplate === "C:\\old\\run.do" &&
+    migratedTemplates.moduleVerificationTemplate === "C:\\old\\comp.py" &&
+    migratedTemplates.projectVerificationTemplate === "C:\\old\\comp.py",
+  "旧仿真与验证模板分别继承且不要求文件当前存在"
+);
+
+const migratedV1 = legacyMigrationPatch({
   settingsModelVersion: "",
   compiler: "iverilog",
   compilerPath: "C:\\iverilog\\bin\\iverilog.exe",
@@ -167,82 +273,95 @@ const migratedV2 = legacyMigrationPatch({
   python: "python",
   pythonPath: "C:\\Python314\\python.exe"
 });
-check(migratedV2.settingsModelVersion === "2", "迁移写入模型版本 2");
-check(migratedV2.iverilogPath?.endsWith("iverilog.exe"), "共享编译路径迁到 Icarus 专属字段");
-check(migratedV2.xsimPath === "C:\\Vivado\\bin", "共享 XSim 路径保持目录语义");
-check(migratedV2.quartusPath?.endsWith("quartus_sh.exe"), "共享综合路径迁到 Quartus 专属字段");
 check(
-  migratedV2.moduleRtlCompilerTool === "iverilog" && migratedV2.projectIntegrateCompilerTool === "iverilog",
-  "旧编译选择迁到相关环节"
+  migratedV1.iverilogPath?.endsWith("iverilog.exe") && migratedV1.xsimPath === "C:\\Vivado\\bin" && migratedV1.quartusPath?.endsWith("quartus_sh.exe"),
+  "v1 共享路径直接迁入 v3 顶部工具登记"
 );
 check(
-  migratedV2.moduleVerifSimulatorTool === "xsim" && migratedV2.projectSyssimSimulatorTool === "xsim",
-  "旧仿真选择迁到相关环节"
+  migratedV1.moduleRtlTool === "iverilog" && migratedV1.moduleSimulationTool === "xsim" &&
+    migratedV1.moduleGateTool === "quartus" && migratedV1.projectMainTool === "quartus" &&
+    migratedV1.moduleVerificationTool === "python" && migratedV1.projectVerificationTool === "python",
+  "v1 选择直接迁到 v3 能力卡"
 );
+check(Object.keys(legacyMigrationPatch({ settingsModelVersion: "3", compilerPath: "C:\\old.exe" })).length === 0, "版本 3 不重复迁移");
 check(
-  migratedV2.compilerPath === "" && migratedV2.simulatorPath === "" && migratedV2.synthesizerPath === "",
-  "共享来源键清空防止复活"
+  !Object.values(migratedV1).some((value) => value === ""),
+  "迁移补丁不通过写空字符串删除任何旧设置"
 );
-check(
-  Object.keys(legacyMigrationPatch({ settingsModelVersion: "2", compilerPath: "C:\\old.exe" })).length === 0,
-  "版本 2 不重复迁移"
-);
-const promotedV2 = legacyMigrationPatch({ settingsModelVersion: "", verilatorPath: "C:\\old\\verilator_bin.exe" });
-check(promotedV2.verilatorPath === undefined, "老的工具专属字段原地保留、不清空");
-check(promotedV2.moduleRtlCompilerTool === "verilator", "老的工具专属路径可恢复相关环节偏好");
-const ambiguousV2 = legacyMigrationPatch({ settingsModelVersion: "", compilerPath: "C:\\vendor\\compile.exe" });
-check(ambiguousV2.customCompilerPath === "C:\\vendor\\compile.exe", "无法识别的旧路径进入自定义槽位");
-check(ambiguousV2.moduleRtlCompilerTool === "custom-compiler", "无法识别的旧编译器不猜厂商");
 
-const stagedStatus = statusOf({ ...STAGE_COMMON_PATHS, moduleRtlCompilerTool: "verilator" }, stageAllPresent);
-check(stagedStatus.sections.length === 3 && stagedStatus.stages.length === 13, "状态载荷包含三层布局与全部环节");
+const capabilityStatus = statusOf({ ...REGISTERED_PATHS, moduleRtlTool: "verilator" }, allRegisteredPresent);
+check(capabilityStatus.sections.length === 3 && capabilityStatus.capabilities.length === 7, "状态载荷包含三层布局与七张能力卡");
+const cardByKey = new Map(capabilityStatus.toolCards.map((card) => [card.key, card]));
+check(capabilityStatus.toolCards.length === Object.keys(TOOL_CATALOG).length, "工具设置载荷逐项列出全部内置与自定义工具");
+check(cardByKey.get("verilator")?.state === "ready", "已配置且路径存在的工具卡状态为已就绪");
+check(cardByKey.get("python")?.state === "unconfigured", "没有路径的工具卡状态为未配置");
+const invalidCards = statusOf({ verilatorPath: "C:\\missing\\verilator_bin.exe" }, probeWith([])).toolCards;
+check(invalidCards.find((card) => card.key === "verilator")?.state === "invalid", "已填写但路径不存在的工具卡状态为路径不可用");
 check(
-  stagedStatus.bindings.find((binding) => binding.key === "moduleRtlCompiler")?.state === "ready",
-  "状态载荷包含解析后的环节绑定"
+  !cardByKey.get("modelsim")?.fieldKeys.includes("modelsimIniPath"),
+  "库映射文件留在语言与库映射，不混入 ModelSim 工具卡"
 );
-check(stagedStatus.ok === true, "单个环节缺工具不会把整个 FPGA 模式判坏");
+check(
+  cardByKey.get("custom-compiler")?.fieldKeys.join(",") === "customCompilerName,customCompilerPath,customCompilerNotes",
+  "自定义工具卡片同时管理名称、路径和调用说明"
+);
+check(
+  !capabilityStatus.toolCards.some((card) => card.fieldKeys.includes("rtlLangStd") || card.fieldKeys.includes("templateLibraryPath")),
+  "语言映射与模板库不参与工具卡就绪判断"
+);
+check(
+  capabilityStatus.capabilities.find((capability) => capability.key === "module-rtl")?.state === "ready",
+  "状态载荷包含解析后的能力工具选择"
+);
+check(capabilityStatus.ok === true, "单项能力缺工具不会把整个 FPGA 模式判坏");
 
-const stageEnvText = describeEnv(
+const capabilityEnvText = describeEnv(
   {
-    ...STAGE_COMMON_PATHS,
-    moduleRtlCompilerTool: "verilator",
-    moduleVerifSimulatorTool: "auto",
-    moduleSynthFpgaTool: "none"
+    ...REGISTERED_PATHS,
+    moduleRtlTool: "verilator",
+    moduleSimulationTool: "auto",
+    moduleGateTool: "none"
   },
-  stageAllPresent
+  allRegisteredPresent
 );
-check(stageEnvText.includes("能力配置，不是执行顺序"), "会话提示明确不是流水线");
-check(stageEnvText.includes("RTL") && stageEnvText.includes(STAGE_COMMON_PATHS.verilatorPath), "显式环节首选给出有效路径");
-check(stageEnvText.includes("由 AI 根据当前任务判断"), "auto 的含义写清");
-check(stageEnvText.includes("明确不用"), "none 的含义写清");
+check(capabilityEnvText.includes("能力配置，不是执行顺序"), "会话提示明确不是流水线");
+check(capabilityEnvText.includes("RTL 编译工具") && capabilityEnvText.includes(REGISTERED_PATHS.verilatorPath), "显式能力首选给出顶部工具路径");
+check(capabilityEnvText.includes("由 AI 从已登记且路径可用的工具中"), "auto 的含义写清");
+check(capabilityEnvText.includes("明确不用"), "none 的含义写清");
 
 // ── 字段定义与存在性判定 ──────────────────────────────────────────────────
 const KEYS = FIELDS.map((field) => field.key);
 const VISIBLE = FIELDS.filter((field) => field.control !== "hidden");
 const CHOICE_FIELDS = VISIBLE.filter((field) => field.control === "select");
 const HIDDEN_FIELDS = FIELDS.filter((field) => field.control === "hidden");
-const STAGE_SELECTS = BINDINGS.map((binding) => FIELDS.find((field) => field.key === binding.toolKey));
-const STAGE_OVERRIDES = BINDINGS.map((binding) => FIELDS.find((field) => field.key === binding.pathKey));
+const CAPABILITY_SELECTS = CAPABILITIES.map((capability) => FIELDS.find((field) => field.key === capability.toolKey));
+const CAPABILITY_TEMPLATES = CAPABILITIES.flatMap((capability) =>
+  capability.templates.map((template) => FIELDS.find((field) => field.key === template.key))
+);
 
 check(!KEYS.includes("cachePath"), "不再有缓存目录字段(产物各归各环节目录)");
 check(new Set(KEYS).size === KEYS.length, "每个设置键唯一(工具专属路径不会与迁移键重名)");
 check(
-  HIDDEN_FIELDS.map((field) => field.key).join(",") ===
-    "python,compiler,compilerPath,simulator,simulatorPath,synthesizer,synthesizerPath,settingsModelVersion",
-  "旧全局选择/共享路径与模型版本只作为隐藏迁移键"
+  [
+    "python", "compiler", "compilerPath", "simulator", "simulatorPath", "synthesizer", "synthesizerPath",
+    ...BINDINGS.flatMap((binding) => [binding.toolKey, binding.pathKey]),
+    ...TEMPLATE_FIELDS.map((template) => template.key),
+    "settingsMigrationWarnings", "settingsModelVersion"
+  ].every((key) => HIDDEN_FIELDS.some((field) => field.key === key)),
+  "v1/v2 工具、阶段路径、旧模板和迁移元数据全部隐藏保留"
 );
 check(
   VISIBLE.every((field) => ["common", "module", "project"].includes(field.section) && field.sectionLabel === SETTINGS_SECTIONS.find((section) => section.key === field.section)?.label),
   "每个可见字段都有三层布局元数据"
 );
-check(STAGE_SELECTS.every((field) => field?.control === "select" && field.default === "auto"), "十五个环节角色默认都是 auto");
+check(CAPABILITY_SELECTS.every((field) => field?.control === "select" && field.default === "auto"), "七张能力卡默认都是 auto");
 check(
-  STAGE_SELECTS.every((field) => field.options[0]?.value === "auto" && field.options.at(-1)?.value === "none"),
-  "每个环节选择都明确区分 auto 与 none"
+  CAPABILITY_SELECTS.every((field) => field.options[0]?.value === "auto" && field.options.at(-1)?.value === "none"),
+  "每张能力卡都明确区分 auto 与 none"
 );
 check(
-  STAGE_OVERRIDES.every((field) => field?.control === "text" && field.advanced === true && typeof field.bindingKey === "string"),
-  "每个环节角色都有可选的高级覆盖路径"
+  CAPABILITY_TEMPLATES.every((field) => field?.control === "template" && typeof field.category === "string" && field.category !== ""),
+  "每个能力模板槽位只保存分类选择，不保存路径覆盖"
 );
 check(
   ["verilatorPath", "iverilogPath", "modelsimPath", "xsimPath", "vivadoPath", "quartusPath"].every(
@@ -262,25 +381,16 @@ check(FIELDS.every((field) => typeof field.group === "string" && field.group !==
 
 const libraryField = FIELDS.find((field) => field.key === "modelsimIniPath");
 check(libraryField?.kind === "file" && libraryField.section === "common", "库映射文件按文件类型留在通用区");
+const templateLibraryField = FIELDS.find((field) => field.key === "templateLibraryPath");
+check(
+  templateLibraryField?.kind === "directory" && templateLibraryField.group === "模板库" && templateLibraryField.section === "common",
+  "模板库根按目录类型单独设置"
+);
 
 const empty = inspectTools({}, probeWith([]));
 check(empty.length === FIELDS.length, "空设置也返回全部字段");
-check(
-  empty.filter((tool) => tool.control === "select").every((tool) => tool.present === true && tool.path === tool.default),
-  "下拉字段空值拿默认值且判为合法"
-);
+check(empty.filter((tool) => tool.control === "select").every((tool) => tool.present === true && tool.path === tool.default), "下拉字段空值拿默认值且判为合法");
 check(missingKeys(empty).length === 0, "通用路径都是能力登记项,空机器不会被全局门禁");
-
-const xsimOverride = inspectTools(
-  { moduleVerifSimulatorTool: "xsim", moduleVerifSimulatorPath: "C:\\Xilinx\\Vivado\\bin" },
-  probeTyped(["C:\\Xilinx\\Vivado\\bin"], [])
-).find((field) => field.key === "moduleVerifSimulatorPath");
-check(xsimOverride?.kind === "directory" && xsimOverride.present === true, "XSim 环节覆盖按目录校验");
-const modelsimOverride = inspectTools(
-  { moduleVerifSimulatorTool: "modelsim", moduleVerifSimulatorPath: "C:\\modeltech\\vsim.exe" },
-  probeTyped([], ["C:\\modeltech\\vsim.exe"])
-).find((field) => field.key === "moduleVerifSimulatorPath");
-check(modelsimOverride?.kind === "file" && modelsimOverride.present === true, "ModelSim 环节覆盖按文件校验");
 
 const blank = inspectTools({ vivadoPath: "   " }, probeWith([]));
 check(blank.find((tool) => tool.key === "vivadoPath")?.configured === false, "纯空白视同未配置");
@@ -293,9 +403,9 @@ const prepared = {
   modelsimPath: "C:\\m",
   verilatorPath: "C:\\t",
   modelsimIniPath: "C:\\l\\modelsim.ini",
-  moduleRtlCompilerTool: "verilator",
-  moduleVerifSimulatorTool: "modelsim",
-  moduleSynthFpgaTool: "vivado"
+  moduleRtlTool: "verilator",
+  moduleSimulationTool: "modelsim",
+  moduleGateTool: "vivado"
 };
 const ready = inspectTools(prepared, probeWith(Object.values(prepared)));
 check(missingKeys(ready).length === 0, "已登记工具不会制造全局缺失门禁");
@@ -368,7 +478,7 @@ check(
 check(clientSource.includes("预设同步失败"), "预设同步失败在设置页可见(否则只躺在日志里)");
 check(
   !clientSource.includes("检测本组工具") && clientSource.includes("detectNote"),
-  "没有「检测」按钮:打开页面自动检测通用工具,结论写在各自那一行下面"
+  "没有全量检测按钮:展开工具卡才检测该工具,结论写在自己的路径行下面"
 );
 check(clientSource.includes("没检测到"), "通用工具没检测到路径时就地说明");
 // "留空的后果"必须由宿主说:模板是"用自带那份"、库映射文件是"用安装目录那份"、运行时是"按 PATH 找"。
@@ -379,8 +489,8 @@ check(
 );
 check(
   libraryField?.blankNote === "留空用安装目录那份" &&
-    FIELDS.find((field) => field.key === "rtlTemplatePath")?.blankNote === "留空即用自带",
-  "两类可选字段的留空后果各说各的(库映射文件 ≠ 模板)"
+    templateLibraryField?.blankNote === "留空只使用插件内置模板",
+  "库映射文件与模板库的留空后果分别说清"
 );
 check(clientSource.includes("可能是旧的"), "来自 PATH 的命中标明可信度低(不能与厂商安装位置一个说法)");
 
@@ -516,12 +626,12 @@ check(
 );
 
 const halfText = describeEnv(
-  { vivadoPath: "C:\\vivado.bat", moduleSynthFpgaTool: "vivado", moduleRtlCompilerTool: "verilator" },
+  { vivadoPath: "C:\\vivado.bat", moduleGateTool: "vivado", moduleRtlTool: "verilator" },
   probeWith([])
 );
-check(halfText.includes("路径不可用(C:\\vivado.bat)"), "显式工具路径不可用时说清原因");
-check(halfText.includes("通用路径和环节覆盖路径都未配置"), "显式工具没路径时说成未配置");
-check(halfText.includes("只影响本环节这项能力"), "一个绑定缺失不会扩大成全局门禁");
+check(halfText.includes("工具设置中的路径不可用(C:\\vivado.bat)"), "显式工具路径不可用时说清原因");
+check(halfText.includes("工具设置中尚未登记路径"), "显式工具没路径时说成未配置");
+check(halfText.includes("只影响这项能力"), "一项能力缺失不会扩大成全局门禁");
 check(!halfText.includes("ModelSim 库映射文件"), "一个可选项都没配时不制造噪音");
 
 const noCacheText = describeEnv({ vivadoPath: "C:\\vivado.bat" }, probeWith(["C:\\vivado.bat"]));
@@ -580,6 +690,23 @@ check(
   ),
   "检测:厂商安装位置(模式展开)里的 ModelSim 命中,来源标 known"
 );
+
+const targetedVersionCalls = [];
+const targetedHit = detectTools(
+  detectProbe(["C:\\modeltech64_2020.4\\win64\\vsim.exe", "C:\\PF\\Python314\\python.exe"]),
+  listStub({ "C:\\": ["modeltech64_2020.4"], "C:\\PF": ["Python314"] }),
+  fakeEnv,
+  (path) => {
+    targetedVersionCalls.push(path);
+    return { version: "3.14.0" };
+  },
+  ["modelsimPath"]
+);
+check(
+  targetedHit.length > 0 && targetedHit.every((hit) => hit.field === "modelsimPath"),
+  "单工具检测只返回请求的工具候选"
+);
+check(targetedVersionCalls.length === 0, "检测 ModelSim 时不会顺带启动 Python 版本查询");
 
 const pathHit = detectTools(detectProbe(["C:\\bin\\vsim.exe"]), listStub({ "C:\\": [] }), fakeEnv);
 check(
@@ -738,12 +865,12 @@ for (const [tool, definition] of Object.entries(TOOL_CATALOG).filter(([, entry])
 }
 
 check(
-  BINDINGS.every((binding) => FIELDS.find((field) => field.key === binding.toolKey)?.options.some((option) => option.value === "none")),
-  "每个环节角色都有明确不用选项"
+  CAPABILITIES.every((capability) => FIELDS.find((field) => field.key === capability.toolKey)?.options.some((option) => option.value === "none")),
+  "每张能力卡都有明确不用选项"
 );
-check(statusOf({ moduleRtlCompilerTool: "none" }).missing.length === 0, "none 是用户决定,不进缺失清单");
+check(statusOf({ moduleRtlTool: "none" }).missing.length === 0, "none 是用户决定,不进缺失清单");
 check(
-  describeEnv({ moduleRtlCompilerTool: "none" }, probeWith([])).includes("明确不用"),
+  describeEnv({ moduleRtlTool: "none" }, probeWith([])).includes("明确不用"),
   "none 在提示中与自动判断、路径缺失明确区分"
 );
 
@@ -1183,33 +1310,24 @@ for (const { key, settingsLabel, file } of SCRIPT_TEMPLATE_FIELDS) {
   const field = FIELDS.find((entry) => entry.key === key);
   check(
     field !== undefined &&
-      field.group === "模板" &&
-      field.control === "text" &&
-      field.kind === "file" &&
+      field.group === "旧键" &&
+      field.control === "hidden" &&
       field.required === false &&
-      field.skips.length === 0 &&
-      field.blankNote === "留空即用自带" &&
-      field.label === settingsLabel,
-    `${key}:与另外三份模板同款的**可选**字段(文本输入、文件类型、留空即用自带、缺了不挡路)`,
+      field.skips.length === 0,
+    `${key}:旧全局模板字段隐藏保留，只供无损迁移`,
     JSON.stringify(field ?? null)
   );
   check(
-    String(field?.hint ?? "").includes(file),
-    `${key} 的说明写清它是什么、留空用自带的哪一份(提到 ${file})`,
-    String(field?.hint ?? "")
-  );
-  check(
     !statusOf({}).missing.includes(key),
-    `${key} 留空不进缺失清单(可选字段不制造门禁)`
+    `${key} 作为隐藏兼容值不进缺失清单`
   );
 }
-// 设置字段与提示段用的 TEMPLATE_FIELDS 必须一一对应:只加字段、忘了接进提示(或反过来),
-// 用户配的路径就石沉大海 —— 本轮给三个脚本模板补字段,防的就是这个。
-const templateGroupKeys = FIELDS.filter((field) => field.group === "模板").map((field) => field.key);
+// 六个旧模板字段必须一个不漏地留在 schema 中，升级时才能扇出到模块与工程的新槽位。
+const templateGroupKeys = FIELDS.filter((field) => field.control === "hidden" && TEMPLATE_FIELDS.some((template) => template.key === field.key)).map((field) => field.key);
 const templateListKeys = TEMPLATE_FIELDS.map((template) => template.key);
 check(
   templateGroupKeys.join(",") === templateListKeys.join(","),
-  "「模板」组每个字段都在提示段的模板表里(两边一一对应,不漏不重)",
+  "六个旧模板字段在隐藏兼容区一一保留",
   `设置字段:${templateGroupKeys.join(",")} / 提示表:${templateListKeys.join(",")}`
 );
 
@@ -1280,7 +1398,7 @@ check(langText.includes("ModelSim / Questa"), "提示里给出仿真器(默认 M
 check(langText.includes(".sv"), "提示里给出文件扩展名(写代码时要用)");
 
 const xsimText = describeEnv(
-  { ...prepared, xsimPath: "C:\\Vivado\\bin", moduleVerifSimulatorTool: "xsim" },
+  { ...prepared, xsimPath: "C:\\Vivado\\bin", moduleSimulationTool: "xsim" },
   () => true
 );
 check(
@@ -1296,24 +1414,24 @@ check(
 );
 // 换工具要跟着换命令:三条 usage 各自绑在选项上
 const quartusText = describeEnv(
-  { ...prepared, quartusPath: "C:\\Quartus\\quartus_sh.exe", moduleSynthFpgaTool: "quartus" },
+  { ...prepared, quartusPath: "C:\\Quartus\\quartus_sh.exe", moduleGateTool: "quartus" },
   () => true
 );
 check(quartusText.includes("quartus_sh"), "换综合器后提示里换成对应工具的命令");
 const iverilogText = describeEnv(
-  { ...prepared, iverilogPath: "C:\\iverilog\\iverilog.exe", moduleRtlCompilerTool: "iverilog" },
+  { ...prepared, iverilogPath: "C:\\iverilog\\iverilog.exe", moduleRtlTool: "iverilog" },
   () => true
 );
 check(iverilogText.includes("-g2012"), "换编译器后提示里换成对应工具的命令");
 // 仿真器下拉没有 Verilator(用户口径:仿真不用它)。它是**编译器**下拉里的选项(RTL lint 用它),
 // 所以这条按字段分开断言 —— 只看"提示里有 Verilator"会把两件事混在一起。
-const simField = FIELDS.find((field) => field.key === "moduleVerifSimulatorTool");
+const simField = FIELDS.find((field) => field.key === "moduleSimulationTool");
 const simValues = (simField?.options ?? []).map((option) => option.value);
 check(
   !simValues.includes("verilator") && simValues.includes("modelsim") && simValues.includes("xsim"),
   `仿真器下拉只有 ModelSim / XSim(实际:${simValues.join("、") || "无"})`
 );
-const compilerField = FIELDS.find((field) => field.key === "moduleRtlCompilerTool");
+const compilerField = FIELDS.find((field) => field.key === "moduleRtlTool");
 check(
   (compilerField?.options ?? []).some((option) => option.value === "verilator"),
   "编译器下拉里保留 Verilator(RTL 环节的 lint 用它)"

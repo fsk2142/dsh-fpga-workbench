@@ -62,6 +62,7 @@ import {
   toolPath
 } from "../lib/toolchain.js";
 import {
+  BUNDLED_TEMPLATE_ROOT,
   BUILTIN_TEMPLATES,
   MAX_TEMPLATES_PER_CATEGORY,
   TEMPLATE_CATEGORIES,
@@ -125,6 +126,15 @@ check(
     BUILTIN_TEMPLATES.some((item) => item.id === "builtin:simulation/compile/modelsim-compile.do") &&
     BUILTIN_TEMPLATES.some((item) => item.id === "builtin:programming/vivado-program.tcl"),
   "内置模板使用稳定的分类 id"
+);
+const bundledRootScan = scanTemplates({
+  capability: "module-rtl",
+  capabilities: CAPABILITIES,
+  libraryRoot: BUNDLED_TEMPLATE_ROOT
+});
+check(
+  bundledRootScan.groups[0]?.items.filter((item) => item.relativePath === "rtl/systemverilog-module.sv").length === 1,
+  "使用插件默认模板库路径时内置文件不会以“内置 + 模板库”重复出现"
 );
 check(
   scannedRtlGroup?.items.some((item) => item.id === "library:rtl/vendor/custom.sv"),
@@ -192,6 +202,16 @@ check(
     missingLegacySelection.source === "legacy",
   "旧版绝对模板路径缺失时原样保留，不回退"
 );
+const oldPackagedTemplate = resolveTemplateSelection({
+  selection: join(ROOT, "presets", "fpga-workbench", "templates", "rtl.sv"),
+  category: "rtl",
+  tool: "verilator"
+});
+check(
+  oldPackagedTemplate.source === "builtin" && oldPackagedTemplate.id === "builtin:rtl/systemverilog-module.sv" &&
+    oldPackagedTemplate.present === true,
+  "旧版插件自带模板路径自动映射为当前内置分类模板"
+);
 const escapedLibrarySelection = resolveTemplateSelection({
   selection: "library:rtl/../outside.sv",
   category: "rtl",
@@ -250,6 +270,7 @@ for (const [tool, pathKey, kind] of [
   ["verilator", "verilatorPath", "file"],
   ["iverilog", "iverilogPath", "file"],
   ["modelsim", "modelsimPath", "file"],
+  ["questa", "questaPath", "file"],
   ["xsim", "xsimPath", "directory"],
   ["vivado", "vivadoPath", "file"],
   ["quartus", "quartusPath", "file"]
@@ -261,6 +282,7 @@ const REGISTERED_PATHS = {
   verilatorPath: "C:\\tools\\verilator_bin.exe",
   iverilogPath: "C:\\tools\\iverilog.exe",
   modelsimPath: "C:\\tools\\vsim.exe",
+  questaPath: "C:\\questa\\win64\\vsim.exe",
   xsimPath: "C:\\Vivado\\bin",
   vivadoPath: "C:\\Vivado\\bin\\vivado.bat",
   quartusPath: "C:\\Quartus\\bin64\\quartus_sh.exe"
@@ -439,7 +461,11 @@ const invalidCards = statusOf({ verilatorPath: "C:\\missing\\verilator_bin.exe" 
 check(invalidCards.find((card) => card.key === "verilator")?.state === "invalid", "已填写但路径不存在的工具卡状态为路径不可用");
 check(
   !cardByKey.get("modelsim")?.fieldKeys.includes("modelsimIniPath"),
-  "库映射文件留在语言与库映射，不混入 ModelSim 工具卡"
+  "ModelSim 库映射文件留在仿真库，不混入工具路径卡"
+);
+check(
+  !cardByKey.get("questa")?.fieldKeys.includes("questaIniPath"),
+  "QuestaSim 库映射文件留在仿真库，不混入工具路径卡"
 );
 check(
   cardByKey.get("custom-compiler")?.fieldKeys.join(",") === "customCompilerName,customCompilerPath,customCompilerNotes",
@@ -520,11 +546,42 @@ check(
 check(FIELDS.every((field) => typeof field.group === "string" && field.group !== ""), "每个字段都有分组");
 
 const libraryField = FIELDS.find((field) => field.key === "modelsimIniPath");
-check(libraryField?.kind === "file" && libraryField.section === "common", "库映射文件按文件类型留在通用区");
+const questaLibraryField = FIELDS.find((field) => field.key === "questaIniPath");
+check(
+  libraryField?.kind === "file" && libraryField.section === "common" && libraryField.group === "仿真库" &&
+    questaLibraryField?.kind === "file" && questaLibraryField.section === "common" && questaLibraryField.group === "仿真库",
+  "ModelSim 与 QuestaSim 库映射文件分开保存在仿真库分组"
+);
+check(
+  FIELDS.filter((field) => ["rtlLangStd", "simLangStd"].includes(field.key)).every((field) => field.group === "语言标准"),
+  "语言标准与仿真库分成两个设置分组"
+);
+check(
+  TOOL_CATALOG.modelsim?.label === "ModelSim" && TOOL_CATALOG.questa?.label === "QuestaSim" &&
+    TOOL_CATALOG.modelsim.pathKey !== TOOL_CATALOG.questa.pathKey,
+  "ModelSim 与 QuestaSim 是两项独立工具和独立路径"
+);
+check(
+  !cardByKey.get("xsim")?.fieldKeys.includes("modelsimIniPath") &&
+    !cardByKey.get("xsim")?.fieldKeys.includes("questaIniPath") &&
+    !cardByKey.get("vivado")?.fieldKeys.includes("modelsimIniPath") &&
+    !cardByKey.get("vivado")?.fieldKeys.includes("questaIniPath"),
+  "Vivado 与 XSim 不显示 ModelSim/QuestaSim 仿真库映射"
+);
 const templateLibraryField = FIELDS.find((field) => field.key === "templateLibraryPath");
 check(
   templateLibraryField?.kind === "directory" && templateLibraryField.group === "模板库" && templateLibraryField.section === "common",
   "模板库根按目录类型单独设置"
+);
+check(
+  typeof templateLibraryField?.defaultPath === "string" &&
+    templateLibraryField.defaultPath === BUNDLED_TEMPLATE_ROOT && existsSync(templateLibraryField.defaultPath),
+  "模板库字段提供当前插件实际安装位置下的默认路径"
+);
+check(
+  statusOf({}).templateLibrary?.fieldKey === "templateLibraryPath" &&
+    statusOf({}).templateLibrary?.defaultPath === BUNDLED_TEMPLATE_ROOT,
+  "状态载荷把模板库字段键与默认路径交给客户端"
 );
 
 const empty = inspectTools({}, probeWith([]));
@@ -1527,7 +1584,7 @@ check(!capabilityTemplateText.includes("模块模板 ——"), "v3 提示不再�
 const langText = describeEnv(prepared, () => true);
 check(langText.includes("SystemVerilog (IEEE 1800-2017)"), "提示里给出 RTL 语言与标准(默认 SystemVerilog 1800-2017)");
 check(langText.includes("仿真语言"), "提示里给出仿真语言");
-check(langText.includes("ModelSim / Questa"), "提示里给出仿真器(默认 ModelSim)");
+check(langText.includes("ModelSim"), "提示里给出 ModelSim 仿真器");
 check(langText.includes(".sv"), "提示里给出文件扩展名(写代码时要用)");
 
 const xsimText = describeEnv(
@@ -1561,8 +1618,8 @@ check(iverilogText.includes("-g2012"), "换编译器后提示里换成对应工�
 const simField = FIELDS.find((field) => field.key === "moduleSimulationTool");
 const simValues = (simField?.options ?? []).map((option) => option.value);
 check(
-  !simValues.includes("verilator") && simValues.includes("modelsim") && simValues.includes("xsim"),
-  `仿真器下拉只有 ModelSim / XSim(实际:${simValues.join("、") || "无"})`
+  !simValues.includes("verilator") && simValues.includes("modelsim") && simValues.includes("questa") && simValues.includes("xsim"),
+  `仿真器下拉分别提供 ModelSim / QuestaSim / XSim(实际:${simValues.join("、") || "无"})`
 );
 const compilerField = FIELDS.find((field) => field.key === "moduleRtlTool");
 check(

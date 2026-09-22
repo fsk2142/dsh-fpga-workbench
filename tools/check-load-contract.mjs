@@ -271,6 +271,10 @@ check(/exports\.apply\s*=/u.test(client), "导出 apply");
 check(/exports\.name\s*=/u.test(client), "导出 name");
 check(!/require\(\s*["']\./u.test(client), "bundle 内没有相对 require(会被拼进组合后解析失败)");
 check(!/^\s*import\s/mu.test(client), "bundle 内没有 static import");
+check(
+  /\.fpga-set\s+\.fpga-set-collapsed\s*\{\s*display:\s*none/u.test(client),
+  "收起样式的优先级高于工具体与能力卡的 display:flex"
+);
 check(/settingsScope/u.test(client) && !/exports\.inject\s*=\s*\[[^\]]*settingsScope/u.test(client),
   "可能不存在的服务(settingsScope)走内部 inject,不放进 exports.inject");
 
@@ -354,9 +358,12 @@ const hostValues = {
   projectVerificationTemplate: "",
   xsimPath: "C:\\Vivado\\bin",
   modelsimPath: "C:\\modelsim\\win64\\vsim.exe",
+  questaPath: "C:\\questa\\win64\\vsim.exe",
   // 第三个可编辑字段的宿主值:用来验"这次确实存了、期间也没再被改过"的键会正常清掉
   // (与"保存期间又被改过、必须留着"的那个键形成对照)。
-  modelsimIniPath: "C:\\modelsim\\modelsim.ini"
+  modelsimIniPath: "C:\\modelsim\\modelsim.ini",
+  questaIniPath: "C:\\questa\\modelsim.ini",
+  templateLibraryPath: ""
 };
 /** 模拟宿主拒收:mutate **正常结算**但值不进去(真实 SDK 就是这样:它 recover 一下就 return)。 */
 let hostAcceptsSave = true;
@@ -403,7 +410,8 @@ const readyToolOptions = [
 ];
 const autoToolOptions = [
   { value: "auto", label: "由 AI 从已就绪工具中判断", ready: true, disabled: false },
-  { value: "modelsim", label: "ModelSim / Questa", ready: true, disabled: false, state: "ready" },
+  { value: "modelsim", label: "ModelSim", ready: true, disabled: false, state: "ready" },
+  { value: "questa", label: "QuestaSim", ready: true, disabled: false, state: "ready" },
   { value: "xsim", label: "Vivado XSim", ready: true, disabled: false, state: "ready" },
   { value: "vivado", label: "Vivado", ready: false, disabled: true, state: "unconfigured" },
   { value: "python", label: "Python 3", ready: false, disabled: true, state: "unconfigured" },
@@ -507,23 +515,26 @@ const payload = {
   toolCards: [
     { key: "verilator", role: "compiler", groupLabel: "编译工具", label: "Verilator", pathKey: "verilatorPath", fieldKeys: ["verilatorPath"], kind: "file", path: "C:\\tools\\verilator_bin.exe", configured: true, present: true, detectable: true, state: "ready" },
     { key: "xsim", role: "simulator", groupLabel: "仿真工具", label: "Vivado XSim", pathKey: "xsimPath", fieldKeys: ["xsimPath"], kind: "directory", path: "C:\\Vivado\\bin", configured: true, present: true, detectable: true, state: "ready" },
-    { key: "modelsim", role: "simulator", groupLabel: "仿真工具", label: "ModelSim / Questa", pathKey: "modelsimPath", fieldKeys: ["modelsimPath", "modelsimIniPath"], kind: "file", path: "C:\\modelsim\\win64\\vsim.exe", configured: true, present: true, detectable: true, state: "ready" }
+    { key: "modelsim", role: "simulator", groupLabel: "仿真工具", label: "ModelSim", pathKey: "modelsimPath", fieldKeys: ["modelsimPath"], kind: "file", path: "C:\\modelsim\\win64\\vsim.exe", configured: true, present: true, detectable: true, state: "ready" },
+    { key: "questa", role: "simulator", groupLabel: "仿真工具", label: "QuestaSim", pathKey: "questaPath", fieldKeys: ["questaPath"], kind: "file", path: "C:\\questa\\win64\\vsim.exe", configured: true, present: true, detectable: true, state: "ready" }
   ],
   capabilities: capabilityFixtures,
   tools: [
     { key: "verilatorPath", tool: "verilator", label: "Verilator", hint: "填写 verilator_bin.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "编译工具", control: "text", kind: "file", path: "C:\\tools\\verilator_bin.exe", configured: true, present: true, detectable: true },
     // 目录字段保留浏览分支覆盖；它也是通用工具,不会受任何环节选择影响。
     { key: "xsimPath", tool: "xsim", label: "Vivado XSim", hint: "填写 Vivado bin 目录", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "directory", path: "C:\\Vivado\\bin", configured: true, present: true, detectable: true },
-    { key: "modelsimPath", tool: "modelsim", label: "ModelSim / Questa", hint: "填写 vsim.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "file", path: "C:\\modelsim\\win64\\vsim.exe", configured: true, present: true, detectable: true },
+    { key: "modelsimPath", tool: "modelsim", label: "ModelSim", hint: "填写 ModelSim 的 vsim.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "file", path: "C:\\modelsim\\win64\\vsim.exe", configured: true, present: true, detectable: true },
+    { key: "questaPath", tool: "questa", label: "QuestaSim", hint: "填写 QuestaSim 的 vsim.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "file", path: "C:\\questa\\win64\\vsim.exe", configured: true, present: true, detectable: true },
     // 第三个可编辑字段(键/标签/组名照 lib/toolchain.js 的 FIELDS):一次保存提交**两个**键时,
     // 才分得清"存下去且没人再动它"(该清)和"存下去但期间又被改过"(该留)。
-    { key: "modelsimIniPath", tool: "modelsim", label: "库映射文件", hint: "填 modelsim.ini", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "C:\\modelsim\\modelsim.ini", configured: true, present: true, group: "语言与库映射", control: "text", kind: "file", detectable: false },
-    { key: "rtlLangStd", label: "RTL 语言与标准", hint: "语言设置", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "systemverilog-2017", configured: true, present: true, group: "语言与库映射", control: "select", default: "systemverilog-2017", options: [{ value: "systemverilog-2017", label: "SystemVerilog 1800-2017" }] },
-    { key: "templateLibraryPath", label: "模板库路径", hint: "能力卡展开时扫描固定分类。", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "", configured: false, present: true, group: "模板库", control: "text", kind: "directory", detectable: false, blankNote: "留空只使用插件内置模板" },
+    { key: "modelsimIniPath", label: "ModelSim 库映射文件", hint: "填 ModelSim 的 modelsim.ini", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "C:\\modelsim\\modelsim.ini", configured: true, present: true, group: "仿真库", control: "text", kind: "file", detectable: false },
+    { key: "questaIniPath", label: "QuestaSim 库映射文件", hint: "填 QuestaSim 的 modelsim.ini", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "C:\\questa\\modelsim.ini", configured: true, present: true, group: "仿真库", control: "text", kind: "file", detectable: false },
+    { key: "rtlLangStd", label: "RTL 语言与标准", hint: "语言设置", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "systemverilog-2017", configured: true, present: true, group: "语言标准", control: "select", default: "systemverilog-2017", options: [{ value: "systemverilog-2017", label: "SystemVerilog 1800-2017" }] },
+    { key: "templateLibraryPath", label: "模板库路径", hint: "能力卡展开时扫描固定分类。", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "", configured: false, present: true, group: "模板库", control: "text", kind: "directory", detectable: false, blankNote: "留空只使用插件内置模板", defaultPath: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates" },
     ...capabilityFields,
     { key: "legacyCompiler", label: "旧键", hint: "不显示", section: "common", group: "旧键", control: "hidden", path: "", configured: false, present: false }
   ],
-  templateLibrary: { path: "", configured: false, present: true },
+  templateLibrary: { fieldKey: "templateLibraryPath", path: "", configured: false, present: true, defaultPath: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates" },
   migrationWarnings: [],
   missing: [],
   ok: true
@@ -793,7 +804,8 @@ check(templateRequested === 0, "能力卡都收起时不会扫描模板库");
 const rendered = JSON.stringify(secondTree ?? {});
 for (const expected of [
   "工具设置", "模块工具", "工程工具", "RTL 编译工具", "仿真测试工具", "脚本验证工具", "综合与门禁工具",
-  "工程主工具", "系统仿真工具", "工具：Verilator", "RTL 模板：使用内置默认模板"
+  "工程主工具", "系统仿真工具", "工具：Verilator", "RTL 模板：使用内置默认模板",
+  "ModelSim", "QuestaSim", "语言标准", "仿真库", "ModelSim 库映射文件", "QuestaSim 库映射文件"
 ]) {
   check(rendered.includes(expected), `三层设置界面出现「${expected}」`);
 }
@@ -801,13 +813,45 @@ check(!rendered.includes("开发约定与模板"), "界面不再保留旧的「�
 check(!rendered.includes("本环节覆盖路径"), "能力卡里没有重复的工具路径输入框");
 const commonSection = findByProp(secondTree, (props) => props.key === "section-common");
 check(
-  JSON.stringify(commonSection ?? {}).includes("已就绪 3 / 3") &&
+  JSON.stringify(commonSection ?? {}).includes("已就绪 4 / 4") &&
     findByProp(commonSection, (props) => String(props.className ?? "").includes("fpga-set-collapsed")) !== undefined,
   "工具设置整体默认收起并显示就绪数量"
 );
 findButton(commonSection, "展开设置")?.props?.onClick();
 fake.reset();
 secondTree = captured();
+try {
+  const defaultTemplateRoot = "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates";
+  let templateAux = findByProp(secondTree, (props) => props.key === "aux-模板库");
+  findButton(templateAux, "展开设置")?.props.onClick();
+  fake.reset();
+  let templateTree = captured();
+  templateAux = findByProp(templateTree, (props) => props.key === "aux-模板库");
+  check(findButton(templateAux, "使用默认路径") !== undefined, "模板库提供使用当前插件模板目录的快捷按钮");
+  check(findButton(templateAux, "保存路径") !== undefined, "模板库在本组内提供独立保存路径按钮");
+  written.length = 0;
+  findButton(templateAux, "使用默认路径")?.props.onClick();
+  fake.reset();
+  templateTree = captured();
+  templateAux = findByProp(templateTree, (props) => props.key === "aux-模板库");
+  check(
+    findByProp(templateAux, (props) => props.value === defaultTemplateRoot) !== undefined,
+    "使用默认路径会先把插件实际模板目录填入草稿"
+  );
+  check(written.length === 0, "使用默认路径不会绕过确认直接写设置");
+  findButton(templateAux, "保存路径")?.props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  check(
+    written.length === 1 && written[0].path?.[0] === "templateLibraryPath" && written[0].value === defaultTemplateRoot,
+    "保存路径只提交模板库字段"
+  );
+  hostValues.templateLibraryPath = "";
+  written.length = 0;
+  fake.reset();
+  secondTree = captured();
+} catch (error) {
+  check(false, "模板库默认路径与独立保存交互", String(error));
+}
 const verilatorCard = findByProp(secondTree, (props) => props.key === "tool-verilator");
 check(
   findByProp(verilatorCard, (props) => String(props.className ?? "").includes("fpga-set-collapsed")) !== undefined,
@@ -1214,11 +1258,11 @@ try {
     );
   };
 
-  // 1) 同一张 ModelSim 卡里先改字段 A(主程序路径)与 C(库映射文件)
-  const midA = "C:\\mid\\vsim.exe";
-  const savedC = "C:\\lib\\modelsim.ini";
-  inputOf("modelsimPath").props.onChange({ target: { value: midA } });
-  inputOf("modelsimIniPath").props.onChange({ target: { value: savedC } });
+  // 1) 在独立的「仿真库」组里同时修改 ModelSim 与 QuestaSim 两份映射文件。
+  const midA = "C:\\mid\\modelsim.ini";
+  const savedC = "C:\\lib\\questa-modelsim.ini";
+  inputOf("modelsimIniPath").props.onChange({ target: { value: midA } });
+  inputOf("questaIniPath").props.onChange({ target: { value: savedC } });
   fake.runEffects();
   await new Promise((resolve) => setTimeout(resolve, 400));
   fake.reset();
@@ -1227,7 +1271,7 @@ try {
   // 2) 点「保存改动」:**不让它结算**(替身停在路上)—— 这段窗口里界面并没有被锁住
   deferSaves = [];
   fake.reset();
-  findButton(findByProp(captured(), (props) => props.key === "tool-modelsim"), "保存此工具").props.onClick();
+  findButton(captured(), "保存改动").props.onClick();
   await new Promise((resolve) => setImmediate(resolve));
   check(
     deferSaves.length === 1 && written.length === 2,
@@ -1236,7 +1280,7 @@ try {
 
   // 3) 保存进行中:改字段 B(仿真器路径),并把 A 再改成一个不同的新值
   inputOf("xsimPath").props.onChange({ target: { value: "C:\\sim\\xsim" } });
-  inputOf("modelsimPath").props.onChange({ target: { value: "C:\\late\\vsim.exe" } });
+  inputOf("modelsimIniPath").props.onChange({ target: { value: "C:\\late\\modelsim.ini" } });
 
   // 4) 放行:宿主收下这批值(A 回读到的就是刚保存的那个中间值)
   check(drainDeferredSaves() === 1, "按测试的节奏结算:宿主收下了这次提交");
@@ -1256,20 +1300,20 @@ try {
   );
   // ② A 显示用户最后敲的新值,而且仍然标着「未保存」
   check(
-    findByProp(rowOf("modelsimPath"), (props) => props.value === "C:\\late\\vsim.exe") !== undefined,
+    findByProp(rowOf("modelsimIniPath"), (props) => props.value === "C:\\late\\modelsim.ini") !== undefined,
     "保存期间又被改过的 A 显示用户最后敲的那个新值(不是刚保存的中间值)"
   );
   check(
-    JSON.stringify(rowOf("modelsimPath") ?? {}).includes("未保存"),
+    JSON.stringify(rowOf("modelsimIniPath") ?? {}).includes("未保存"),
     "A 仍然带「未保存」标记(它和刚存下去的那份已经不一样了)"
   );
   // ③ 这次确实存了、期间也没人再动它的 C 正常清掉
   check(
-    findByProp(rowOf("modelsimIniPath"), (props) => props.value === savedC) !== undefined,
+    findByProp(rowOf("questaIniPath"), (props) => props.value === savedC) !== undefined,
     "C 显示的就是刚保存下去的那份"
   );
   check(
-    !JSON.stringify(rowOf("modelsimIniPath") ?? {}).includes("未保存"),
+    !JSON.stringify(rowOf("questaIniPath") ?? {}).includes("未保存"),
     "保存成功的 C 不再显示「未保存」"
   );
 } catch (error) {
@@ -1398,12 +1442,12 @@ try {
   check(!clearedText.includes("路径不可用") && !clearedText.includes("✓ 已就绪"), "页面上清空路径后不沿用宿主的就绪或不可用结论");
 
   // ⑤ 可选字段同理:预演说"没配"时,不该再按宿主那份(配过)报「路径不可用」
-  const optionalRow = await onePreview(previewAnswer({ configured: false, present: false }, "modelsimIniPath"));
+  const optionalRow = await onePreview(previewAnswer({ configured: false, present: false }, "questaIniPath"));
   check(optionalRow.held.length === 1, `可选字段的预演请求发出去了(实际 ${optionalRow.held.length} 次)`);
   optionalRow.held[0]();
   await tick();
   fake.reset();
-  const optionalText = JSON.stringify(findByProp(captured(), (props) => props.key === "modelsimIniPath") ?? {});
+  const optionalText = JSON.stringify(findByProp(captured(), (props) => props.key === "questaIniPath") ?? {});
   check(!optionalText.includes("路径不可用"), "可选字段按页面上那一份判:预演说没配就不报「路径不可用」");
 
   // ⑥ 列目录:快速切两次,先发的那次列表不许覆盖后发的那次

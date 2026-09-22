@@ -834,6 +834,12 @@ check(
   /别自己另造后缀/u.test(lintText) && /_reg/u.test(lintText) && /_ff/u.test(lintText),
   "rtl 技能写明:别自己另造后缀(`_reg` / `_ff` / `_next` 这类)"
 );
+// IP 卡的四栏之外,检查器还会查"能不能复核"(N-12):技能里必须写明这几条,不然口径又变成两处
+check(
+  /非空字符串/u.test(lintText) && /非空对象/u.test(lintText) &&
+    /探针\*\*文件要真的在\*\*/u.test(lintText) && /一个实测数值/u.test(lintText),
+  "rtl 技能写明 IP 卡的可复核条件(非空字符串/非空 config/探针文件真在/至少一个实测数值)"
+);
 // XPM 的**仿真侧**要跟上:上面那几条把大家推向 XPM,那 verif 技能就得说清 `-L xpm`,
 // 以及"先用 modelsim.ini 里已编好的那份、别重编;真不行才拿原厂源码自编"——
 // 否则照着"优先 XPM"改完 RTL,第一次跑仿真就撞上未定义,而技能里只有 unisims 那一档。

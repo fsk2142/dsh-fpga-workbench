@@ -280,6 +280,21 @@ check(/export function apply/u.test(host), "宿主导出 apply");
 check(/export const inject = \["settings"\]/u.test(host), `宿主 inject 恰好是 ["settings"]`);
 check(!/systemPrompt/u.test(host), "index.js 里不出现 systemPrompt(提示只能由模式半侧注册)");
 check(/export const name = /u.test(host), "宿主导出 name");
+check(
+  /export const TEMPLATE_PATH = "\/plugins\/fpga-workbench\/templates"/u.test(host) &&
+    /path:\s*TEMPLATE_PATH/u.test(host),
+  "宿主登记分类模板只读接口"
+);
+check(
+  /CAPABILITIES\.some\(\(entry\) => entry\.key === capability\)/u.test(host) &&
+    /scanTemplates\(\{[\s\S]{0,240}?capability,[\s\S]{0,240}?capabilities:\s*CAPABILITIES/u.test(host),
+  "模板接口只按能力白名单决定扫描分类"
+);
+check(
+  /未知能力，拒绝扫描模板目录[\s\S]{0,80}?400/u.test(host) &&
+    /模板读取失败/u.test(host) && /suggested\s*:\s*500/u.test(host),
+  "未知能力与模板读取异常返回非 2xx JSON"
+);
 
 // settings 句柄的调用签名:`register()` 返回的是**已绑定命名空间**的句柄 ——
 // get() 不带参、update(patch) 只接补丁。多传一个 ns 会被当成补丁本身,运行时才报
@@ -319,6 +334,7 @@ const hostValues = {
   moduleRtlCompilerPath: "",
   projectImplFpgaTool: "auto",
   xsimPath: "C:\\Vivado\\bin",
+  modelsimPath: "C:\\modelsim\\win64\\vsim.exe",
   // 第三个可编辑字段的宿主值:用来验"这次确实存了、期间也没再被改过"的键会正常清掉
   // (与"保存期间又被改过、必须留着"的那个键形成对照)。
   modelsimIniPath: "C:\\modelsim\\modelsim.ini"
@@ -365,9 +381,18 @@ let browserRequested = 0;
  */
 const payload = {
   sections: [
-    { key: "common", label: "通用工具", hint: "登记本机工具" },
+    { key: "common", label: "工具设置", hint: "逐项登记本机工具" },
     { key: "module", label: "模块工具", hint: "不是流水线" },
     { key: "project", label: "工程工具", hint: "分别设置" }
+  ],
+  toolGroups: [
+    { key: "compiler", label: "编译工具" },
+    { key: "simulator", label: "仿真工具" }
+  ],
+  toolCards: [
+    { key: "verilator", role: "compiler", groupLabel: "编译工具", label: "Verilator", pathKey: "verilatorPath", fieldKeys: ["verilatorPath"], kind: "file", path: "C:\\tools\\verilator_bin.exe", configured: true, present: true, detectable: true, state: "ready" },
+    { key: "xsim", role: "simulator", groupLabel: "仿真工具", label: "Vivado XSim", pathKey: "xsimPath", fieldKeys: ["xsimPath"], kind: "directory", path: "C:\\Vivado\\bin", configured: true, present: true, detectable: true, state: "ready" },
+    { key: "modelsim", role: "simulator", groupLabel: "仿真工具", label: "ModelSim / Questa", pathKey: "modelsimPath", fieldKeys: ["modelsimPath", "modelsimIniPath"], kind: "file", path: "C:\\modelsim\\win64\\vsim.exe", configured: true, present: true, detectable: true, state: "ready" }
   ],
   stages: [
     { key: "module-rtl", section: "module", label: "RTL", bindings: ["moduleRtlCompiler"] },
@@ -375,12 +400,14 @@ const payload = {
     { key: "project-impl", section: "project", label: "实现", bindings: ["projectImplFpga"] }
   ],
   tools: [
-    { key: "verilatorPath", label: "Verilator", hint: "填写 verilator_bin.exe", required: false, skips: [], section: "common", sectionLabel: "通用工具", group: "编译工具", control: "text", kind: "file", path: "C:\\tools\\verilator_bin.exe", configured: true, present: true, detectable: true },
+    { key: "verilatorPath", tool: "verilator", label: "Verilator", hint: "填写 verilator_bin.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "编译工具", control: "text", kind: "file", path: "C:\\tools\\verilator_bin.exe", configured: true, present: true, detectable: true },
     // 目录字段保留浏览分支覆盖；它也是通用工具,不会受任何环节选择影响。
-    { key: "xsimPath", label: "Vivado XSim", hint: "填写 Vivado bin 目录", required: false, skips: [], section: "common", sectionLabel: "通用工具", group: "仿真工具", control: "text", kind: "directory", path: "C:\\Vivado\\bin", configured: true, present: true, detectable: true },
+    { key: "xsimPath", tool: "xsim", label: "Vivado XSim", hint: "填写 Vivado bin 目录", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "directory", path: "C:\\Vivado\\bin", configured: true, present: true, detectable: true },
+    { key: "modelsimPath", tool: "modelsim", label: "ModelSim / Questa", hint: "填写 vsim.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "file", path: "C:\\modelsim\\win64\\vsim.exe", configured: true, present: true, detectable: true },
     // 第三个可编辑字段(键/标签/组名照 lib/toolchain.js 的 FIELDS):一次保存提交**两个**键时,
     // 才分得清"存下去且没人再动它"(该清)和"存下去但期间又被改过"(该留)。
-    { key: "modelsimIniPath", label: "库映射文件", hint: "填 modelsim.ini", required: false, skips: [], section: "common", sectionLabel: "通用工具", path: "C:\\modelsim\\modelsim.ini", configured: true, present: true, group: "语言与库映射", control: "text", kind: "file", detectable: false },
+    { key: "modelsimIniPath", tool: "modelsim", label: "库映射文件", hint: "填 modelsim.ini", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "C:\\modelsim\\modelsim.ini", configured: true, present: true, group: "语言与库映射", control: "text", kind: "file", detectable: false },
+    { key: "rtlLangStd", label: "RTL 语言与标准", hint: "开发约定", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "systemverilog-2017", configured: true, present: true, group: "语言与库映射", control: "select", default: "systemverilog-2017", options: [{ value: "systemverilog-2017", label: "SystemVerilog 1800-2017" }] },
     { key: "moduleRtlCompilerTool", label: "编译 / lint 工具", hint: "该环节首选工具", required: false, skips: [], section: "module", sectionLabel: "模块工具", stage: "module-rtl", stageLabel: "RTL", group: "RTL", bindingKey: "moduleRtlCompiler", control: "select", path: "verilator", configured: true, present: true, default: "auto", options: [{ value: "auto", label: "由 AI 根据任务判断" }, { value: "verilator", label: "Verilator" }, { value: "iverilog", label: "Icarus Verilog" }, { value: "none", label: "不用" }] },
     { key: "moduleRtlCompilerPath", label: "本环节覆盖路径", hint: "留空使用通用路径", required: false, skips: [], section: "module", sectionLabel: "模块工具", stage: "module-rtl", stageLabel: "RTL", group: "RTL", bindingKey: "moduleRtlCompiler", control: "text", kind: "file", path: "", configured: false, present: true, advanced: true, blankNote: "留空使用通用路径" },
     { key: "projectImplFpgaTool", label: "实现工具", hint: "该环节首选 FPGA 套件", required: false, skips: [], section: "project", sectionLabel: "工程工具", stage: "project-impl", stageLabel: "实现", group: "实现", bindingKey: "projectImplFpga", control: "select", path: "auto", configured: true, present: true, default: "auto", options: [{ value: "auto", label: "由 AI 根据任务判断" }, { value: "vivado", label: "Vivado" }, { value: "none", label: "不用" }] },
@@ -414,6 +441,7 @@ let detectPayload = {
   ]
 };
 let detectRequested = 0;
+const detectUrls = [];
 /** 状态路由带查询串的请求次数 = 客户端为"未保存的改动"预演了几次状态。 */
 let previewRequested = 0;
 /**
@@ -430,6 +458,16 @@ let statusPreset;
 const previewAnswer = (fieldOverrides, fieldKey = "verilatorPath", bindingKey, bindingOverrides = {}) => ({
   ...payload,
   tools: payload.tools.map((entry) => (entry.key === fieldKey ? { ...entry, ...fieldOverrides } : entry)),
+  toolCards: payload.toolCards.map((card) => card.pathKey === fieldKey
+    ? {
+        ...card,
+        configured: fieldOverrides.configured ?? card.configured,
+        present: fieldOverrides.present ?? card.present,
+        state: (fieldOverrides.configured ?? card.configured) !== true
+          ? "unconfigured"
+          : (fieldOverrides.present ?? card.present) === true ? "ready" : "invalid"
+      }
+    : card),
   bindings: payload.bindings.map((binding) => (binding.key === bindingKey ? { ...binding, ...bindingOverrides } : binding))
 });
 /** 列目录答复:一个只有一项的目录;路径本身用来分辨是哪一次请求列出来的。 */
@@ -448,6 +486,8 @@ const listingOf = (path) => ({
 let deferPreview = null;
 let deferDetect = null;
 let deferBrowse = null;
+/** 让下一轮预演直接拒绝,验证失败不能被静默吞掉。 */
+let rejectPreview = false;
 const fetchStub = (url) => {
   const target = String(url);
   if (target.includes("/browse")) {
@@ -460,6 +500,7 @@ const fetchStub = (url) => {
   }
   if (target.includes("/detect")) {
     detectRequested += 1;
+    detectUrls.push(target);
     // 答复照**发出时**那一份取(与上面预演那条同一套):先发后回的乱序里,先发那笔
     // 带的就是它发出时的数据,不被后来的改动串味。
     const data = detectPayload;
@@ -470,6 +511,7 @@ const fetchStub = (url) => {
   }
   if (target.includes("?")) {
     previewRequested += 1;
+    if (rejectPreview) return Promise.reject(new Error("preview unavailable"));
     const data = statusPayload;
     if (deferPreview !== null) {
       return new Promise((resolve) => deferPreview.push(() => resolve({ ok: true, json: () => Promise.resolve(data) })));
@@ -581,21 +623,30 @@ try {
 
 check(firstTree !== undefined && secondTree !== undefined, "设置页两次渲染都没抛异常(第二遍带字段)");
 
-// 打开设置页自动检测一次(结论写在字段那一行下面)。上面两遍渲染各只跑了一轮 effects,而**第一遍**
-// 跑的时候字段还是空的 —— 检测函数遇到 `fields.length === 0` 直接 return,于是这条路径到这里
-// 还没被真正执行过。这里在"字段已就绪"之后补跑一轮:检测请求确实发出去了才算数。
+// 打开设置页只列出工具与已保存状态，不做全量检测。
 const detectBeforeAuto = detectRequested;
 fake.runEffects();
 await new Promise((resolve) => setImmediate(resolve));
 check(
-  detectRequested > detectBeforeAuto,
-  `字段就绪后打开页面自动检测了一次(实际发出 ${detectRequested - detectBeforeAuto} 次检测请求)`
+  detectRequested === detectBeforeAuto,
+  `打开设置页不会自动检测所有工具(实际发出 ${detectRequested - detectBeforeAuto} 次检测请求)`
 );
 
 const rendered = JSON.stringify(secondTree ?? {});
-for (const expected of ["通用工具", "模块工具", "工程工具", "RTL", "审查", "实现", "Verilator", "来自通用路径"]) {
+for (const expected of ["工具设置", "模块工具", "工程工具", "RTL", "审查", "实现", "Verilator", "来自通用路径", "开发约定与模板", "已就绪"]) {
   check(rendered.includes(expected), `三层设置界面出现「${expected}」`);
 }
+const verilatorCard = findByProp(secondTree, (props) => props.key === "tool-verilator");
+check(
+  findByProp(verilatorCard, (props) => String(props.className ?? "").includes("fpga-set-collapsed")) !== undefined,
+  "工具卡默认收起路径编辑区"
+);
+findButton(verilatorCard, "修改路径")?.props?.onClick();
+await new Promise((resolve) => setImmediate(resolve));
+check(detectRequested === detectBeforeAuto + 1, "展开一张工具卡只触发一次检测");
+check(detectUrls.at(-1)?.includes("field=verilatorPath"), "检测请求明确带上当前工具路径字段");
+fake.reset();
+secondTree = captured();
 const help = findByProp(secondTree, (props) => props.className === "fpga-set-help");
 check(help?.type === "button" && help.children?.[0] === "?", "字段说明以可聚焦的问号按钮显示");
 check(findByProp(help, (props) => props.role === "tooltip") !== undefined, "问号说明使用 tooltip 语义");
@@ -617,19 +668,15 @@ fake.reset();
 captured();
 check(browserRequested === 0, "没点「浏览…」时不会去请求接口(不白跑)");
 
-// 检测不再靠按钮:打开页面就自动跑一次(结论写在字段行下面),所以页面里不该有检测按钮
+// 检测入口合并在每张卡的“路径设置/修改路径”里，不另放一组全量检测按钮。
 check(
   countButtons(secondTree, "检测本组工具") === 0,
   `页面里没有「检测本组工具」按钮(实际 ${countButtons(secondTree, "检测本组工具")} 个)`
 );
 
-// 保存栏在**最后**(用户口径),不在顶部。字段现在嵌在 section / stage 里,所以只需确认
-// 根级最后一个有效节点就是保存栏；字段存在性由上面的三层界面断言负责。
-const rootKids = (secondTree?.children ?? []).filter((kid) => kid !== null && typeof kid === "object");
-const footIndex = rootKids.findIndex((kid) => kid?.props?.className === "fpga-set-foot");
 check(
-  footIndex === rootKids.length - 1 && findByProp(secondTree, (props) => props.className === "fpga-set-row") !== undefined,
-  `保存栏在所有设置分区之后(实际 foot=${footIndex} / 根节点数=${rootKids.length})`
+  findButton(findByProp(secondTree, (props) => props.key === "tool-verilator"), "保存此工具") !== undefined,
+  "每张展开的工具卡有自己的保存按钮"
 );
 check(
   findButton(findByProp(secondTree, (props) => props.className === "fpga-set-head"), "保存改动") === undefined,
@@ -673,7 +720,7 @@ try {
   written.length = 0;
   findByProp(filtered, FILTER_BOX).props.onKeyDown({ key: "Enter" });
   fake.reset();
-  const picked = captured();
+  let picked = captured();
   check(
     findByProp(picked, (props) => props.value === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe") !== undefined,
     "过滤到唯一一项后回车:选中的值出现在输入框里"
@@ -681,9 +728,15 @@ try {
   check(written.length === 0, "回车选中**不立刻写设置**(改动先留在页面上)");
   check(JSON.stringify(picked ?? {}).includes("有未保存的改动"), "回车选中后出现「有未保存的改动」");
 
-  // 点「保存改动」:一次原子提交;宿主接受后未保存标记消失
+  // 新路径先由状态接口核验；结果回来前卡片只显示“正在检查”，不能直接保存。
+  fake.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  fake.reset();
+  picked = captured();
+
+  // 点这张卡自己的保存:一次原子提交;宿主接受后未保存标记消失
   written.length = 0;
-  findButton(picked, "保存改动").props.onClick();
+  findButton(findByProp(picked, (props) => props.key === "tool-verilator"), "保存此工具").props.onClick();
   await new Promise((resolve) => setImmediate(resolve));
   check(
     written.length === 1 &&
@@ -704,7 +757,11 @@ try {
     target: { value: "D:\\alt\\verilator_bin.exe" }
   });
   fake.reset();
-  findButton(captured(), "保存改动").props.onClick();
+  captured();
+  fake.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  fake.reset();
+  findButton(findByProp(captured(), (props) => props.key === "tool-verilator"), "保存此工具").props.onClick();
   await new Promise((resolve) => setImmediate(resolve));
   fake.reset();
   const rejected = captured();
@@ -717,7 +774,7 @@ try {
   );
 
   // 放弃改动:回到宿主那份值
-  findButton(rejected, "放弃改动").props.onClick();
+  findButton(findByProp(rejected, (props) => props.key === "tool-verilator"), "取消").props.onClick();
   fake.reset();
   const discarded = captured();
   check(!JSON.stringify(discarded ?? {}).includes("有未保存的改动"), "点「放弃改动」后未保存标记消失");
@@ -830,7 +887,7 @@ try {
   written.length = 0;
   // 从空白草稿开始:先把上一段留下的改动放弃掉(不然这次提交里会混进别的键)
   fake.reset();
-  const discard = findButton(captured(), "放弃改动");
+  const discard = findButton(captured(), "取消");
   if (discard !== undefined && discard.props.disabled !== true) {
     discard.props.onClick();
     fake.reset();
@@ -855,18 +912,20 @@ try {
     );
   };
 
-  // 1) 先改字段 A(编译器路径),外加一个这次一并提交的键 C(库映射文件)
-  const midA = "C:\\mid\\verilator_bin.exe";
+  // 1) 同一张 ModelSim 卡里先改字段 A(主程序路径)与 C(库映射文件)
+  const midA = "C:\\mid\\vsim.exe";
   const savedC = "C:\\lib\\modelsim.ini";
-  inputOf("verilatorPath").props.onChange({ target: { value: midA } });
+  inputOf("modelsimPath").props.onChange({ target: { value: midA } });
   inputOf("modelsimIniPath").props.onChange({ target: { value: savedC } });
+  fake.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 400));
   fake.reset();
   check(JSON.stringify(captured() ?? {}).includes("有未保存的改动"), "保存前:A 与 C 都算未保存");
 
   // 2) 点「保存改动」:**不让它结算**(替身停在路上)—— 这段窗口里界面并没有被锁住
   deferSaves = [];
   fake.reset();
-  findButton(captured(), "保存改动").props.onClick();
+  findButton(findByProp(captured(), (props) => props.key === "tool-modelsim"), "保存此工具").props.onClick();
   await new Promise((resolve) => setImmediate(resolve));
   check(
     deferSaves.length === 1 && written.length === 2,
@@ -875,7 +934,7 @@ try {
 
   // 3) 保存进行中:改字段 B(仿真器路径),并把 A 再改成一个不同的新值
   inputOf("xsimPath").props.onChange({ target: { value: "C:\\sim\\xsim" } });
-  inputOf("verilatorPath").props.onChange({ target: { value: "C:\\late\\verilator_bin.exe" } });
+  inputOf("modelsimPath").props.onChange({ target: { value: "C:\\late\\vsim.exe" } });
 
   // 4) 放行:宿主收下这批值(A 回读到的就是刚保存的那个中间值)
   check(drainDeferredSaves() === 1, "按测试的节奏结算:宿主收下了这次提交");
@@ -895,11 +954,11 @@ try {
   );
   // ② A 显示用户最后敲的新值,而且仍然标着「未保存」
   check(
-    findByProp(rowOf("verilatorPath"), (props) => props.value === "C:\\late\\verilator_bin.exe") !== undefined,
+    findByProp(rowOf("modelsimPath"), (props) => props.value === "C:\\late\\vsim.exe") !== undefined,
     "保存期间又被改过的 A 显示用户最后敲的那个新值(不是刚保存的中间值)"
   );
   check(
-    JSON.stringify(rowOf("verilatorPath") ?? {}).includes("未保存"),
+    JSON.stringify(rowOf("modelsimPath") ?? {}).includes("未保存"),
     "A 仍然带「未保存」标记(它和刚存下去的那份已经不一样了)"
   );
   // ③ 这次确实存了、期间也没人再动它的 C 正常清掉
@@ -978,16 +1037,14 @@ try {
   check(!orderedRow.includes("未就绪"), "乱序返回:先发那次的旧结论(未就绪)被丢掉,没盖回来");
   deferPreview = null;
 
-  // ② 通用工具检测:状态重载连续触发两次检测,先发的旧结果最后回来。
-  // 环节下拉不会触发检测,这里直接跑两轮 effect,验证的仍是同一个乱序窗口。
-  // 上面为读取最终渲染树又 render 过一次,先把那一轮排队的 effect 放干净,免得混进计数。
+  // ② 单工具检测:连续两次展开同一张卡,先发的旧结果最后回来。
   fake.runEffects();
   await tick();
   deferDetect = [];
   detectPayload = { found: [] }; // 先发:没找到
   fake.reset();
-  captured();
-  fake.runEffects();
+  let detectTree = captured();
+  findButton(findByProp(detectTree, (props) => props.key === "tool-verilator"), "修改路径").props.onClick();
   detectPayload = {
     found: [
       {
@@ -1000,8 +1057,11 @@ try {
     ]
   }; // 后发:找到了
   fake.reset();
-  captured();
-  fake.runEffects();
+  detectTree = captured();
+  findButton(findByProp(detectTree, (props) => props.key === "tool-verilator"), "收起").props.onClick();
+  fake.reset();
+  detectTree = captured();
+  findButton(findByProp(detectTree, (props) => props.key === "tool-verilator"), "修改路径").props.onClick();
   check(deferDetect.length === 2, `两次检测请求都发出去了、都停在路上(实际 ${deferDetect.length} 次)`);
   deferDetect[1](); // 最新那次(找到)先回
   await tick();
@@ -1067,7 +1127,7 @@ try {
   const { tree, held } = await onePreview(previewAnswer({ present: false })); // 这次答复说"未就绪"
   check(held.length === 1, `放弃改动前的预演请求停在路上(实际 ${held.length} 次)`);
   deferPreview = null; // 闸门关掉:只把**这一笔**留到最后放行
-  findButton(tree, "放弃改动").props.onClick(); // 在**已经渲染好的**树上点,免得又排一次防抖
+  findButton(findByProp(tree, (props) => props.key === "tool-verilator"), "取消").props.onClick(); // 在**已经渲染好的**树上点,免得又排一次防抖
   fake.reset();
   captured();
   fake.runEffects(); // 预演作废:代次推一格、状态清掉(就在这一步)
@@ -1084,6 +1144,154 @@ try {
   deferPreview = null;
   deferDetect = null;
   deferBrowse = null;
+}
+
+// 检测请求发出后用户又手填了路径:晚回来的候选只能显示,不能覆盖这笔更新。
+// 检测本身可能因为版本探测等几秒,这不是理论窗口。
+try {
+  fake.runEffects();
+  await sleep(400);
+  fake.reset();
+  const before = captured();
+  const discard = findButton(before, "取消");
+  if (discard !== undefined && discard.props.disabled !== true) discard.props.onClick();
+
+  const field = payload.tools.find((entry) => entry.key === "verilatorPath");
+  const savedHostPath = hostValues.verilatorPath;
+  const savedField = { path: field.path, configured: field.configured, present: field.present };
+  const manualPath = "D:\\manual\\verilator_bin.exe";
+  try {
+    hostValues.verilatorPath = "";
+    field.path = "";
+    field.configured = false;
+    field.present = false;
+    detectPayload = {
+      found: [
+        {
+          field: "verilatorPath",
+          tool: "verilator",
+          label: "Verilator",
+          path: "C:\\detected\\verilator_bin.exe",
+          source: "known"
+        }
+      ]
+    };
+    deferDetect = [];
+    fake.reset();
+    let detecting = captured();
+    const currentCard = findByProp(detecting, (props) => props.key === "tool-verilator");
+    const close = findButton(currentCard, "收起");
+    if (close !== undefined) {
+      close.props.onClick();
+      fake.reset();
+      detecting = captured();
+    }
+    findButton(findByProp(detecting, (props) => props.key === "tool-verilator"), "修改路径").props.onClick();
+    fake.reset();
+    detecting = captured();
+    await tick();
+    check(deferDetect.length >= 1, `手填竞态:检测请求已挂起(实际 ${deferDetect.length} 次)`);
+    const input = findByProp(
+      findByProp(detecting, (props) => props.key === "verilatorPath"),
+      (props) => props.type === "text" && typeof props.onChange === "function"
+    );
+    input.props.onChange({ target: { value: manualPath } });
+    for (const release of deferDetect) release();
+    await tick();
+    fake.reset();
+    const settled = findByProp(captured(), (props) => props.key === "verilatorPath");
+    check(
+      findByProp(settled, (props) => props.value === manualPath) !== undefined,
+      "检测晚返回不会覆盖请求期间的新手填路径"
+    );
+  } finally {
+    deferDetect = null;
+    hostValues.verilatorPath = savedHostPath;
+    Object.assign(field, savedField);
+    fake.reset();
+    const tree = captured();
+    const discardAfter = findButton(tree, "取消");
+    if (discardAfter !== undefined && discardAfter.props.disabled !== true) discardAfter.props.onClick();
+  }
+} catch (error) {
+  check(false, "检测晚返回不会覆盖请求期间的新手填路径", String(error));
+} finally {
+  deferDetect = null;
+}
+
+// 预演 A 已在路上时把草稿改成 B,但尚未等到 B 的 250ms 防抖请求:此时 A 就必须立即失效。
+try {
+  fake.runEffects();
+  await sleep(400);
+  statusPayload = previewAnswer(
+    {},
+    "verilatorPath",
+    "moduleRtlCompiler",
+    { selection: "iverilog", toolLabel: "Icarus Verilog", state: "ready", source: "common", path: "C:\\iverilog.exe" }
+  );
+  deferPreview = [];
+  fake.reset();
+  const clean = captured();
+  const cleanSelect = findByProp(
+    findByProp(clean, (props) => props.key === "moduleRtlCompilerTool"),
+    (props) => props.value === "verilator" && typeof props.onChange === "function"
+  );
+  cleanSelect.props.onChange({ target: { value: "iverilog" } });
+  fake.reset();
+  const draftA = captured();
+  fake.runEffects();
+  await sleep(300);
+  check(deferPreview.length >= 1, `草稿竞态:预演 A 已挂起(实际 ${deferPreview.length} 次)`);
+
+  const selectA = findByProp(
+    findByProp(draftA, (props) => props.key === "moduleRtlCompilerTool"),
+    (props) => props.value === "iverilog" && typeof props.onChange === "function"
+  );
+  // 改回已保存的 verilator 会清掉这条草稿；故意不跑 effect,直接放行旧的 A。
+  selectA.props.onChange({ target: { value: "verilator" } });
+  for (const release of deferPreview) release();
+  await tick();
+  fake.reset();
+  const afterB = captured();
+  const bindingText = JSON.stringify(findByProp(afterB, (props) => props.key === "binding-moduleRtlCompiler") ?? {});
+  check(!bindingText.includes("正在检查当前选择"), "草稿一变,旧预演在新防抖请求启动前就立即失效");
+  check(findByProp(afterB, (props) => props.key === "moduleRtlCompilerPath") !== undefined, "旧预演不会把当前工具的覆盖路径误隐藏");
+} catch (error) {
+  check(false, "草稿变化会立即作废旧预演", String(error));
+} finally {
+  deferPreview = null;
+  statusPayload = payload;
+  fake.reset();
+  captured();
+  fake.runEffects();
+}
+
+// 最新预演自身失败时要留下一条可见错误,不能继续显示旧结论或安静地停在 pending。
+try {
+  rejectPreview = true;
+  fake.reset();
+  const tree = captured();
+  const input = findByProp(
+    findByProp(tree, (props) => props.key === "verilatorPath"),
+    (props) => props.type === "text" && typeof props.onChange === "function"
+  );
+  input.props.onChange({ target: { value: "C:\\preview-failure\\verilator_bin.exe" } });
+  fake.reset();
+  captured();
+  fake.runEffects();
+  await sleep(300);
+  await tick();
+  fake.reset();
+  check(JSON.stringify(captured() ?? {}).includes("路径检查接口不可用"), "最新预演失败会在设置页明确显示");
+} catch (error) {
+  check(false, "最新预演失败会在设置页明确显示", String(error));
+} finally {
+  rejectPreview = false;
+  fake.reset();
+  const tree = captured();
+  const discard = findButton(tree, "取消");
+  if (discard !== undefined && discard.props.disabled !== true) discard.props.onClick();
+  fake.runEffects();
 }
 
 // ── 主题跟随:原生下拉的弹层必须跟着**实际**主题,而不是系统偏好 ────────────────
@@ -1334,8 +1542,16 @@ const detectRowWith = async (found, label, key = "verilatorPath") => {
   deferDetect = [];
   detectPayload = { found };
   fake.reset();
-  captured();
-  fake.runEffects();
+  let opening = captured();
+  let card = findByProp(opening, (props) => props.key === "tool-verilator");
+  const close = findButton(card, "收起");
+  if (close !== undefined) {
+    close.props.onClick();
+    fake.reset();
+    opening = captured();
+    card = findByProp(opening, (props) => props.key === "tool-verilator");
+  }
+  findButton(card, "修改路径").props.onClick();
   await tick();
   check(deferDetect.length === 1, `${label}检测请求发出去了、停在闸门上(实际 ${deferDetect.length} 次)`);
   deferDetect[0]();

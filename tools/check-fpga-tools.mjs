@@ -184,6 +184,59 @@ check(templateRtl.length === 0, "自带 RTL 模板过检查器", templateRtl.map
 const templateTb = blocking(join(TEMPLATES, "tb.sv"), true);
 check(templateTb.length === 0, "自带测试平台模板过检查器", templateTb.map((i) => i.message).join("; "));
 
+// 新设置页扫描分类模板；根目录六份仍留给旧技能/生成工具兼容，二者要同时可用。
+const categorizedTemplates = {
+  rtl: join(TEMPLATES, "rtl", "systemverilog-module.sv"),
+  constraints: join(TEMPLATES, "constraints", "vivado-xdc.xdc"),
+  verification: join(TEMPLATES, "verification", "python-data-compare.py"),
+  testbench: join(TEMPLATES, "simulation", "testbench", "systemverilog-testbench.sv"),
+  compile: join(TEMPLATES, "simulation", "compile", "modelsim-compile.do"),
+  run: join(TEMPLATES, "simulation", "run", "modelsim-run.do"),
+  synthesis: join(TEMPLATES, "synthesis", "vivado-synthesis.tcl"),
+  implementation: join(TEMPLATES, "implementation", "vivado-implementation.tcl"),
+  programming: join(TEMPLATES, "programming", "vivado-program.tcl")
+};
+check(
+  Object.values(categorizedTemplates).every((path) => existsSync(path)),
+  "九份分类内置模板都存在",
+  Object.entries(categorizedTemplates).filter(([, path]) => !existsSync(path)).map(([key]) => key).join("、")
+);
+const categorizedRtlIssues = blocking(categorizedTemplates.rtl, false);
+check(categorizedRtlIssues.length === 0, "分类 RTL 模板过检查器", categorizedRtlIssues.map((i) => i.message).join("; "));
+const categorizedTbIssues = blocking(categorizedTemplates.testbench, true);
+check(categorizedTbIssues.length === 0, "分类 Testbench 模板过检查器", categorizedTbIssues.map((i) => i.message).join("; "));
+
+const executableTcl = (path) => readFileSync(path, "utf8")
+  .split(/\r?\n/u)
+  .filter((line) => !/^\s*#/u.test(line))
+  .join("\n");
+const compileTemplate = executableTcl(categorizedTemplates.compile);
+const runTemplate = executableTcl(categorizedTemplates.run);
+const synthesisTemplate = executableTcl(categorizedTemplates.synthesis);
+const implementationTemplate = executableTcl(categorizedTemplates.implementation);
+const programmingTemplate = executableTcl(categorizedTemplates.programming);
+check(/\bvlog\b/u.test(compileTemplate) && !/\bvsim\b|\brun\s+-all\b/u.test(compileTemplate), "ModelSim 编译模板只编译，不启动仿真");
+check(/\bvsim\b/u.test(runTemplate) && /\brun\s+-all\b/u.test(runTemplate) && !/\bvlog\b|\bvcom\b/u.test(runTemplate), "ModelSim 运行模板只加载与运行，不重新编译");
+check(
+  /\bsynth_design\b/u.test(synthesisTemplate) && !/\bplace_design\b|\broute_design\b|\bwrite_bitstream\b/u.test(synthesisTemplate),
+  "Vivado 综合模板在综合后停止"
+);
+check(
+  /\bopen_checkpoint\b/u.test(implementationTemplate) && /\bplace_design\b/u.test(implementationTemplate) &&
+    /\broute_design\b/u.test(implementationTemplate) && !/\bsynth_design\b|\bprogram_hw_devices\b/u.test(implementationTemplate),
+  "Vivado 实现模板读取已有综合结果，不调用综合或下载"
+);
+check(
+  /\bprogram_hw_devices\b/u.test(programmingTemplate) &&
+    !/\bsynth_design\b|\bplace_design\b|\broute_design\b|\bwrite_bitstream\b/u.test(programmingTemplate),
+  "Vivado 下载模板只使用已有 bitstream"
+);
+check(
+  [compileTemplate, runTemplate, synthesisTemplate, implementationTemplate, programmingTemplate]
+    .every((source) => /\berror\b/u.test(source)),
+  "分类脚本缺少必需事实时都会明确失败"
+);
+
 // ── 扫描范围:以 rtl/ 为根,跳过生成目录 ─────────────────────────────────────
 mkdirSync(join(SANDBOX, "bad-mod", "rtl", "work"), { recursive: true });
 writeFileSync(join(SANDBOX, "bad-mod", "rtl", "work", "stale.sv"), badRtl);

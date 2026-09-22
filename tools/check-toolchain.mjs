@@ -53,6 +53,7 @@ import {
   resolveBinding,
   resolveBindings,
   resolveCapability,
+  resolveCapabilityTemplates,
   resolveCapabilities,
   resolveTemplates,
   staleShippedFiles,
@@ -60,6 +61,13 @@ import {
   toolLevelPrefix,
   toolPath
 } from "../lib/toolchain.js";
+import {
+  BUILTIN_TEMPLATES,
+  MAX_TEMPLATES_PER_CATEGORY,
+  TEMPLATE_CATEGORIES,
+  resolveTemplateSelection,
+  scanTemplates
+} from "../lib/template-library.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // fixture 名带进程号:`npm test` 与 `npm run test:installed` 跑的是**同一批检查**,并行执行时
@@ -68,7 +76,7 @@ const RUN_ID = String(process.pid);
 // .tmp/ 里的 fixture **不再删除**(用户定案:绝不永久删除)—— 只列出来报给使用者处置。
 // 代价是 `.tmp/` 会一直增长,所以开头把上次留下的列一次,让人看得见它有多少。
 const TMP_ROOT = join(ROOT, ".tmp");
-const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture", "preset-sync-", "sweep-check-"];
+const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture", "preset-sync-", "sweep-check-", "template-library-"];
 const leftoversAtStart = listTempLeftovers(TMP_ROOT, FIXTURE_PREFIXES);
 if (leftoversAtStart.length > 0) {
   console.log(`(.tmp/ 里有 ${leftoversAtStart.length} 项上次留下的 fixture,按用户定案不删除、只报告)`);
@@ -79,6 +87,125 @@ const check = (ok, label, detail) => {
   console.log(`${ok ? "ok  " : "FAIL"}  ${label}${detail === undefined ? "" : `\n        ${detail}`}`);
   if (!ok) failures.push(label);
 };
+
+// ── 分类模板库:扫描边界、稳定 id 与“缺失不回退” ─────────────────────────────
+//
+// 夹具故意留在 .tmp/ 中(本仓库的零删除约定)。每次用 PID 分开，避免并行自检互相踩。
+const TEMPLATE_LIBRARY_FIXTURE = join(TMP_ROOT, `template-library-${RUN_ID}`);
+mkdirSync(join(TEMPLATE_LIBRARY_FIXTURE, "rtl", "vendor"), { recursive: true });
+mkdirSync(join(TEMPLATE_LIBRARY_FIXTURE, "rtl", "zz-many"), { recursive: true });
+writeFileSync(join(TEMPLATE_LIBRARY_FIXTURE, "root-level-legacy.sv"), "// 不应扫描根目录文件\n");
+writeFileSync(join(TEMPLATE_LIBRARY_FIXTURE, "rtl", "vendor", "custom.sv"), "module custom; endmodule\n");
+writeFileSync(join(TEMPLATE_LIBRARY_FIXTURE, "rtl", ".hidden.sv"), "module hidden; endmodule\n");
+writeFileSync(join(TEMPLATE_LIBRARY_FIXTURE, "rtl", "scratch.sv.tmp"), "module temporary; endmodule\n");
+for (let index = 0; index <= MAX_TEMPLATES_PER_CATEGORY; index += 1) {
+  writeFileSync(join(TEMPLATE_LIBRARY_FIXTURE, "rtl", "zz-many", `${String(index).padStart(3, "0")}.sv`), "// fixture\n");
+}
+
+const outsideTemplateFixture = join(TMP_ROOT, `template-library-outside-${RUN_ID}`);
+mkdirSync(outsideTemplateFixture, { recursive: true });
+writeFileSync(join(outsideTemplateFixture, "escaped.sv"), "module escaped; endmodule\n");
+let templateLinkCreated = false;
+try {
+  symlinkSync(outsideTemplateFixture, join(TEMPLATE_LIBRARY_FIXTURE, "rtl", "linked"), "junction");
+  templateLinkCreated = true;
+} catch {
+  // 某些 Windows 策略不允许测试进程创建 junction；其余扫描边界仍照常验证。
+}
+
+const scannedModuleRtl = scanTemplates({
+  capability: "module-rtl",
+  capabilities: CAPABILITIES,
+  libraryRoot: TEMPLATE_LIBRARY_FIXTURE
+});
+const scannedRtlGroup = scannedModuleRtl.groups.find((group) => group.key === "rtl");
+check(TEMPLATE_CATEGORIES.length === 9, `模板库固定九类(实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`);
+check(
+  BUILTIN_TEMPLATES.some((item) => item.id === "builtin:rtl/systemverilog-module.sv") &&
+    BUILTIN_TEMPLATES.some((item) => item.id === "builtin:simulation/compile/modelsim-compile.do") &&
+    BUILTIN_TEMPLATES.some((item) => item.id === "builtin:programming/vivado-program.tcl"),
+  "内置模板使用稳定的分类 id"
+);
+check(
+  scannedRtlGroup?.items.some((item) => item.id === "library:rtl/vendor/custom.sv"),
+  "用户模板递归扫描后得到稳定 library id"
+);
+check(
+  !scannedRtlGroup?.items.some((item) => item.id.includes("root-level-legacy.sv")),
+  "模板库根目录的旧式文件不进入分类扫描"
+);
+check(
+  !scannedRtlGroup?.items.some((item) => item.id.includes(".hidden") || item.id.includes("scratch.sv.tmp")),
+  "分类扫描忽略隐藏文件与临时文件"
+);
+check(
+  scannedRtlGroup?.libraryCount === MAX_TEMPLATES_PER_CATEGORY && scannedRtlGroup?.truncated === true,
+  `单分类最多返回 ${String(MAX_TEMPLATES_PER_CATEGORY)} 个用户模板并标记截断`
+);
+if (templateLinkCreated) {
+  check(!scannedRtlGroup?.items.some((item) => item.id.includes("escaped.sv")), "分类扫描不跟随 junction / 符号链接");
+} else {
+  console.log("ok    (跳过)本机策略不允许创建模板库 junction，链接不跟随由实现静态分支保证");
+}
+
+const missingCategories = scanTemplates({
+  capability: "module-simulation",
+  capabilities: CAPABILITIES,
+  libraryRoot: TEMPLATE_LIBRARY_FIXTURE
+});
+check(
+  missingCategories.groups.every((group) => group.items.some((item) => item.source === "builtin")) &&
+    missingCategories.groups.some((group) => group.errors.length > 0),
+  "用户分类缺失时仍返回内置模板，并在对应分类报告错误"
+);
+
+const builtinDefault = resolveTemplateSelection({ selection: "", category: "synthesis", tool: "vivado" });
+check(
+  builtinDefault.state === "default" && builtinDefault.id === "builtin:synthesis/vivado-synthesis.tcl",
+  "空选择 + Vivado 解析为适配的内置默认模板"
+);
+const unsupportedDefault = resolveTemplateSelection({ selection: "", category: "synthesis", tool: "quartus" });
+check(
+  unsupportedDefault.state === "unsupported-default" && unsupportedDefault.present === false && /没有适配/u.test(unsupportedDefault.warning ?? ""),
+  "Quartus 没有适配内置模板时保留空选择并明确警告"
+);
+const missingLibrarySelection = resolveTemplateSelection({
+  selection: "library:rtl/vendor/gone.sv",
+  category: "rtl",
+  tool: "verilator",
+  libraryRoot: TEMPLATE_LIBRARY_FIXTURE
+});
+check(
+  missingLibrarySelection.state === "missing" && missingLibrarySelection.id === "library:rtl/vendor/gone.sv" &&
+    missingLibrarySelection.source === "library" && missingLibrarySelection.default !== true,
+  "已选择的用户模板消失后保留原选择，不静默回退"
+);
+const missingLegacySelection = resolveTemplateSelection({
+  selection: "C:\\legacy-templates\\gone.sv",
+  category: "rtl",
+  tool: "verilator",
+  libraryRoot: TEMPLATE_LIBRARY_FIXTURE,
+  probe: () => false
+});
+check(
+  missingLegacySelection.state === "missing" && missingLegacySelection.path === "C:\\legacy-templates\\gone.sv" &&
+    missingLegacySelection.source === "legacy",
+  "旧版绝对模板路径缺失时原样保留，不回退"
+);
+const escapedLibrarySelection = resolveTemplateSelection({
+  selection: "library:rtl/../outside.sv",
+  category: "rtl",
+  tool: "verilator",
+  libraryRoot: TEMPLATE_LIBRARY_FIXTURE
+});
+check(escapedLibrarySelection.state === "invalid", "用户模板 id 不能用 .. 越出固定分类");
+let unknownCapabilityStatus = 0;
+try {
+  scanTemplates({ capability: "unknown-capability", capabilities: CAPABILITIES, libraryRoot: TEMPLATE_LIBRARY_FIXTURE });
+} catch (error) {
+  unknownCapabilityStatus = Number(error?.status ?? 0);
+}
+check(unknownCapabilityStatus === 400, "未知能力被模板扫描器按请求错误拒绝");
 
 /** 桩探测:只有名单里的路径算存在。 */
 const probeWith = (present) => (path) => present.includes(path);
@@ -178,6 +305,19 @@ check(resolveCapability({ moduleRtlTool: "none" }, rtlCapability, probeWith([]))
 check(resolveCapability({ moduleRtlTool: "bogus" }, rtlCapability, probeWith([])).state === "invalid", "非法选择不会假装可用");
 check(resolveCapability({ moduleRtlTool: "verilator" }, rtlCapability, probeWith([])).state === "missing", "显式工具缺路径时只标记该能力缺失");
 check(resolveCapabilities({}, probeWith([])).length === 7, "一次解析七张能力卡");
+const moduleRtlTemplates = resolveCapabilityTemplates({}, rtlCapability, "auto", probeFilesystem);
+check(
+  moduleRtlTemplates.length === 1 && moduleRtlTemplates[0].state === "default" &&
+    moduleRtlTemplates[0].id === "builtin:rtl/systemverilog-module.sv",
+  "能力卡空模板选择解析到分类内置默认模板"
+);
+const projectMainCapability = CAPABILITIES.find((capability) => capability.key === "project-main");
+const quartusProjectTemplates = resolveCapabilityTemplates({ projectMainTool: "quartus" }, projectMainCapability, "quartus", probeFilesystem);
+check(
+  quartusProjectTemplates.filter((template) => ["constraints", "synthesis", "implementation", "programming"].includes(template.category))
+    .every((template) => template.state === "unsupported-default"),
+  "Quartus 工程主工具不会误用 Vivado 的默认模板"
+);
 
 // ── v1 / v2 → v3 无损迁移 ──────────────────────────────────────────────────
 const migratedAgreement = legacyMigrationPatch({
@@ -1281,18 +1421,19 @@ check(
 const wrong = resolveTemplates({ rtlTemplatePath: "C:\\nope\\rtl.sv" }, probeFilesystem);
 const wrongRtl = wrong.find((template) => template.kind === "rtl");
 check(wrongRtl.source === "bundled" && wrongRtl.missing === "C:\\nope\\rtl.sv", "填了但找不到 → 退回自带并记下那个路径");
-const wrongText = describeEnv(prepared, () => true).length > 0
-  ? describeEnv({ ...prepared, rtlTemplatePath: "C:\\nope\\rtl.sv" }, (path) => Object.values(prepared).includes(path))
-  : "";
-check(wrongText.includes("填的路径不存在"), "提示里点明'填的路径不存在,已退回自带'");
 
-const bundledText = describeEnv(prepared, () => true);
-check(bundledText.includes("rtl.sv") && bundledText.includes("插件自带"), "提示里说清模板用哪一份");
-const userText = describeEnv(
-  { ...prepared, rtlTemplatePath: USER_RTL },
-  (path) => path === USER_RTL || Object.values(prepared).includes(path)
+// 新提示按七张能力卡播报模板；六个旧全局路径只供迁移，不能继续左右日常解析。
+const capabilityTemplateText = describeEnv(prepared, () => true);
+check(
+  capabilityTemplateText.includes("模板·RTL 模板") &&
+    capabilityTemplateText.includes("rtl\\systemverilog-module.sv") &&
+    capabilityTemplateText.includes("simulation\\compile\\modelsim-compile.do"),
+  "提示在对应能力卡下列出分类模板决定"
 );
-check(userText.includes("你提供的"), "用户提供了模板时,提示里标明是他提供的");
+check(
+  !describeEnv({ ...prepared, rtlTemplatePath: USER_RTL }, () => true).includes(USER_RTL),
+  "旧全局模板路径不再参与 v3 会话提示"
+);
 
 // ── 三个环节脚本模板:设置字段与前三份同款,提示里的播报规则不同 ──────────────
 //
@@ -1331,64 +1472,56 @@ check(
   `设置字段:${templateGroupKeys.join(",")} / 提示表:${templateListKeys.join(",")}`
 );
 
-/** 提示段里「模块模板」那一节(标题起、到空行止)。 */
-const templateSection = (text) => text.split("\n\n").find((block) => block.startsWith("模块模板")) ?? "";
-/** 那一节里列出的模板条数(每份一行,以 "- " 开头)。 */
-const templateBullets = (text) => templateSection(text).split("\n").filter((line) => line.startsWith("- "));
-
-const USER_SCRIPTS = {
-  runDoTemplatePath: "C:\\my-templates\\run.do",
-  synthScriptTemplatePath: "C:\\my-templates\\run_synth.tcl",
-  compScriptTemplatePath: "C:\\my-templates\\comp.py"
+const USER_LIBRARY_ROOT = "C:\\my-template-library";
+const USER_MODULE_RTL = join(USER_LIBRARY_ROOT, "rtl", "module-special.sv");
+const USER_PROJECT_RTL = join(USER_LIBRARY_ROOT, "rtl", "project-special.sv");
+const independentTemplateValues = {
+  ...prepared,
+  templateLibraryPath: USER_LIBRARY_ROOT,
+  moduleRtlTemplate: "library:rtl/module-special.sv",
+  projectRtlTemplate: "library:rtl/project-special.sv"
 };
-const scriptProbe = (path) => Object.values(USER_SCRIPTS).includes(path) || Object.values(prepared).includes(path);
+const independentTemplateText = describeEnv(
+  independentTemplateValues,
+  (path, kind) => kind === "directory"
+    ? path === USER_LIBRARY_ROOT
+    : [USER_MODULE_RTL, USER_PROJECT_RTL, ...Object.values(prepared)].includes(path)
+);
+check(
+  independentTemplateText.includes(USER_MODULE_RTL) && independentTemplateText.includes(USER_PROJECT_RTL),
+  "同类模板共用一座库，但模块与工程各自保留独立选择"
+);
+check(
+  independentTemplateText.includes("只记录来源；展开设置里的能力卡时才扫描目录"),
+  "会话提示只说明模板库来源，不触发目录扫描"
+);
 
-// 条数跟"配了几份"一致:三份写法规范模板永远播报(占三条),每配一份脚本模板才多一条。
-const noScriptText = describeEnv(prepared, () => true);
-check(
-  templateBullets(noScriptText).length === 3,
-  `没配脚本模板 → 模板那节还是三条(实际 ${templateBullets(noScriptText).length} 条)`,
-  templateSection(noScriptText)
-);
-// 留空不出现:连自带那份的路径都不该有 —— 那是"没配也不制造噪音/门禁"
-const bundledScriptNoise = SCRIPT_TEMPLATE_FIELDS.map(({ file }) => file)
-  .filter((file) => templateSection(noScriptText).includes(file));
-check(
-  bundledScriptNoise.length === 0,
-  "留空的脚本模板不出现在提示里(自带那份的路径也不播报)",
-  bundledScriptNoise.join("、")
-);
-const allScriptsText = describeEnv({ ...prepared, ...USER_SCRIPTS }, scriptProbe);
-const allScriptBullets = templateBullets(allScriptsText);
-check(
-  allScriptBullets.length === 6 &&
-    SCRIPT_TEMPLATE_FIELDS.every(({ key, label }) =>
-      allScriptBullets.some(
-        (line) => line.startsWith(`- ${label}(你提供的`) && line.includes("--template") && line.endsWith(USER_SCRIPTS[key])
-      )
-    ),
-  `六份全配齐 → 六条,脚本那三条标明"你提供的"、给出路径、并说清要传给 --template(实际 ${allScriptBullets.length} 条)`,
-  templateSection(allScriptsText)
-);
-const oneScriptText = describeEnv({ ...prepared, runDoTemplatePath: USER_SCRIPTS.runDoTemplatePath }, scriptProbe);
-check(
-  templateBullets(oneScriptText).length === 4 &&
-    templateSection(oneScriptText).includes(USER_SCRIPTS.runDoTemplatePath) &&
-    !templateSection(oneScriptText).includes("run_synth.tcl") &&
-    !templateSection(oneScriptText).includes("comp.py"),
-  `只配一份脚本模板 → 只多一条(实际 ${templateBullets(oneScriptText).length} 条)`,
-  templateSection(oneScriptText)
-);
-// 填了但文件不在:不列进模板表(它不是真的在生效),但必须点明已退回自带 —— 别让用户以为生效了
-const missingScriptText = describeEnv(
-  { ...prepared, runDoTemplatePath: "C:\\nope\\run.do" },
-  (path) => Object.values(prepared).includes(path)
+const missingSelectedTemplate = describeEnv(
+  {
+    ...prepared,
+    templateLibraryPath: USER_LIBRARY_ROOT,
+    moduleSimulationRunTemplate: "library:simulation/run/gone.do"
+  },
+  (path, kind) => kind === "directory" ? path === USER_LIBRARY_ROOT : Object.values(prepared).includes(path)
 );
 check(
-  templateBullets(missingScriptText).length === 3 && templateSection(missingScriptText).includes("填的路径不存在"),
-  "脚本模板填了但找不到:不进模板表,但提示里点明已退回自带",
-  templateSection(missingScriptText)
+  missingSelectedTemplate.includes("gone.do") && missingSelectedTemplate.includes("原选择已保留") &&
+    !missingSelectedTemplate.includes("modelsim-run.do（内置）"),
+  "显式模板消失时提示保留原选择，不静默退回内置"
 );
+
+const quartusTemplateText = describeEnv(
+  { quartusPath: "C:\\Quartus\\quartus_sh.exe", projectMainTool: "quartus" },
+  (path) => path === "C:\\Quartus\\quartus_sh.exe"
+);
+check(
+  quartusTemplateText.includes("当前工具没有适配的约束模板") &&
+    quartusTemplateText.includes("当前工具没有适配的综合脚本") &&
+    quartusTemplateText.includes("当前工具没有适配的实现脚本") &&
+    quartusTemplateText.includes("当前工具没有适配的下载脚本"),
+  "Quartus 未选用户模板时逐项提示缺少适配默认模板"
+);
+check(!capabilityTemplateText.includes("模块模板 ——"), "v3 提示不再输出旧的全局模板区块");
 
 // ── 语言与仿真器 ────────────────────────────────────────────────────────────
 const langText = describeEnv(prepared, () => true);

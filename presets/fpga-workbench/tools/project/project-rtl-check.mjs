@@ -16,6 +16,7 @@
 //
 // 用法:node project-rtl-check.mjs [<用户指定工程目录>] [--json]
 // 扫 src/rtl/ 的平铺 RTL、src/sim/ 的专用模块简单仿真，以及根 sim/ 的工程级仿真；
+// 仿真目录里只有 `tb_*` 按测试平台规则查,helper/行为模型按普通 HDL 规则(F5-02)。
 // 另外查工程根 ip/<ip>/timing.json(IP 时序卡)—— 那是**警告**(见 ipCardEntries)。
 // 退出码:0 全部通过(可以只有警告) / 1 有 FAIL / 2 用法或环境错误。
 
@@ -547,10 +548,13 @@ function main() {
     console.error("找不到 src/rtl/:", root);
     return 2;
   }
+  // 仿真目录里**只有 `tb_*` 是测试平台**(F5-02):driver/helper/行为模型按普通 HDL 规则查,
+  // 不强制成功标记与 err_cnt gate。
+  const isTestbenchName = (file) => TESTBENCH.test(file.split(/[\\/]/u).pop() ?? "");
   const targets = [
     ...collectHdl(rtlDir).map((file) => [file, false]),
-    ...(existsSync(simpleSimDir) ? collectHdl(simpleSimDir).map((file) => [file, true]) : []),
-    ...(existsSync(projectSimDir) ? collectHdl(projectSimDir).map((file) => [file, true]) : [])
+    ...(existsSync(simpleSimDir) ? collectHdl(simpleSimDir).map((file) => [file, isTestbenchName(file)]) : []),
+    ...(existsSync(projectSimDir) ? collectHdl(projectSimDir).map((file) => [file, isTestbenchName(file)]) : [])
   ];
   if (targets.length === 0) {
     const vhdl = [rtlDir, simpleSimDir, projectSimDir].flatMap((dir) => existsSync(dir) ? collectHdl(dir, VHDL) : []);
@@ -564,10 +568,11 @@ function main() {
   const report = [
     ...targets.map(([file, isTb]) => ({
       file: relative(root, file).split(sep).join("/"),
+      role: isTb ? "testbench" : "hdl",
       issues: checkFile(file, isTb)
     })),
     // IP 时序卡:工程根 ip/ 下每个 IP 一张(与文件项同形一起打印)
-    ...ipCardEntries(join(root, "ip"), root)
+    ...ipCardEntries(join(root, "ip"), root).map((entry) => ({ ...entry, role: "ip-card" }))
   ];
   const failures = report.flatMap((entry) => entry.issues.filter(isFailure));
   const warnings = report.flatMap((entry) => entry.issues.filter((issue) => !isFailure(issue)));

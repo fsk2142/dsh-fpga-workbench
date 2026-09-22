@@ -6,12 +6,15 @@
 # code page to transcripts and Chinese gate messages become unreadable.
 #
 # Settings passed through the environment:
-#   MODELSIM_INI - selected ModelSim library mapping file
+#   RTL_DIR       - HDL root relative to this script (VERIF_ROOT = pwd).
+#                   module verif/ layout: {../rtl}
+#                   project sim/ layout:  {../src/rtl}   (F5-05: change this knob)
+#   MODELSIM_INI  / INI_OVERRIDE - library mapping; set BOTH compile and run the same way (F5-06)
 #   TB_DEFINES   - space-separated defines, for example "TB_TAP=7 TB_BP=1"
 #
 # Edit only these knobs when the normal module layout is not enough.
 set RTL_DIR        {../rtl}
-set TB_PATTERN     {tb_*}
+set TB_PATTERN     {tb_*.sv tb_*.v tb_*.vhd tb_*.vhdl}
 set INI_OVERRIDE   {}
 set EXTRA_INCDIRS  {}
 
@@ -57,7 +60,14 @@ proc same_file_content {a b} {
 
 set rtl_src   [collect_hdl $RTL_ROOT]
 set verif_src [collect_hdl $VERIF_ROOT]
-set tb_files  [lsort [glob -nocomplain -directory $VERIF_ROOT -type f $TB_PATTERN]]
+# 只认 HDL 测试平台(F5-03):tb_notes.txt / 备份 / 笔记不算 TB
+set tb_files {}
+foreach pat $TB_PATTERN {
+  foreach f [lsort [glob -nocomplain -directory $VERIF_ROOT -type f $pat]] {
+    lappend tb_files $f
+  }
+}
+set tb_files [lsort -unique $tb_files]
 
 if {[llength $rtl_src] == 0} {
   puts "\n\[ME\] ERROR: no HDL source found under rtl/"

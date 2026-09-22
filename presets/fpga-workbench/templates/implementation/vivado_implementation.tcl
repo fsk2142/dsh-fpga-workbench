@@ -40,4 +40,5 @@ write_bitstream -force $BITSTREAM_OUT
 if {![file isfile $BITSTREAM_OUT]} {
     error "bitstream was not created: $BITSTREAM_OUT"
 }
-puts "IMPLEMENTATION PASSED: $BITSTREAM_OUT"
+puts "IMPLEMENTATION_OUTPUT_GENERATED: $BITSTREAM_OUT"
+puts "DRC_AND_ARCHIVE_PENDING: run report_drc and copy bit/ltx into bit/ before calling project PASS (see fpga-project-impl)"

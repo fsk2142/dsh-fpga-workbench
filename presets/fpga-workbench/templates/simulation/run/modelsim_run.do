@@ -8,7 +8,7 @@
 # ModelSim 2020.4 does not reliably turn SystemVerilog $fatal into a non-zero
 # process exit code. Therefore the gate below checks Error/Fatal lines and the
 # exact ALL TESTS PASSED marker before it returns success.
-set TB_PATTERN    {tb_*}
+set TB_PATTERN    {tb_*.sv tb_*.v tb_*.vhd tb_*.vhdl}
 set TOP_OVERRIDE  {}
 set INI_OVERRIDE  {}
 set RESULT_LOG    {sim.log}
@@ -17,7 +17,14 @@ onbreak { resume }
 onerror { quit -f -code 1 }
 
 set VERIF_ROOT [file normalize [pwd]]
-set TB_FILE [lsort [glob -nocomplain -directory $VERIF_ROOT -type f $TB_PATTERN]]
+# 只认 HDL 测试平台(F5-03):tb_notes.txt / tb_*.md / *.bak 不算 TB
+set TB_FILE {}
+foreach pat $TB_PATTERN {
+  foreach f [lsort [glob -nocomplain -directory $VERIF_ROOT -type f $pat]] {
+    lappend TB_FILE $f
+  }
+}
+set TB_FILE [lsort -unique $TB_FILE]
 
 if {![file isdirectory work]} {
   puts "\n\[ME\] ERROR: local work/ library is missing - run the compile template first"

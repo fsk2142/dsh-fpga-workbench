@@ -74,6 +74,8 @@ ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里
 node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-compile
 node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run
 cd <模块根>/verif
+# 编译与运行**两步**都带上设置里的库映射(F5-06):路径见会话「库映射文件」
+# 例:$env:MODELSIM_INI = "C:\...\modelsim.ini"  —— 用完在同一 try/finally 里恢复
 & "<仿真器路径>" -c -do compile.do
 & "<仿真器路径>" -c -do run.do
 ```
@@ -133,7 +135,7 @@ try {
    那份,表现是"库突然全找不到"而那份 ini 单看没毛病 —— 先看有没有这个文件,再怀疑别的。
 
 **XPM 宏同属这条路**:`xpm_fifo_*` / `xpm_cdc_*` / `xpm_memory_*` 在 **`xpm`** 库里 ——
-`vlog -L xpm` / `vsim -L xpm`。本机的 `modelsim.ini`(路径见会话开头「本机 FPGA 工具链」的库映射项)
+`vlog -L xpm` / `vsim -L xpm`。本机的 `modelsim.ini`(**编译与运行都要**传给进程:`$env:MODELSIM_INI` 或 `.do` 里的 `INI_OVERRIDE`;路径见会话开头「本机 FPGA 工具链」的库映射项)
 `[Library]` 段里**通常已经有** `xpm = <…>/xpm` 这条,指向一份**早先编译好的**库:`vmap xpm`
 核一下,在就直接用,**不要重编**。只有"映射对、库也在、却仍报未定义(同上面
 `Module 'IBUF' is not defined` 那种)"这种硬问题,才退到**用原厂源码自己编一份** —— Vivado 安装

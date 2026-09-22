@@ -59,7 +59,8 @@ bit/<顶层>.ltx
 
 ## 判据
 
-- **PASS**:impl + bitstream 跑完,DRC 无必须处理的 Critical 问题,bit 已拷入 `bit/`;
+- **PASS**:impl + bitstream 跑完,DRC 无必须处理的 Critical 问题,bit 已拷入 `bit/`。
+  模板日志的 `IMPLEMENTATION_OUTPUT_GENERATED` 只说明工具跑完出了文件,**不是**工程 PASS
   资源与时序摘要拿得到
 - **FAIL**:实现 error;DRC 有必须处理项;布线失败或拥塞严重
 - **BLOCKED**:工程打不开 / 器件不对 / 约束或 IP 不齐跑不下去

@@ -1664,6 +1664,43 @@ check(
   "工程没有 src/rtl/ → 退出码 2"
 );
 
+// F5-02:仿真目录里的 helper 不是 TB —— 不得报「缺成功标记」;真正的 tb_* 仍严查
+{
+  const f5Sim = join(SANDBOX, `project-helper-${stamp}`);
+  mkdirSync(join(f5Sim, "src", "rtl"), { recursive: true });
+  mkdirSync(join(f5Sim, "sim"), { recursive: true });
+  writeFileSync(join(f5Sim, "src", "rtl", "good.sv"), goodRtl);
+  // helper:合规普通 HDL(完整头/小节/断言),但**不是 TB** —— 没有 ALL TESTS PASSED / err_cnt
+  writeFileSync(
+    join(f5Sim, "sim", "driver_helper.sv"),
+    goodRtl.replace(/module good/gu, "module driver_helper").replace(/good\.sv/gu, "driver_helper.sv")
+  );
+  writeFileSync(join(f5Sim, "sim", "tb_top.sv"), goodTb.replace(/tb_good/gu, "tb_top"));
+  const helperRun = runStdout("project-rtl-check.mjs", [f5Sim]);
+  check(
+    helperRun.code === 0 && helperRun.output.includes("driver_helper.sv"),
+    "仿真目录扫描到 helper(退出码 0)",
+    helperRun.output.slice(-200)
+  );
+  check(
+    !/driver_helper\.sv[\s\S]{0,240}(成功标记|ALL TESTS PASSED|err_cnt)/u.test(helperRun.output) &&
+      !helperRun.output.includes("FAIL  sim/driver_helper.sv") &&
+      !helperRun.output.includes("FAIL  src/sim/driver_helper.sv"),
+    "helper 不按 TB 规则报缺成功标记/err_cnt",
+    helperRun.output.slice(-400)
+  );
+  writeFileSync(
+    join(f5Sim, "sim", "tb_bad.sv"),
+    "# tb\nmodule tb_bad; initial $display(\"hi\"); endmodule\n"
+  );
+  const tbBad = runStdout("project-rtl-check.mjs", [f5Sim]);
+  check(
+    tbBad.code === 1 && /tb_bad\.sv/u.test(tbBad.output) && /ALL TESTS PASSED|成功标记/u.test(tbBad.output),
+    "真正 TB 缺成功标记仍然 FAIL",
+    tbBad.output.slice(-400)
+  );
+}
+
 // ── 端口类型 / 字面量 / 内部 wire:用户口径(2026-09-21)───────────────────────
 //
 // 三条都是**警告**(写法类,不拦门禁),但都要真的报出来;而且要躲开三个已知的误报来源:

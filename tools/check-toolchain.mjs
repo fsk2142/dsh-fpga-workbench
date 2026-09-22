@@ -320,7 +320,7 @@ check(/status\?\.tools|status\.tools/u.test(clientSource), "客户端从宿主�
 check(clientSource.includes('field.control === "select"'), "客户端会按 control 渲染下拉");
 check(clientSource.includes("field.options"), "下拉选项来自宿主");
 check(clientSource.includes("field.group"), "分组来自宿主");
-check(clientSource.includes('field.control === "hidden"'), "客户端不渲染隐藏字段(改名前的旧键)");
+check(clientSource.includes('field.control !== "hidden"'), "客户端不渲染隐藏字段(改名前的旧键)");
 // 说明里给确切入口名,并且分别挂在各自工具上。
 check(FIELDS.find((field) => field.key === "vivadoPath")?.hint.includes("vivado.bat"), "Vivado 说明写了确切入口 vivado.bat");
 check(FIELDS.find((field) => field.key === "quartusPath")?.hint.includes("quartus_sh.exe"), "Quartus 说明写了确切入口 quartus_sh.exe");
@@ -350,10 +350,10 @@ check(
   "改动先记在页面上并标出「有未保存的改动」,点保存才落地"
 );
 check(clientSource.includes("放弃改动"), "能丢弃未保存的改动(误改不用凭记忆打回原值)");
-check(
-  clientSource.includes("onToolChange(field.key, next, pathKey)"),
-  "换工具时联动换它管着的那条路径"
-);
+check(clientSource.includes("status?.sections") && clientSource.includes("status?.stages"), "客户端按宿主布局渲染三层设置");
+check(clientSource.includes("field.section") && clientSource.includes("field.stage"), "字段归属完全来自宿主元数据");
+check(!clientSource.includes("force.includes(entry.key)"), "切换环节工具不再强制清空路径");
+check(clientSource.includes('role: "tooltip"') && clientSource.includes('"aria-describedby"'), "长说明通过可访问问号提示显示");
 check(clientSource.includes("保存失败:"), "提交抛错时显示保存失败(否则用户以为已经生效)");
 check(
   clientSource.includes("路径不可用 —— ") && clientSource.includes("field.blankNote"),
@@ -368,17 +368,9 @@ check(
 check(clientSource.includes("预设同步失败"), "预设同步失败在设置页可见(否则只躺在日志里)");
 check(
   !clientSource.includes("检测本组工具") && clientSource.includes("detectNote"),
-  "没有「检测」按钮:检测在打开页面与换工具时自动跑,结论写在各自那一行下面"
+  "没有「检测」按钮:打开页面自动检测通用工具,结论写在各自那一行下面"
 );
-check(clientSource.includes("没检测到"), "选中的工具没找到路径时就地说明(不回声用户原来填的那条)");
-check(
-  clientSource.includes('option?.value === "none"') && clientSource.includes("不用这个工具"),
-  "选了「不用」的字段:不再检测、也不再显示未就绪"
-);
-check(
-  clientSource.includes("selectedOptionOf") && clientSource.includes("hit.option === option.value"),
-  "检测结果按**当前选中的工具**筛(未保存的换工具也算)"
-);
+check(clientSource.includes("没检测到"), "通用工具没检测到路径时就地说明");
 // "留空的后果"必须由宿主说:模板是"用自带那份"、库映射文件是"用安装目录那份"、运行时是"按 PATH 找"。
 // 客户端原来自己编一句「留空即用自带」—— 对后两类是错话,用户在设置页上实际看到了。
 check(
@@ -435,11 +427,6 @@ check(
   !clientSource.includes("webkitdirectory") && !clientSource.includes('createElement("input")'),
   "不再弹系统文件框(一律用页面内列表)"
 );
-check(
-  clientSource.includes("force.includes(entry.key)") && clientSource.includes("runDetect({ [selectKey]: option }"),
-  "换工具就去重跑检测并把那条路径**强制**跟着换(没检测到就清空)"
-);
-
 // ── 会话提示(只有本模式看得到) ──────────────────────────────────────────────
 //
 // 这一段是"用户填的路径真的被用起来"的落点:已就绪的路径与调用姿势原样交给 agent,

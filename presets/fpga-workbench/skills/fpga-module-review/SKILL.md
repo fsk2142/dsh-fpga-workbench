@@ -57,7 +57,7 @@ description: 审 FPGA 代码、方案或一套结论时用:审查 RTL 结构与�
 
 正文里用自然语言写同一件事(approved / changes requested / blocked)也可以,但那个词必须同时出现。
 
-工程级的审查报告写 `project/review.md`(同样不占目录)。
+工程级的审查报告写 `<用户指定工程目录>/doc/review.md`(同样不占独立目录)。
 
 发现要能一条条改掉。**不得写"整体感觉还行"** —— 那种结论没法执行,也没法复查。
 

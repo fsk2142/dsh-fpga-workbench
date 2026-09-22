@@ -275,7 +275,7 @@ for (const skill of skillNames) {
   );
 }
 
-// ── 级别划分清楚:模块 6 个 / 工程 9 个 ──────────────────────────────────────
+// ── 级别划分清楚:模块 5 个 / 工程 11 个 ─────────────────────────────────────
 // 模块级五个 = 四个环节(spec/rtl/verif/synth)+ 审查(按需能力,不占目录)
 const moduleSkills = skillNames.filter((name) => name.startsWith("fpga-module-"));
 const projectSkills = skillNames.filter((name) => name.startsWith("fpga-project-"));
@@ -284,15 +284,15 @@ check(
   `每个技能都能看出属于哪一级(没前缀的:${skillNames.filter((name) => !/^fpga-(module|project)-/u.test(name)).join("、") || "无"})`
 );
 check(moduleSkills.length === 5, `模块级 5 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
-check(projectSkills.length === 8, `工程级 8 个(实际 ${projectSkills.length}:${projectSkills.join("、")})`);
-// 工程级八篇都要有「前置」与「产物」两节(2026-09-19 与模块级对齐):前置条件不该散在正文里,
+check(projectSkills.length === 11, `工程级 11 个(实际 ${projectSkills.length}:${projectSkills.join("、")})`);
+// 工程级各篇都要有「前置」与「产物」两节:前置条件不该散在正文里,
 // 产物是这一环节的交付物。审计那一篇按用户口径删掉了(验证已经覆盖它),所以不在这里。
 for (const skill of projectSkills) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
   check(/^## 前置/mu.test(text), `${skill} 有「前置」一节`);
   check(/^## 产物/mu.test(text), `${skill} 有「产物」一节`);
-  // `module-*` 命令的参数是**模块根**,不是工作区根 —— 工程根下平铺着 project/ 与多个模块,
-  // 传工作区根只会扫到不相干的东西。实测踩过:integrate 技能原来就写着 `<工作区根>`。
+  // `module-*` 命令的参数是**模块根**,不是用户指定工程根 —— 两类根各有独立锚点与目录树,
+  // 把工程根传给模块命令只会扫到不相干的东西。
   const wrongModuleArg = /module-(?:rtl-check|verif-new|synth-new|rtl-new)\.mjs"?\s*<?工作区根/u.test(text);
   check(!wrongModuleArg, `${skill} 没有把工作区根当 module 命令的参数`);
 }
@@ -403,11 +403,12 @@ check(/flow\.md/u.test(specSkill), "模块级写明流程图单独存成 spec/fl
 check(/setup-scaffold\.mjs/u.test(specSkill), "模块级写明用自带脚本一次性建骨架");
 check(/--dry-run/u.test(specSkill), "模块级提示先 --dry-run 看一眼");
 const projectSpec = readFileSync(join(skillDir, "fpga-project-spec", "SKILL.md"), "utf8");
-check(/flow\.md/u.test(projectSpec), "工程级写明框图单独存成 project/spec/flow.md");
+check(/doc\/flow\.md/u.test(projectSpec), "工程级写明框图单独存成 doc/flow.md");
 check(/setup-scaffold\.mjs/u.test(projectSpec), "工程级写明用自带脚本建骨架");
 check(
-  /--kind project/u.test(projectSpec) && /--modules/u.test(projectSpec),
-  "工程级调用脚本时带上 --kind project 与 --modules(给每个模块建一套)"
+  /--kind project/u.test(projectSpec) && /<用户指定工程目录>/u.test(projectSpec) &&
+    /--modules[^\n]{0,40}(停用|拒绝|不能|不要)/u.test(projectSpec),
+  "工程级把用户指定目录直接作为根,带 --kind project,并明确拒绝旧 --modules"
 );
 check(existsSync(join(presetDir, "tools", "setup-scaffold.mjs")), "自带 setup-scaffold.mjs 确实在包里");
 // 模式规则的**唯一真相源**是包根 README 里标记的那一段:骨架(建模块/工程时)从那里抽出来落成
@@ -644,7 +645,7 @@ const VERDICT_SETS = {
   "fpga-module-synth": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-module-review": ["APPROVED", "CHANGES_REQUESTED", "BLOCKED"],
-  // 工程级八篇(2026-09-19 与模块级对齐时补齐):环节报告都用同一套五个词
+  // 工程级各篇环节报告都用同一套五个词
   "fpga-project-spec": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-project-integrate": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-project-constraints": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
@@ -653,6 +654,9 @@ const VERDICT_SETS = {
   "fpga-project-timing": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-project-board": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-project-release": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-rtl": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-lint": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
+  "fpga-project-synth": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
 };
 for (const [skill, allowed] of Object.entries(VERDICT_SETS)) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
@@ -686,9 +690,9 @@ for (const skill of skillNames.filter((name) => name.startsWith("fpga-project-")
 const integrateText = readFileSync(join(skillDir, "fpga-project-integrate", "SKILL.md"), "utf8");
 check(
   /模块从哪来|模块来源/u.test(integrateText) &&
-    /先问用户/u.test(integrateText) &&
-    /(整理|另写|自己写)[\s\S]{0,24}(一个)?(顶上|替代)/u.test(integrateText),
-  "集成技能写明:模块来源先问用户,不在集成时自己另写一个顶上"
+    /停止并报告/u.test(integrateText) &&
+    /(不要|不得)[\s\S]{0,24}(自己)?另写一个顶上/u.test(integrateText),
+  "集成技能写明:可复用模块缺失时停止并报告,不在集成时另写替代品"
 );
 // 验证环节的"没有测试平台"必须记 UNVERIFIED/NOT_APPLICABLE 二选一里正确的那一个:
 // 用户口径是"要验证功能却没平台 = 未验证",只有本来就无可验证行为的模块才算不适用。
@@ -914,14 +918,17 @@ check(
   "rtl 技能写明用 module-rtl-new.mjs 复制模板,且只替模块名"
 );
 // 路径口径统一:IP 实体写 rtl/ip/、仿真模型写 verif/ —— 不许再出现裸的 `ip/` 路径
-const bareIp = skillNames.filter((skill) => /`ip\//u.test(readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")));
-check(bareIp.length === 0, `技能里没有裸的 \`ip/\` 路径(应写 rtl/ip/ 或 verif/;实际 ${bareIp.join("、") || "无"})`);
+const bareIp = moduleSkills.filter((skill) => /`ip\//u.test(readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")));
+check(bareIp.length === 0, `模块技能里没有裸的 \`ip/\` 路径(应写 rtl/ip/ 或 verif/;实际 ${bareIp.join("、") || "无"})`);
 // 技能里写的命令**名字必须自带级别前缀**(module- / project-),两级共用的不加 ——
 // 用户口径:靠名字防误用,而不是靠路径(只抄命令、没抄路径时也抄不错)。
 const moduleTools = readdirSync(join(presetDir, "tools", "module"), { withFileTypes: true })
   .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
   .map((entry) => entry.name);
-const knownTools = new Set([...moduleTools, "setup-scaffold.mjs"]);
+const projectTools = readdirSync(join(presetDir, "tools", "project"), { withFileTypes: true })
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
+  .map((entry) => entry.name);
+const knownTools = new Set([...moduleTools, ...projectTools, "setup-scaffold.mjs"]);
 const levelProblems = [];
 for (const skill of skillNames) {
   const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");

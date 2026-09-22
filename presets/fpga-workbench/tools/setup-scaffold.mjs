@@ -1,4 +1,4 @@
-// 规格环节:一次性建立模块 / 工程的骨架(阶段文件夹 + 锚点)。
+// 规格环节:在用户指定目录中一次性建立模块 / 工程骨架(阶段文件夹 + 锚点)。
 //
 // 为什么要有它:目录名与个数是固定的,但手工逐个建立容易漏(漏了后面的技能会去找不存在的目录),
 // 不同会话建出来的也不一致。这把"建骨架"变成一条命令:
@@ -19,14 +19,14 @@
 // (建了哪些目录 / 写了哪些文件 / 留下了哪些快照)挂到错误信息上原样列出来,由使用者自己处置。
 //
 // 用法:
-//   node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]
+//   node setup-scaffold.mjs <用户指定目录> [--kind module|project] [--force] [--dry-run]
 // 退出码:0 成功 / 1 出错(落盘失败:已经发生的动作会原样列出来)/ 2 参数不对,或目标经
 //         junction / 符号链接逃出了根目录
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { moduleNameError, realEscape, writeFileRecoverable } from "./lib/stamp.mjs";
+import { realEscape, writeFileRecoverable } from "./lib/stamp.mjs";
 
 /**
  * 本模式的工作区指令文件名。
@@ -79,14 +79,19 @@ export function readModeRules() {
  */
 export const MODULE_STAGES = ["spec", "rtl", "verif", "synth"];
 
-/** 工程级的环节目录(位于 `<工作区根>/project/` 下)。 */
-export const PROJECT_STAGES = ["spec", "integrate", "constraints", "syssim", "impl", "timing", "board", "release"];
+/**
+ * 工程级目录。传入的路径本身就是工程根，不再自动套“工作区 / 工程名”这一层。
+ * `doc/` 放工程级报告与 files.md；`src/sim/` 是专用模块简单仿真，根 `sim/` 是工程级仿真。
+ */
+export const PROJECT_DIRS = [
+  "doc", "sch", "prj", "src", join("src", "rtl"), join("src", "sim"),
+  "ip", "sim", "xdc", "bit"
+];
 
 /**
  * 算出要建哪些目录、要写哪些锚点(不落盘)。
- * @param root - 根目录:模块根,或工程的工作区根。
- * @param options - `{ kind, modules }`。`kind` 为 `module` 或 `project`;工程级可给 `modules`
- *   (每个模块建一套模块级骨架,模块目录取根目录下的同名子目录)。
+ * @param root - 用户指定目录:模块模式下就是模块根,工程模式下就是工程根。
+ * @param options - `{ kind }`。`kind` 为 `module` 或 `project`。
  * @returns `{ dirs, anchors, instruction, root }`;`anchors` 每项 `{ file, value }`;
  *   `instruction` 是工作区指令文件的绝对路径(两级都落一份,模块根或工程根);
  *   `root` 原样带回根目录 —— 落盘时的**真实路径边界**以它为基准({@link applyScaffold})。
@@ -106,20 +111,12 @@ export function planScaffold(root, options = {}) {
   };
 
   if (kind === "project") {
-    const project = join(root, "project");
-    for (const stage of PROJECT_STAGES) dirs.push(join(project, stage));
-    dirs.push(join(project, "spec", "explore"));
+    for (const rel of PROJECT_DIRS) dirs.push(join(root, rel));
     anchors.push({
       file: join(root, ".fpga-workbench.json"),
-      value: { kind: "project", spec: "project/spec/spec.md" }
+      value: { kind: "project", spec: "doc/spec.md" }
     });
-    for (const name of options.modules ?? []) moduleAt(join(root, name));
   } else {
-    // 第五轮 3.6:`--modules` 在 module 模式下**不适用**(那是一次建多个模块,属工程骨架)——
-    // 以前静默忽略,用户以为自己指定了却没生效。说一句,别让人猜。
-    if ((options.modules ?? []).length > 0) {
-      console.log("(忽略 --modules:--kind module 只建当前根这一个模块的骨架;要一次建多个请用 --kind project)");
-    }
     moduleAt(root);
   }
 
@@ -359,7 +356,7 @@ const VALUE_FLAGS = ["--kind", "--modules"];
  * 同一条规矩),其余一律算用法错误。
  *
  * 为什么不能"随便挑一个不像选项的当根目录":实测 `--kind project <根>` 会把选项的值(`project`)
- * 当成根目录,于是在**当前目录**下建出一整套 `./project/` 还退 0 —— 用户以为建在了自己给的根上。
+ * 当成根目录,于是在**当前目录**下建出一整套工程树还退 0 —— 用户以为建在了自己给的根上。
  * 落点只能来自明确写在最前面的那个参数:少给、写反都报错,绝不猜、也绝不落到别处。
  *
  * @param argv - 去掉 node 与脚本路径后的参数。
@@ -385,10 +382,14 @@ function parseArgs(argv) {
       : undefined;
   const root = positional[0];
   const kind = argv.includes("--kind") ? argv[argv.indexOf("--kind") + 1] : "module";
-  const modules = argv.includes("--modules")
-    ? (argv[argv.indexOf("--modules") + 1] ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "")
-    : [];
-  return { root, error, kind, modules, force: argv.includes("--force"), dryRun: argv.includes("--dry-run") };
+  return {
+    root,
+    error,
+    kind,
+    modulesOption: argv.includes("--modules"),
+    force: argv.includes("--force"),
+    dryRun: argv.includes("--dry-run")
+  };
 }
 
 /**
@@ -411,29 +412,26 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.error !== undefined || args.root === undefined) {
     if (args.error !== undefined) console.error(args.error);
-    console.error("用法:node setup-scaffold.mjs <根目录> [--kind module|project] [--modules A,B] [--force] [--dry-run]");
-    console.error("根目录写在最前面;写在选项后面的话,选项的值会被当成根目录(建到别处去)。");
+    console.error("用法:node setup-scaffold.mjs <用户指定目录> [--kind module|project] [--force] [--dry-run]");
+    console.error("用户指定目录写在最前面；这个路径本身就是模块根或工程根，不会再自动套一层目录。");
     return 2;
   }
   if (args.kind !== "module" && args.kind !== "project") {
     console.error(`--kind 只接受 module 或 project(收到 ${args.kind})`);
     return 2;
   }
-  for (const name of args.modules) {
-    const reason = moduleNameError(name);
-    if (reason === undefined) continue;
-    console.error(`--modules 里的模块名不合法:${JSON.stringify(name)} —— ${reason}`);
-    console.error("模块名只能是根目录下的**单个目录段**(会在 `<根>/<模块名>/` 建一套模块骨架):");
-    console.error("  不能带 `/` 或 `\\`、不能是 `.` / `..`、不能带盘符或冒号、不能是绝对路径。");
+  if (args.modulesOption) {
+    console.error("--modules 已停用：工程骨架不会自动创建模块子目录。");
+    console.error("请把用户指定目录作为工程根；工程 RTL 统一平铺在 src/rtl/，专用模块简单仿真放 src/sim/。");
     return 2;
   }
 
   const root = args.root;
-  const plan = planScaffold(root, { kind: args.kind, modules: args.modules });
+  const plan = planScaffold(root, { kind: args.kind });
 
   // 一个根只能有一个锚点,而它的 `kind` 决定整套流程怎么找环节目录。
   // 拿 module 的根去建工程(或反过来)的话,脚本只会"锚点已存在,未覆盖"地把目录建一半:
-  // project/ 有了、锚点还是 kind: module —— 工程级技能照样找不到工程。
+  // 工程目录建了一半、锚点还是 kind: module —— 工程级技能照样找不到工程。
   // 真事:实跑集成场景时这么踩过。所以这里明说冲突、给出迁移办法,而不是留个半吊子状态。
   // `--force` 是**同类型**的重写开关(重写锚点与工作区指令),不跨类型覆盖 —— 所以这条冲突是
   // 硬拒绝,提示文字也不再说"再加 --force 重建"(说了也到不了这里)。
@@ -448,8 +446,8 @@ function main() {
     if (existing.kind !== args.kind) {
       console.error(`根锚点的类型与本次不一致:${rootAnchor}`);
       console.error(`  锚点写的是 kind: ${existing.kind},本次要建 kind: ${args.kind}`);
-      console.error("  一个根只能属于一种:模块根放模块自己的 spec/rtl/verif/synth,工程根放 project/ 与各模块子目录。");
-      console.error(`  要建工程:先把现有模块目录(含它自己的锚点)整体移进 <根>/${args.modules[0] ?? "<模块名>"}/,根上只留工程级的,再跑一次本命令 —— 不要用 --force 覆盖,那会丢掉锚点里已有的内容。`);
+      console.error("  一个根只能属于一种：模块根放 spec/rtl/verif/synth；工程根放 doc/sch/prj/src/ip/sim/xdc/bit。");
+      console.error("  要建工程：另选一个工程目录再跑；这个参数就是工程根，不要在已有模块根上强行改类型。");
       console.error("  要重建:把根上的锚点移到一边(改名也算)再跑本命令 —— --force 只重写类型一致的锚点,不跨类型覆盖。");
       return 1;
     }

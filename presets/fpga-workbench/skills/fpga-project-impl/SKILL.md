@@ -1,62 +1,97 @@
 ---
 name: fpga-project-impl
-description: 跑 FPGA 工程的实现与出 bitstream 时用:布局布线(implementation)、跑 DRC、看资源占用与实现后的时序摘要、生成 bit/bin;也用于解释实现失败、布线拥塞、DRC 报错。
+description: 在 FPGA 工程做布局布线与出 bitstream 时用:synth 之后跑 impl、DRC、出 bit/ltx,并拷进 bit/ 覆盖归档。综合在 fpga-project-synth。结果写 doc/impl.md。
 ---
 
-# project-impl:实现与 bitstream
+# project-impl:布局布线与 bitstream
 
-**实现报错可以就地排查**:直接看日志定位、改约束或改代码重跑 —— 其间不必回头把每个模块
-环节重跑一遍。只有**正式出 bitstream 验收**时,才要求前置那些东西确实成立。
+**从综合后接着做**(综合见 `fpga-project-synth`):布局布线(implementation)、DRC、出 bit/ltx。
+
+**实现报错可以就地排查**:看日志定位、改约束或改代码重跑 —— 不必把每个模块环节重跑一遍。
+只有**正式出 bitstream 验收**时,才要求前置确实成立。
+
+| 东西 | 在哪 |
+|---|---|
+| 工程 | `prj/`(工具地盘;源是引用 `src/` `ip/` `xdc/`) |
+| bit 归档 | **`bit/`**(覆盖、不改名) |
+| 结论 | `doc/impl.md` |
+
+**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
 
 ## 前置(正式出 bitstream 时)
 
-- 集成完成(`project/integrate/`),约束已经核过(`project/constraints/`)
-- 模块级的 `rtl`(机械检查)与 `verif`(测试平台 + 独立比对)都过了 —— 实现一次要几十分钟,
+- **综合已过**(`doc/synth.md`),且综合后时序**先看过一眼**(见 `fpga-project-synth`)
+- **`rtl` / `sim` / `xdc` 尽量完好**(次序不限;见 `fpga-project-spec`)
+- 集成完成(`doc/integrate.md`),约束核过(`doc/constraints.md`)
+- **可复用模块**模块级 `rtl` 与 `verif` 是 `PASS` 或有据 `NOT_APPLICABLE` —— 实现一次几十分钟,
   不得拿它当验证手段
+- **专用模块**在 `src/sim/` 有 `tb_*` 且跑过一次(标准见 `fpga-project-spec`)
 
 ## 本环节要跑的命令
 
-GUI 操作亦可,但**批处理才留下可复现的命令原文**:
+GUI 亦可,但**批处理才留下可复现命令原文**:
 
 ```tcl
-open_project <工程>
+open_project prj/<工程>
 launch_runs impl_1 -to_step write_bitstream -jobs <N>
 wait_on_run impl_1
 ```
 
-跑完后确认 run 状态是 `write_bitstream Complete`,再取 bit:
+确认 `write_bitstream Complete` 后取:
 
 ```
-<工程>.runs/impl_1/<顶层>.bit
+prj/<工程>.runs/impl_1/<顶层>.bit
+prj/<工程>.runs/impl_1/<顶层>.ltx    # 有 ILA/VIO 时
 ```
 
-需要 bin 或固化文件时:`write_bitstream -force -bin_file`、`write_cfgmem`(见上板那一环节)。
+需要 bin / 固化文件:`write_bitstream -force -bin_file`、`write_cfgmem`(见 `fpga-project-board`)。
+
+### 归档到 `bit/`
+
+**每次实现成功后**,把 bit 与 ltx **拷到 `bit/`**,覆盖旧文件、**不改名字**(约定的唯一覆盖点):
+
+```
+bit/<顶层>.bit
+bit/<顶层>.ltx
+```
+
+上板、发布以 `bit/` 为准。拷完在 `doc/impl.md` 写明来源 run 与时间,并更新 `doc/files.md`。
 
 ## 判据
 
-- **PASS**:实现跑完,DRC 没有 Critical Warning 级别的报错,bit 文件产出;
-  资源占用与时序摘要都拿得到
-- **FAIL**:实现报 error;DRC 有必须处理项;布线失败或拥塞严重
-- **BLOCKED**:工程打不开 / 器件没选对 / 约束缺失导致跑不下去
+- **PASS**:impl + bitstream 跑完,DRC 无必须处理的 Critical 问题,bit 已拷入 `bit/`;
+  资源与时序摘要拿得到
+- **FAIL**:实现 error;DRC 有必须处理项;布线失败或拥塞严重
+- **BLOCKED**:工程打不开 / 器件不对 / 约束或 IP 不齐跑不下去
+- **UNVERIFIED**:没跑完 / 没看日志
 - **NOT_APPLICABLE**:这次不需要 bitstream
 
-**本环节不判定时序是否满足** —— 时序判定在 `fpga-project-timing`。这里只负责
-"实现跑出来了、资源多少、bit 在哪"。
+判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
+
+**本环节不判定时序是否满足** —— 时序判定在 `fpga-project-timing`。
 
 ## 产物
 
-写 `<工作区根>/project/impl/impl.md`:
+写 `<用户指定工程目录>/doc/impl.md`:
 
-- 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ 跑过的命令原文(或 GUI 里点的那几步)
-  (判定词的含义见 `fpga-module-verif` 的**状态表**,唯一权威)
-- 用的 run 名与策略、耗时
-- 资源占用(LUT / FF / BRAM / DSP / IO),与模块级综合时的估算差多少
-- 实现后时序摘要的**文件名**(不做判定,判定在下游)
-- **bit 文件的完整路径**
-- DRC 报出来的项与处理
+- 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ 命令原文(或 GUI 步骤)
+- run 名、策略、耗时
+- 资源占用
+- 实现后时序摘要**路径**(不判定)
+- **bit 路径**:`prj/` 下 run 里的 + **`bit/` 归档那份**
+- DRC 项与处理
+- 同步 `doc/files.md`
 
 ## 不要做的事
 
-- **不得手改 `.runs/` 里的东西** —— 那是 Vivado 的地盘,下次跑就没了
-- 不得把工程目录塞进源码管理;要复现就用 `write_project_tcl` 导出工程脚本
-- 实现过了不代表功能对:它只证明"能布下去"
+- 不手改 `prj/` 里 `.runs/` / `.cache/`
+- 不把 `prj/` 整个塞进源码管理(要复现用 `write_project_tcl`)
+- 实现过了 ≠ 功能对(只证明能布下去)
+
+## 出问题往哪跳
+
+| 现象 | 去哪 |
+|---|---|
+| 布线拥塞 / 结构问题 | `fpga-project-rtl` |
+| 约束过紧/管脚 | `fpga-project-constraints` |
+| 综合就挂了 | `fpga-project-synth` |

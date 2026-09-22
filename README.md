@@ -95,10 +95,10 @@ presets/fpga-workbench/
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
     templates/                九类分类模板:RTL、约束、Testbench、仿真编译/运行、验证、
-                              综合、实现、下载；根目录旧六份模板只保留兼容用途
+                              综合、实现、下载；不再保留旧的平面模板副本
     tools/                    自带命令,**按级别分目录**:module/ 只放模块级、project/ 只放工程级、
                               顶层是两级共用(setup-scaffold.mjs)、lib/ 是内部模块(不是命令)
-tools/                        8 个自检 + install.mjs + 依赖安全/锁文件比对
+tools/                        分层自检 + install/sync-installed + 依赖安全/锁文件比对
 ```
 
 ## 自带命令:按级别分目录,按环节分命令
@@ -125,12 +125,13 @@ tools/                        8 个自检 + install.mjs + 依赖安全/锁文件
 
 | 级别 | 环节 | 命令 | 干什么 | 退出码 |
 |---|---|---|---|---|
-| 两级共用 | 规格 | `node presets/fpga-workbench/tools/setup-scaffold.mjs <根目录> [--kind module\|project] [--modules A,B] [--force] [--dry-run]` | 一次建好环节目录骨架 + 锚点 `.fpga-workbench.json`(幂等;只建目录,不生成空报告) | 0 成功 / 1 出错 / 2 参数不对 |
+| 两级共用 | 规格 | `node presets/fpga-workbench/tools/setup-scaffold.mjs <用户指定目录> [--kind module\|project] [--force] [--dry-run]` | 传入目录本身就是模块根或工程根；一次建好骨架 + 锚点 `.fpga-workbench.json`(幂等；`--modules` 已停用) | 0 成功 / 1 出错 / 2 参数不对 |
 | 模块级 | RTL | `node presets/fpga-workbench/tools/module/module-rtl-new.mjs <模块根> <模块名> --template <RTL 模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起 RTL 文件:复制模板、**只替模块名**,其余内容原样保留;默认落 `rtl/<模块名>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 | 模块级 | RTL | `node presets/fpga-workbench/tools/module/module-rtl-check.mjs <模块目录>` | RTL 机械规范:文件头 / 九个小节块 / 端口类型 / 复位极性 / always_ff / end-else / 断言 / 测试平台自检 / Tab / 行尾 / 代码行非英文 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-new.mjs <模块根> <模块名> --template <测试平台模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起测试平台;默认落 `verif/tb_<模块名下划线形式>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 | 模块级 | 综合 | `node presets/fpga-workbench/tools/module/module-synth-new.mjs <模块根> <模块名> --template <约束模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起约束文件;默认落 `synth/<模块名>.xdc` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 | 模块级 | 验收 | `node presets/fpga-workbench/tools/module/module-report-check.mjs <模块目录> [--json] [--record]` | 核报告引用的**证据路径是否真的在**:`spec/spec.md` 的 AC 行声明的证据位置 + `verif/*.md` / `synth/*.md` 引用的路径(**只验存在与摘要,不判内容**;行号后缀摘掉再核,可再生目录 `work/` 缺失不判错);`--record` 把当前依据的 sha256 摘要写进报告,之后依据内容变了就告警 | 0 都在(**空结果** `NO_REPORTS` / `NO_EVIDENCE` 也退 0 —— 判“有没有证据”看输出分类,别只看退出码)/ 1 有引用了却不存在的路径或越界(junction 真实落点也算),或 `--record` 时依据内容已变且未加 `--accept-changed` / 2 用法问题 |
+| 工程级 | RTL/lint | `node presets/fpga-workbench/tools/project/project-rtl-check.mjs <用户指定工程目录> [--json]` | 扫 `src/rtl/`、`src/sim/` 与根 `sim/`；工程 RTL 用设计规则，仿真文件用测试平台规则 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
 
 另外两条规则与旧包一致,不要自行加严:
 
@@ -171,8 +172,8 @@ RTL 的文件头、九个小节块、端口对齐这些**格式**都是各自的
 - 同类型模板共用一座库,但模块和工程保存各自的选择。例如模块 RTL 与工程主工具都从 `rtl/` 取候选,
   仍可各选不同的一份。留空表示使用与当前工具适配的内置默认模板；已经明确选择的模板如果消失,
   会保留原选择并报警,不会静默换成另一份。
-- 根目录原有的 `rtl.sv`、`tb.sv`、`constraints.xdc`、`run.do`、`run_synth.tcl`、`comp.py`
-  仅保留给旧设置与旧命令兼容；新的能力卡不会把它们当作分类模板扫描。
+- 旧的平面模板 `rtl.sv`、`tb.sv`、`constraints.xdc`、`run.do`、`run_synth.tcl`、`comp.py`
+  已移除。旧设置中的这些路径只在迁移时映射到对应的分类内置模板，不再依赖旧文件继续存在。
 
 这样换一套模板 = 换写法规范,技能一个字都不用改。
 
@@ -307,7 +308,7 @@ FPGA 工具链的信息与警告,与"不影响正常会话"冲突。所以工具
    必须先取得确认。
 9. **复位与事件沿以实际工程为准**:模板默认可以用高有效复位(以及模板指定的时序风格),
    **已有工程按它实际的接口与项目约定来**;要改复位极性或事件沿,必须先说明理由并取得确认。
-10. **长任务的结论与证据落到文件里**:模块级写模块自己的环节目录,工程级写 `project/`;会话会被
+10. **长任务的结论与证据落到文件里**:模块级写模块自己的环节目录,工程级统一写工程根的 `doc/`;会话会被
     压缩,文件不会。结果文件保留 `结论:` 那一行;判定词(`PASS`/`FAIL`/`BLOCKED`/`UNVERIFIED`/
     `NOT_APPLICABLE`)的含意见验证技能 `fpga-module-verif` 的那张状态表(唯一权威)。
 <!-- fpga-mode-rules:end -->
@@ -402,22 +403,42 @@ profile 用 `DSH_PROFILE_DIR`;那个目录不存在时记 **SKIP** 并打印实�
 
   早期雏形 `fpga-module-flow` 已删除(它的产物路径是当初拍定的、已被这些技能取代;
   Git 历史里能翻到)。
-- ✅ **工程级流程**(8 个技能,`fpga-project-*`):**早期集成随时可做**(搭骨架、试接口、
+- ✅ **工程级能力**(11 个技能,`fpga-project-*`):**早期集成随时可做**(搭骨架、试接口、
   定位集成问题,把未验证的模块标注清楚);**正式集成验收**才要求相关模块的模块级结论齐。
+
+  用户传给 `setup-scaffold.mjs --kind project` 的目录**本身就是工程根**,不会在工作区下再套一层:
+
+  ```text
+  <用户指定工程目录>/
+  ├─ .fpga-workbench.json
+  ├─ doc/          # 工程级报告 + files.md
+  ├─ sch/          # 原理图、手册
+  ├─ prj/          # Vivado / Quartus 工程（工具地盘）
+  ├─ src/
+  │  ├─ rtl/       # 所有 RTL 平铺
+  │  └─ sim/       # 专用模块的简单 sim（不算工程证据）
+  ├─ ip/
+  ├─ sim/          # 工程级仿真证据，与 src/sim/ 不同
+  ├─ xdc/
+  └─ bit/
+  ```
 
   | 技能 | 干什么 | 结果落在哪 |
   |---|---|---|
-  | `fpga-project-spec` | 工程需求 + 架构 + 模块清单表 + 器件工程选择 + IP 策略 | `project/spec/spec.md` |
-  | `fpga-project-integrate` | 顶层集成:时钟复位分配、接口对接、加进工程 | `project/integrate/` |
-  | `fpga-project-constraints` | 约束与管脚:对原理图逐条核、IO 电平、时序例外写理由 | `project/constraints/` |
-  | `fpga-project-syssim` | 系统级仿真(可选,不适用就记 NOT_APPLICABLE) | `project/syssim/` |
-  | `fpga-project-impl` | 布局布线 + DRC + bitstream | `project/impl/` |
-  | `fpga-project-timing` | **post-route** 时序(与模块级 post-synth 不同) | `project/timing/` |
-  | `fpga-project-board` | 上板:下载(看 DONE / readback 回读)、ILA/VIO、回读数据比对、固化 Flash | `project/board/` |
-  | `fpga-project-release` | 发布归档:判据是"照着归档能重建同一版设计"(不是 bit 逐字节相同) | `project/release/` |
+  | `fpga-project-spec` | 工程需求 + 架构 + 模块清单表 + 器件工程选择 + IP 策略 | `doc/spec.md` + `doc/flow.md` |
+  | `fpga-project-rtl` | 工程专用 RTL、顶层、IP/BD 与简单 sim | `src/rtl/`、`ip/`、`src/sim/`；结论 `doc/rtl.md` |
+  | `fpga-project-lint` | 工程 RTL 与仿真文件的机械/厂商静态检查 | `doc/lint.md` |
+  | `fpga-project-integrate` | 顶层集成:时钟复位分配、接口对接、加入厂商工程 | `doc/integrate.md` |
+  | `fpga-project-constraints` | 约束与管脚:对原理图逐条核、IO 电平、时序例外写理由 | `xdc/` + `doc/constraints.md` |
+  | `fpga-project-syssim` | 工程级仿真；只从已就绪工具中使用设置所选仿真器 | `sim/` + `doc/syssim.md` |
+  | `fpga-project-synth` | 工程综合、资源与综合后时序摘要 | `prj/` + `doc/synth.md` |
+  | `fpga-project-impl` | 布局布线 + DRC + bitstream | `prj/`、`bit/` + `doc/impl.md` |
+  | `fpga-project-timing` | **post-route** 时序(与模块级 post-synth 不同) | `doc/timing.md` |
+  | `fpga-project-board` | 上板:下载、ILA/VIO、回读数据比对、固化 Flash | `bit/` + `doc/board.md` |
+  | `fpga-project-release` | 发布归档:判据是"照着归档能重建同一版设计" | `doc/release.md` |
 
-  工程级阶段文件夹统一在 `project/` 下——模块级与工程级都有 `spec`/`timing`,平铺会撞名。
-- ✅ 模板:九类分类模板共用一座可选模板库,模块与工程能力卡可以分别选择其中不同的一份；旧六份平面模板只保留兼容
+  这些是可反复跳转的工程能力,不是编号流水线；工程报告平铺在 `doc/`,工具生成内容留在 `prj/`。
+- ✅ 模板:九类分类模板共用一座可选模板库,模块与工程能力卡可以分别选择其中不同的一份；旧六份平面模板已移除
 - ⬜ 更强的能力接入:把某些阶段做成**这个模式能直接调用的工具**(由插件起进程)。
   现在命令仍由 agent 用 shell 工具跑 —— 走沙箱、可见、可中断;真做成工具就得接 subprocess
   服务并自己处理超时与日志

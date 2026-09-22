@@ -32,7 +32,7 @@ import { TEMP_GRACE_MS, listTempLeftovers } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
-// 级别落到目录上:模块级命令在 tools/module/(工程级的以后放 tools/project/)
+// 级别落到目录上:模块级命令在 tools/module/,工程级命令在 tools/project/
 const MODULE_TOOLS = join(TOOLS, "module");
 const TEMPLATES = join(ROOT, "presets", "fpga-workbench", "templates");
 const SANDBOX = join(ROOT, ".tmp", `fpga-tools-check-${String(process.pid)}`);
@@ -179,22 +179,29 @@ check(
 );
 
 // ── 自带模板必须过自己的检查器 ──────────────────────────────────────────────
-const templateRtl = blocking(join(TEMPLATES, "rtl.sv"), false);
+const templateRtl = blocking(join(TEMPLATES, "rtl", "systemverilog_module.sv"), false);
 check(templateRtl.length === 0, "自带 RTL 模板过检查器", templateRtl.map((i) => i.message).join("; "));
-const templateTb = blocking(join(TEMPLATES, "tb.sv"), true);
+const templateTb = blocking(join(TEMPLATES, "simulation", "testbench", "systemverilog_testbench.sv"), true);
 check(templateTb.length === 0, "自带测试平台模板过检查器", templateTb.map((i) => i.message).join("; "));
 
-// 新设置页扫描分类模板；根目录六份仍留给旧技能/生成工具兼容，二者要同时可用。
+// 分类模板是唯一来源；旧的六份平铺模板不得继续存在，否则技能/工具迟早又会走回旧入口。
+const retiredFlatTemplates = ["rtl.sv", "tb.sv", "constraints.xdc", "comp.py", "run_synth.tcl", "run.do"];
+check(
+  retiredFlatTemplates.every((name) => !existsSync(join(TEMPLATES, name))),
+  "旧的六份平铺模板已经退出，只保留分类模板",
+  retiredFlatTemplates.filter((name) => existsSync(join(TEMPLATES, name))).join("、")
+);
+
 const categorizedTemplates = {
-  rtl: join(TEMPLATES, "rtl", "systemverilog-module.sv"),
-  constraints: join(TEMPLATES, "constraints", "vivado-xdc.xdc"),
-  verification: join(TEMPLATES, "verification", "python-data-compare.py"),
-  testbench: join(TEMPLATES, "simulation", "testbench", "systemverilog-testbench.sv"),
-  compile: join(TEMPLATES, "simulation", "compile", "modelsim-compile.do"),
-  run: join(TEMPLATES, "simulation", "run", "modelsim-run.do"),
-  synthesis: join(TEMPLATES, "synthesis", "vivado-synthesis.tcl"),
-  implementation: join(TEMPLATES, "implementation", "vivado-implementation.tcl"),
-  programming: join(TEMPLATES, "programming", "vivado-program.tcl")
+  rtl: join(TEMPLATES, "rtl", "systemverilog_module.sv"),
+  constraints: join(TEMPLATES, "constraints", "vivado_xdc.xdc"),
+  verification: join(TEMPLATES, "verification", "python_data_verification.py"),
+  testbench: join(TEMPLATES, "simulation", "testbench", "systemverilog_testbench.sv"),
+  compile: join(TEMPLATES, "simulation", "compile", "modelsim_compile.do"),
+  run: join(TEMPLATES, "simulation", "run", "modelsim_run.do"),
+  synthesis: join(TEMPLATES, "synthesis", "vivado_synthesis.tcl"),
+  implementation: join(TEMPLATES, "implementation", "vivado_implementation.tcl"),
+  programming: join(TEMPLATES, "programming", "vivado_program.tcl")
 };
 check(
   Object.values(categorizedTemplates).every((path) => existsSync(path)),
@@ -218,7 +225,8 @@ const programmingTemplate = executableTcl(categorizedTemplates.programming);
 check(/\bvlog\b/u.test(compileTemplate) && !/\bvsim\b|\brun\s+-all\b/u.test(compileTemplate), "ModelSim 编译模板只编译，不启动仿真");
 check(/\bvsim\b/u.test(runTemplate) && /\brun\s+-all\b/u.test(runTemplate) && !/\bvlog\b|\bvcom\b/u.test(runTemplate), "ModelSim 运行模板只加载与运行，不重新编译");
 check(
-  /\bsynth_design\b/u.test(synthesisTemplate) && !/\bplace_design\b|\broute_design\b|\bwrite_bitstream\b/u.test(synthesisTemplate),
+  (/\bsynth_design\b/u.test(synthesisTemplate) || /launch_runs\s+synth_1/u.test(synthesisTemplate)) &&
+    !/\bplace_design\b|\broute_design\b|\bwrite_bitstream\b|launch_runs\s+impl_1/u.test(synthesisTemplate),
   "Vivado 综合模板在综合后停止"
 );
 check(
@@ -233,7 +241,7 @@ check(
 );
 check(
   [compileTemplate, runTemplate, synthesisTemplate, implementationTemplate, programmingTemplate]
-    .every((source) => /\berror\b/u.test(source)),
+    .every((source) => /\berror\b/iu.test(source)),
   "分类脚本缺少必需事实时都会明确失败"
 );
 
@@ -332,22 +340,32 @@ applyScaffold(modulePlan, { force: true });
 check(readFileSync(anchorFile, "utf8").includes("用户加的字段") === false, "--force 才重建锚点");
 check(readFileSync(instructionPath, "utf8") === rulesText, "--force 才重写工作区指令");
 
-// 工程级 + 每个模块一套
+// 工程级：调用者给出的路径本身就是工程根，不再套“工作区/工程名”，也不自动创建模块目录。
 const scaffoldPrj = join(SANDBOX, `scaffold-prj-${stamp}`);
-const projectPlan = planScaffold(scaffoldPrj, { kind: "project", modules: ["uart", "ddr"] });
-check(projectPlan.anchors.length === 3, `工程 + 2 模块 → 3 个锚点(实际 ${projectPlan.anchors.length})`);
+const projectPlan = planScaffold(scaffoldPrj, { kind: "project" });
+const expectedProjectDirs = [
+  "doc", "sch", "prj", "src", join("src", "rtl"), join("src", "sim"), "ip", "sim", "xdc", "bit"
+].map((rel) => join(scaffoldPrj, rel));
+check(projectPlan.anchors.length === 1, `工程根只有 1 个锚点(实际 ${projectPlan.anchors.length})`);
 check(
-  projectPlan.anchors[0].value.kind === "project" && projectPlan.anchors[0].value.spec === "project/spec/spec.md",
-  "工程锚点写 kind: project 且指向 project/spec/spec.md"
+  projectPlan.anchors[0].file === join(scaffoldPrj, ".fpga-workbench.json") &&
+    projectPlan.anchors[0].value.kind === "project" && projectPlan.anchors[0].value.spec === "doc/spec.md",
+  "工程锚点直接写在用户指定目录，spec 指向 doc/spec.md"
 );
-check(projectPlan.dirs.some((dir) => dir.endsWith(join("project", "board"))), "建了工程级的 board/");
 check(
-  projectPlan.dirs.some((dir) => dir.endsWith(join("uart", "verif"))) && projectPlan.dirs.some((dir) => dir.endsWith(join("ddr", "synth"))),
-  "每个模块各自一套模块级文件夹"
+  projectPlan.dirs.length === expectedProjectDirs.length &&
+    expectedProjectDirs.every((dir) => projectPlan.dirs.includes(dir)),
+  "工程目录严格等于 doc/sch/prj/src/{rtl,sim}/ip/sim/xdc/bit"
+);
+check(
+  projectPlan.dirs.every((dir) => !dir.includes(`${join(scaffoldPrj, "report")}\\`) && !dir.includes(`${join(scaffoldPrj, "src", "top")}\\`)) &&
+    !projectPlan.dirs.includes(join(scaffoldPrj, "report")) && !projectPlan.dirs.includes(join(scaffoldPrj, "coe")) &&
+    !projectPlan.dirs.includes(join(scaffoldPrj, "tcl")) && !projectPlan.dirs.includes(join(scaffoldPrj, "src", "top")),
+  "工程骨架不再创建 report/coe/tcl/src/top，也不在指定目录外另套一层"
 );
 
 // ── 起文件(module-rtl-new / module-verif-new / module-synth-new:各环节一个入口,只替模块名) ──
-const bundledRtl = readFileSync(join(TEMPLATES, "rtl.sv"), "utf8");
+const bundledRtl = readFileSync(categorizedTemplates.rtl, "utf8");
 const rendered = renderTemplate(bundledRtl, "UartRx");
 check(rendered.replaced.join(",") === "ModuleName", `只替模块名(实际替了 ${rendered.replaced.join("、") || "无"})`);
 check(!rendered.text.includes("<ModuleName>"), "模块名占位符替干净了");
@@ -356,7 +374,7 @@ check(rendered.remaining.includes("DATE") && rendered.remaining.includes("Author
 
 // 自带 TB 模板的判定契约:两条判据字符串必须在,且模板里不能再写"err_cnt>0 会非零退出"——
 // ModelSim 批处理下 $fatal 不改退出码(2020.4 实测),照旧说法写会让人以为看退出码就能抓到失败。
-const bundledTb = readFileSync(join(TEMPLATES, "tb.sv"), "utf8");
+const bundledTb = readFileSync(categorizedTemplates.testbench, "utf8");
 check(
   bundledTb.includes("ALL TESTS PASSED (err_cnt=0)") && bundledTb.includes("TB FAILED: err_cnt="),
   "自带 TB 模板里两条判据字符串都在(成功标记 + 失败标记),脚本靠它们判成败"
@@ -366,12 +384,14 @@ check(
   "自带 TB 模板写明 $fatal 不改 vsim 退出码(不是'必须非零退出'那种说法)"
 );
 
-// 自带 run.do 模板(verif 环节的批处理仿真脚本):`--kind run-do` 起的就是它。
-// 那几条踩过的坑是"退出码可信"的全部依据(跳 stub / onfinish stop / gate 里 -code 1),缺一段都不能按退出码判。
-const bundledRunDoPath = join(TEMPLATES, "run.do");
+// ModelSim / QuestaSim 分成 compile.do 与 run.do；两份合起来保留旧模板已经验证过的全部护栏。
+const bundledCompileDoPath = categorizedTemplates.compile;
+const bundledCompileDo = readFileSync(bundledCompileDoPath, "utf8");
+const bundledRunDoPath = categorizedTemplates.run;
 const bundledRunDoExists = existsSync(bundledRunDoPath);
-const bundledRunDo = bundledRunDoExists ? readFileSync(bundledRunDoPath, "utf8") : "";
-check(bundledRunDoExists, "自带 run.do 模板存在(module-verif-new --kind run-do 起的就是它)");
+const bundledRunOnly = bundledRunDoExists ? readFileSync(bundledRunDoPath, "utf8") : "";
+const bundledRunDo = `${bundledCompileDo}\n${bundledRunOnly}`;
+check(bundledRunDoExists && existsSync(bundledCompileDoPath), "自带 compile.do 与 run.do 分类模板都存在");
 for (const marker of ["*_stub.*", "onfinish stop", "quit -f -code 1", "ALL TESTS PASSED"]) {
   check(bundledRunDo.includes(marker), `自带 run.do 模板里有「${marker}」`);
 }
@@ -441,15 +461,24 @@ const simRun = (name, files, doPath = bundledRunDoPath) => {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, text);
   }
-  const log = join(verif, "ME-stdout.log");
-  const fd = openSync(log, "w");
+  const compileLog = join(verif, "ME-compile-stdout.log");
+  const compileFd = openSync(compileLog, "w");
   // 交给 ModelSim 的路径一律转正斜杠:反斜杠里的 `\t`/`\n` 会被 Tcl 当转义吃掉(实测)
-  const status = spawnSync("vsim", ["-c", "-do", `do ${doPath.replace(/\\/gu, "/")}; quit -f`], {
-    stdio: ["ignore", fd, "ignore"],
+  const compileStatus = spawnSync("vsim", ["-c", "-do", `do ${bundledCompileDoPath.replace(/\\/gu, "/")}`], {
+    stdio: ["ignore", compileFd, "ignore"],
     cwd: verif
   }).status;
-  closeSync(fd);
-  return { status, output: existsSync(log) ? readFileSync(log, "utf8") : "" };
+  closeSync(compileFd);
+  const compileOutput = existsSync(compileLog) ? readFileSync(compileLog, "utf8") : "";
+  if (compileStatus !== 0) return { status: compileStatus, output: compileOutput };
+  const runLog = join(verif, "ME-run-stdout.log");
+  const runFd = openSync(runLog, "w");
+  const status = spawnSync("vsim", ["-c", "-do", `do ${doPath.replace(/\\/gu, "/")}`], {
+    stdio: ["ignore", runFd, "ignore"],
+    cwd: verif
+  }).status;
+  closeSync(runFd);
+  return { status, output: `${compileOutput}\n${existsSync(runLog) ? readFileSync(runLog, "utf8") : ""}` };
 };
 
 const vsimProbe = spawnSync("vsim", ["-c", "-do", "quit -f"], { stdio: "ignore" });
@@ -463,7 +492,7 @@ if (vsimProbe.status !== 0) {
   // ① 零 TB:verif/ 下一个 tb_*.sv 都没有 → 1(既有保护,别被这次改动碰坏)
   let sim = simRun("none", { "rtl/foo.sv": rtlFoo, "verif/helper.sv": rtlFoo });
   check(sim.status === 1, `零 TB → 退出码 1(实际 ${String(sim.status)})`);
-  check(/no tb_\*\.sv/u.test(rundoError(sim.output).header), "零 TB 报的是「没有 tb_*.sv」这一条");
+  check(/no tb_\*/u.test(rundoError(sim.output).header), "零 TB 报的是「没有 tb_* 测试平台」这一条");
   // ② 单 TB → 0(唯一的"正常路径",它坏了说明守卫误伤)
   sim = simRun("one", { "rtl/foo.sv": rtlFoo, "verif/tb_foo.sv": tbSource("tb_foo") });
   check(sim.status === 0, `单 TB 照旧跑通 → 退出码 0(实际 ${String(sim.status)})`);
@@ -479,8 +508,8 @@ if (vsimProbe.status !== 0) {
     `多 TB 那条报出了命中数,并在错误里把两个候选逐条列出、指向 TOP_OVERRIDE(实际续行 ${manyError.details.length} 条)`
   );
   // ④ 多个 TB + 显式 TOP_OVERRIDE → 0(填了就等于指定了本次跑哪个)
-  const topPatched = bundledRunDo.replace("set TOP_OVERRIDE {}", "set TOP_OVERRIDE {tb_b}");
-  check(topPatched !== bundledRunDo, "夹具:旋钮 TOP_OVERRIDE 真被填上了(没填上的话下面那条会测成另一回事)");
+  const topPatched = bundledRunOnly.replace("set TOP_OVERRIDE  {}", "set TOP_OVERRIDE  {tb_b}");
+  check(topPatched !== bundledRunOnly, "夹具:旋钮 TOP_OVERRIDE 真被填上了(没填上的话下面那条会测成另一回事)");
   mkdirSync(simRoot, { recursive: true });
   const topDo = join(simRoot, "many-with-top.do");
   writeFileSync(topDo, topPatched);
@@ -525,11 +554,15 @@ check(
 check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("verif", "tb_uart_rx.vhd"), "扩展名跟着模板走");
 // run.do 反过来:名字是**固定**的(跑法里 `do run.do` 写死了它),不跟模板扩展名走、也不替模块名
 check(
-  defaultDestination("run-do", undefined, "C:/t/run.do") === join("verif", "run.do"),
+  defaultDestination("sim-compile", undefined, "C:/t/compile.do") === join("verif", "compile.do"),
+  "仿真编译脚本落到 verif/compile.do"
+);
+check(
+  defaultDestination("sim-run", undefined, "C:/t/run.do") === join("verif", "run.do"),
   "run.do 落到 verif/run.do(起它时不用给模块名)"
 );
 check(
-  defaultDestination("run-do", "UartRx", "C:/t/custom.tcl") === join("verif", "run.do"),
+  defaultDestination("sim-run", "UartRx", "C:/t/custom.tcl") === join("verif", "run.do"),
   "换了自己的模板也还是 verif/run.do(文件名不跟模板扩展名走)"
 );
 check(defaultDestination("xdc", "UartRx", "C:/t/c.xdc") === join("synth", "UartRx.xdc"), "约束文件落 synth/<模块名>.xdc");
@@ -554,7 +587,7 @@ check(
 // 模块级约束**只要时钟**(用户 2026-09-19 确认:模块没有管脚,管脚/电平/IO 延迟都是工程级的事)。
 // 自带 XDC 模板要说清这条,而且不许再引用旧包的 `device_config.tcl / TIMING_CLOCKS` ——
 // 那是旧结构,我们现在只有 spec/spec.md 这一处时钟参考。
-const bundledXdc = readFileSync(join(TEMPLATES, "constraints.xdc"), "utf8");
+const bundledXdc = readFileSync(categorizedTemplates.constraints, "utf8");
 check(
   /CLOCKS ONLY|clock constraint only/iu.test(bundledXdc),
   "自带 XDC 模板写明:模块级只要时钟约束"
@@ -863,7 +896,7 @@ check(run("setup-scaffold.mjs", []) === 2, "setup-scaffold 不给根目录 → �
 // 起文件:不覆盖已有文件、模板不存在要报错
 const newFileRoot = join(SANDBOX, `new-file-${stamp}`);
 check(
-  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 0,
+  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", categorizedTemplates.rtl]) === 0,
   "module-rtl-new 按模板起文件 → 退出码 0"
 );
 check(existsSync(join(newFileRoot, "rtl", "uart_rx.sv")), "RTL 落在 rtl/ 下");
@@ -872,12 +905,12 @@ check(existsSync(join(newFileRoot, "rtl", "uart_rx.sv")), "RTL 落在 rtl/ 下")
 // (解析基准是插件包自身,不是 CWD):所以多层、带空格都照落,不需要为此改任何东西。
 const deepMod = join(SANDBOX, `deep-${stamp}`, "功能组 甲", "uart_rx");
 check(
-  run("module-rtl-new.mjs", [deepMod, "UartRx", "--template", join(TEMPLATES, "rtl.sv")]) === 0
+  run("module-rtl-new.mjs", [deepMod, "UartRx", "--template", categorizedTemplates.rtl]) === 0
     && existsSync(join(deepMod, "rtl", "UartRx.sv")),
   "多层 + 带空格的模块根照样落对(模板引用与模块路径、当前目录无关)"
 );
 check(
-  run("module-verif-new.mjs", [deepMod, "UartRx", "--template", join(TEMPLATES, "tb.sv")]) === 0
+  run("module-verif-new.mjs", [deepMod, "UartRx", "--template", categorizedTemplates.testbench]) === 0
     && existsSync(join(deepMod, "verif", "tb_uart_rx.sv")),
   "同一个深层模块根:测试平台也落在它自己的 verif/ 下"
 );
@@ -886,26 +919,35 @@ check(
   "模板生成的文件直接过机械检查(骨架开箱合规)"
 );
 check(
-  run("module-verif-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "tb.sv")]) === 0
+  run("module-verif-new.mjs", [newFileRoot, "uart_rx", "--template", categorizedTemplates.testbench]) === 0
     && existsSync(join(newFileRoot, "verif", "tb_uart_rx.sv")),
   "verif-new 把测试平台落在 verif/tb_<snake>.sv"
 );
-// `--kind run-do`:技能里就是这么调的(只给模块根)—— 不给 --template 也要能起出 verif/run.do
+// 两份仿真脚本都从分类模板库起；只给模块根，不需要模块名。
 check(
-  run("module-verif-new.mjs", [newFileRoot, "--kind", "run-do"]) === 0
+  run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-compile"]) === 0
+    && existsSync(join(newFileRoot, "verif", "compile.do")),
+  "verif-new --kind sim-compile 起出 verif/compile.do"
+);
+check(
+  readFileSync(join(newFileRoot, "verif", "compile.do"), "utf8") === bundledCompileDo,
+  "起出来的 compile.do 与分类模板逐字节一致"
+);
+check(
+  run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-run"]) === 0
     && existsSync(join(newFileRoot, "verif", "run.do")),
-  "verif-new --kind run-do 起出 verif/run.do(不用给模块名与模板)"
+  "verif-new --kind sim-run 起出 verif/run.do"
 );
 check(
-  readFileSync(join(newFileRoot, "verif", "run.do"), "utf8") === bundledRunDo,
-  "起出来的 run.do 与自带模板逐字节一致(不替模块名、不改内容)"
+  readFileSync(join(newFileRoot, "verif", "run.do"), "utf8") === bundledRunOnly,
+  "起出来的 run.do 与分类运行模板逐字节一致"
 );
 check(
-  run("module-verif-new.mjs", [newFileRoot, "--kind", "run-do"]) === 1,
+  run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-run"]) === 1,
   "已存在的 run.do 不覆盖 → 退出码 1"
 );
 check(
-  run("module-verif-new.mjs", [newFileRoot, "--kind", "run-do", "--force"]) === 0,
+  run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-run", "--force"]) === 0,
   "--force 才覆盖 run.do"
 );
 
@@ -921,10 +963,10 @@ const tamperedRunDo = "# 用户改过的 run.do(夹具)\nset RTL_DIR {../my_rtl}
 mkdirSync(backupVerif, { recursive: true });
 writeFileSync(backupRunDo, tamperedRunDo);
 check(
-  run("module-verif-new.mjs", [backupMod, "--kind", "run-do", "--force"]) === 0,
+  run("module-verif-new.mjs", [backupMod, "--kind", "sim-run", "--force"]) === 0,
   "已有 run.do + --force → 退出码 0(覆盖)"
 );
-check(readFileSync(backupRunDo, "utf8") === bundledRunDo, "目标确实被新模板覆盖了");
+check(readFileSync(backupRunDo, "utf8") === bundledRunOnly, "目标确实被新模板覆盖了");
 const runDoBackups = readdirSync(backupVerif).filter((name) => name.startsWith("run.do.bak-"));
 check(
   runDoBackups.length === 1,
@@ -969,7 +1011,7 @@ const dirTargetMod = join(SANDBOX, `backup-dir-${stamp}`);
 const dirTarget = join(dirTargetMod, "verif", "run.do");
 mkdirSync(dirTarget, { recursive: true });
 writeFileSync(join(dirTarget, "keep.txt"), "keep\n");
-const dirForce = runStderr("module-verif-new.mjs", [dirTargetMod, "--kind", "run-do", "--force"]);
+const dirForce = runStderr("module-verif-new.mjs", [dirTargetMod, "--kind", "sim-run", "--force"]);
 check(dirForce.code === 2, `快照失败(目标位置是目录)→ 退出码 2(落盘失败;实际 ${String(dirForce.code)})`);
 const dirLeftovers = readdirSync(join(dirTargetMod, "verif")).filter(
   (name) => name.includes(".tmp-") || name.includes(".bak-")
@@ -987,7 +1029,7 @@ check(
 );
 // 漏给根目录时必须报参数错,不能把 `--kind` 的值当成根目录去写(实测踩过:会在 ./run-do/ 下起文件还退 0)
 check(
-  run("module-verif-new.mjs", ["--kind", "run-do"]) === 2,
+  run("module-verif-new.mjs", ["--kind", "sim-run"]) === 2,
   "漏给模块根 → 退出码 2(`--kind` 的值不会被当成根目录)"
 );
 
@@ -995,7 +1037,7 @@ check(
 // 综合脚本那两行(器件型号、顶层模块名)以前靠手抄 —— 手抄就是"器件与时钟只写一处"之外的第二处
 // 来源,换器件时必漏。现在起脚本时从 spec/spec.md 读出来填。夹具器件**故意与自带模板里那个
 // 不同**:填没填上,一眼分得出来。
-const bundledRunSynth = readFileSync(join(TEMPLATES, "run_synth.tcl"), "utf8");
+const bundledRunSynth = readFileSync(categorizedTemplates.synthesis, "utf8");
 // 器件预检**必须同时认两种写法**(2026-09-21 实测:9 个真实 `.xci` 全是 Vivado 2025.x 的 JSON,
 // 器件被拆成 DEVICE / PACKAGE / SPEEDGRADE 三段,只有老的 `part = xc…` 整串正则 → 一条都匹配不上,
 // 预检于是打了 WARN 就跳过 = 从来没真跑过)。行为已用真 Vivado 复核(见 run_synth.tcl 头注)。
@@ -1004,13 +1046,13 @@ const bundledRunSynth = readFileSync(join(TEMPLATES, "run_synth.tcl"), "utf8");
 // 自带模板的时钟必须**同一个数**(第五轮 2.2):tb.sv 的 CLK_PERIOD 与 constraints.xdc 的
 // `create_clock -period` 是同一份"默认节拍"的两处写法 —— 4ns vs 10ns 会让仿真按 250 MHz 跑、
 // 时序却按 100 MHz 收,综合后时序结论直接失去意义。
-const bundledTbHeader = readFileSync(join(TEMPLATES, "tb.sv"), "utf8").split("\n").slice(0, 10);
+const bundledTbHeader = readFileSync(categorizedTemplates.testbench, "utf8").split("\n").slice(0, 10);
 check(
   bundledTbHeader.every((line) => line.length <= 86),
   `自带 tb.sv 的前 10 行都不超过 86 列(与 rtl.sv 的横幅约定一致;实际最长 ${Math.max(...bundledTbHeader.map((line) => line.length))} 列)`
 );
-const bundledTbClock = readFileSync(join(TEMPLATES, "tb.sv"), "utf8");
-const bundledXdcClock = readFileSync(join(TEMPLATES, "constraints.xdc"), "utf8");
+const bundledTbClock = readFileSync(categorizedTemplates.testbench, "utf8");
+const bundledXdcClock = readFileSync(categorizedTemplates.constraints, "utf8");
 const tbPeriod = /CLK_PERIOD\s*=\s*(\d+(?:\.\d+)?)\s*ns/u.exec(bundledTbClock)?.[1];
 const xdcPeriod = /create_clock[^\n]*-period\s+(\d+(?:\.\d+)?)/u.exec(bundledXdcClock)?.[1];
 check(
@@ -1086,12 +1128,13 @@ check(
   `没有 spec/spec.md → 拒绝生成、退出码 2、不落文件(实际 ${noSpecCode})`
 );
 
-// 模块 spec **不重述器件**时(N-01 后的常态):器件从**兄弟工程 spec** 读;顶层名缺省用模块名
+// 模块位于带 project 锚点的用户指定工程目录下时,工程器件从 doc/spec.md 读;顶层名仍按模块名。
 const projSynthRoot = join(SANDBOX, `synth-proj-${stamp}`);
 const projSynthMod = join(projSynthRoot, "uart_rx");
-mkdirSync(join(projSynthRoot, "project", "spec"), { recursive: true });
+mkdirSync(join(projSynthRoot, "doc"), { recursive: true });
 mkdirSync(join(projSynthMod, "spec"), { recursive: true });
-writeFileSync(join(projSynthRoot, "project", "spec", "spec.md"), "# 工程 spec\n\n- 器件型号:xcku040-ffva1156-2-e\n");
+writeFileSync(join(projSynthRoot, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+writeFileSync(join(projSynthRoot, "doc", "spec.md"), "# 工程 spec\n\n- 器件型号:xcku040-ffva1156-2-e\n");
 writeFileSync(join(projSynthMod, "spec", "spec.md"), "# 模块 spec\n\n- 器件见工程 spec(不重述)\n");
 const projSynthCode = run("module-synth-new.mjs", [projSynthMod, "uart_rx", "--kind", "synth-script"]);
 // 读之前先判存在:被咬坏时这里**红**就够了,不能因为文件没生成就抛 ENOENT 把整份自检崩掉
@@ -1137,7 +1180,7 @@ check(
 );
 
 // `--kind comp`:比对脚本落 verif/comp.py(原样复制,不改一个字符)
-const bundledCompPath = join(TEMPLATES, "comp.py");
+const bundledCompPath = categorizedTemplates.verification;
 const bundledComp = existsSync(bundledCompPath) ? readFileSync(bundledCompPath, "utf8") : "";
 check(existsSync(bundledCompPath), "自带 comp.py 模板存在(module-verif-new --kind comp 起的就是它)");
 const compPath = join(newFileRoot, "verif", "comp.py");
@@ -1180,16 +1223,16 @@ check(
 
 // ── module-synth-new:约束落点 ───────────────────────────────────────────────
 check(
-  run("module-synth-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "constraints.xdc")]) === 0
+  run("module-synth-new.mjs", [newFileRoot, "uart_rx", "--template", categorizedTemplates.constraints]) === 0
     && existsSync(join(newFileRoot, "synth", "uart_rx.xdc")),
   "module-synth-new 把约束落在 synth/<模块名>.xdc"
 );
 check(
-  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv")]) === 1,
+  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", categorizedTemplates.rtl]) === 1,
   "已存在的文件不覆盖 → 退出码 1"
 );
 check(
-  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--force"]) === 0,
+  run("module-rtl-new.mjs", [newFileRoot, "uart_rx", "--template", categorizedTemplates.rtl, "--force"]) === 0,
   "--force 才覆盖"
 );
 // `--out` 是相对根目录的路径:`..` 逃逸与绝对路径都要挡在写之前(审查指出、实测复现过:
@@ -1198,16 +1241,16 @@ const escapeRoot = join(SANDBOX, `escape-${stamp}`, "mod");
 mkdirSync(escapeRoot, { recursive: true });
 const escapeTarget = join(SANDBOX, `escape-${stamp}`, "escaped.sv");
 check(
-  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--out", join("..", "escaped.sv")]) === 2,
+  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", categorizedTemplates.rtl, "--out", join("..", "escaped.sv")]) === 2,
   "--out 用 .. 逃出根目录 → 退出码 2"
 );
 check(!existsSync(escapeTarget), "逃逸请求没有真的写出文件(挡在写之前)");
 check(
-  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--out", escapeTarget]) === 2,
+  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", categorizedTemplates.rtl, "--out", escapeTarget]) === 2,
   "--out 传绝对路径 → 退出码 2"
 );
 check(
-  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--out", join("rtl", "sub", "uart_rx.sv")]) === 0
+  run("module-rtl-new.mjs", [escapeRoot, "uart_rx", "--template", categorizedTemplates.rtl, "--out", join("rtl", "sub", "uart_rx.sv")]) === 0
     && existsSync(join(escapeRoot, "rtl", "sub", "uart_rx.sv")),
   "根目录内的子目录照样能写(护栏不误伤合法用法)"
 );
@@ -1226,7 +1269,8 @@ check(run("setup-scaffold.mjs", [join(SANDBOX, "scaffold-cli")]) === 0, "重复�
 // ── 位置参数只取"第一个选项之前":写反了报参数错,不许把选项的值当成根目录 ─────────────
 //
 // 实测(修前):`--kind project <根>` 里 `argv.find(a => !a.startsWith("-"))` 拿到的是选项的**值**
-// `project`,于是在当前目录下建出一整套 `./project/` 还退 0 —— 用户以为建在他给的根上(写到错地方
+// `project`,于是在当前目录下建出一整套 `./project/` 还退 0 —— 这里的 `project` 是被误当成
+// 路径的 `--kind` 选项值,不是现在的工程目录结构。用户会以为建在他给的根上(写到错地方
 // 还不报错)。规矩照 `lib/stamp.mjs` 的 parseStampArgs:位置参数只取第一个选项之前的;其余算用法错误。
 // 所以三条一起验:① 写反 → 退 2;② 当前目录的 ./project 与他给的根**都什么都没建**;③ 根写在前面照旧生效。
 const argsCwd = join(SANDBOX, `args-cwd-${stamp}`);
@@ -1242,7 +1286,9 @@ const argsRoot = join(SANDBOX, `args-root-${stamp}`);
 const argsOkCode = run("setup-scaffold.mjs", [argsRoot, "--kind", "project"]);
 check(
   argsOkCode === 0
-    && existsSync(join(argsRoot, "project", "impl"))
+    && existsSync(join(argsRoot, "doc"))
+    && existsSync(join(argsRoot, "src", "rtl"))
+    && existsSync(join(argsRoot, "src", "sim"))
     && existsSync(join(argsRoot, ".fpga-workbench.json")),
   `<根> --kind project(根在前)照旧退 0 且骨架真建在该根下(实际 ${argsOkCode})`
 );
@@ -1257,11 +1303,7 @@ check(
   "位置参数出现在选项之后(<根> --kind project foo)→ 退出码 2"
 );
 
-// ── 模块名是"根目录下的一级子目录名":不许拿它把骨架建到根目录外面去 ──────────────
-//
-// 实测过(审查指出、这里复现过):不加判断的话 `--modules "..\..\evil"` 会真在根目录**之上**
-// 建出整套模块骨架,退出码还是 0;绝对路径则会被 join 拼成 `<根>\C:\...` 抛异常崩掉(退 1)。
-// 所以每个逃逸写法都要:① 退出码 2;② 那条逃逸路径**确实没被创建**(挡在写之前,不是写失败)。
+// `--modules` 已停用：无论值长什么样都在落盘前拒绝；工程不会替用户创建模块目录。
 const escapeBase = join(SANDBOX, `mod-escape-${stamp}`);
 const moduleEscapeRoot = join(escapeBase, "b", "root");
 mkdirSync(moduleEscapeRoot, { recursive: true });
@@ -1280,12 +1322,12 @@ check(!existsSync(join(SANDBOX, "abs-evil")), "绝对路径的模块名没有写
 check(escapeMod("D:evil") === 2, "模块名带盘符 → 退出码 2");
 check(escapeMod(join("sub", "mod")) === 2, "模块名带路径分隔符(合法子目录写法)→ 退出码 2(模块名只收一段)");
 check(
-  escapeMod("uart_rx") === 0 && existsSync(join(moduleEscapeRoot, "uart_rx", "rtl")),
-  "合法的一级子目录名照样建(护栏不误伤)"
+  escapeMod("uart_rx") === 2 && !existsSync(join(moduleEscapeRoot, "uart_rx")),
+  "合法名字也不会触发自动建模块目录(--modules 已停用)"
 );
 check(
-  escapeMod("a..b") === 0 && existsSync(join(moduleEscapeRoot, "a..b", "rtl")),
-  "名字里带 .. 但不是 .. 本身 → 照样建(护栏不误伤)"
+  escapeMod("a..b") === 2 && !existsSync(join(moduleEscapeRoot, "a..b")),
+  "--modules 的任何取值都一致拒绝"
 );
 
 // ── --force 的语义:只重写**类型一致**的锚点与工作区指令,不跨 kind 覆盖 ────────────
@@ -1331,9 +1373,9 @@ check(
 );
 check(
   run("setup-scaffold.mjs", [forceRoot, "--kind", "project", "--force"]) === 1
-    && !existsSync(join(forceRoot, "project"))
+    && !existsSync(join(forceRoot, "doc"))
     && readFileSync(forceAnchor, "utf8").includes("\"module\""),
-  "跨 kind 是硬拒绝:带 --force 也退 1,project/ 与根锚点都没动"
+  "跨 kind 是硬拒绝:带 --force 也退 1,工程目录与根锚点都没动"
 );
 
 // ── F-13:路径边界不能只看词法 —— junction 的真实落点必须被识破 ───────────────
@@ -1342,7 +1384,7 @@ check(
 // 跑到根目录**外面**去,而词法上一切正常。这里用**真 junction** 定向验证(node 的
 // `symlinkSync(..., "junction")` 在 Windows 上不需要管理员权限;造不出来就明确跳过,不假装通过):
 //   · `--out` 落在"根里的 junction 子目录"下 → 真实落点在根外 → 退 2,一个文件都不落
-//   · 骨架的 `--modules` 给一个 junction 的模块名 → 退 2,外面什么都没建、里面也没动
+//   · 已停用的 `--modules` 即使指向 junction 也在解析期拒绝,不做任何落盘
 // 两条都验"拒绝时把**真实落点**打出来了" —— 不然用户只知道被拒、不知道东西本来会落到哪。
 const junctionBase = join(SANDBOX, `junction-${stamp}`);
 const junctionOutside = join(junctionBase, "outside");
@@ -1362,7 +1404,7 @@ mkdirSync(stampJunctionRoot, { recursive: true });
 if (makeJunction(stampJunctionRoot, "escape")) {
   const junctionOutFile = join(junctionOutside, "escaped.sv");
   const junctionStamp = runStderr("module-rtl-new.mjs", [
-    stampJunctionRoot, "uart_rx", "--template", join(TEMPLATES, "rtl.sv"), "--out", join("escape", "escaped.sv")
+    stampJunctionRoot, "uart_rx", "--template", categorizedTemplates.rtl, "--out", join("escape", "escaped.sv")
   ]);
   check(junctionStamp.code === 2, `--out 经 junction 的真实落点在根外 → 退出码 2(实际 ${String(junctionStamp.code)})`);
   check(!existsSync(junctionOutFile), "junction 逃逸请求没有真的写出文件(挡在写之前)");
@@ -1378,10 +1420,10 @@ if (makeJunction(junctionRoot, "uart")) {
   const junctionScaffold = runStderr("setup-scaffold.mjs", [junctionRoot, "--kind", "project", "--modules", "uart"]);
   check(junctionScaffold.code === 2, `--modules 给 junction 的模块名 → 退出码 2(实际 ${String(junctionScaffold.code)})`);
   check(!existsSync(join(junctionOutside, "spec")), "junction 逃逸的模块骨架没有落到根目录外面");
-  check(!existsSync(join(junctionRoot, "project")), "预检挡在任何落盘之前(根里的 project/ 都没建)");
+  check(!existsSync(join(junctionRoot, "doc")), "参数检查挡在任何落盘之前(工程目录也没建)");
   check(
-    junctionScaffold.output.includes(junctionOutside) && junctionScaffold.output.includes("真实落点"),
-    `骨架拒绝时也打出了真实落点(期望提到 ${junctionOutside})`,
+    junctionScaffold.output.includes("--modules 已停用"),
+    "骨架拒绝时明确说明 --modules 已停用",
     junctionScaffold.output.slice(-300)
   );
 }
@@ -1393,33 +1435,19 @@ check(
   "F-13:stamp.mjs 用 realpathSync 核真实落点,骨架的预检复用它(不只查字符串)"
 );
 
-// ── F-04:骨架失败时不许谎报"原有文件没有改动" ────────────────────────────────
-//
-// 复现:`<根>/uart/.fpga-workbench.json` 这个锚点位置被一个**目录**占着 —— 覆盖时"先留快照"那一步
-// 失败(EISDIR,复制不了目录)。而在此之前,工程级与模块级的**目录已经全建出来了**、根锚点也**已经
-// 写好了**。修前那句"落盘失败,原有文件没有改动"就是谎报;现在错误信息里必须如实列出**已经发生的
-// 动作**(零删除:不回滚,只报告),留在盘上的东西也要真在。
+// `--modules` 在任何落盘前拒绝，不会形成过去那种“工程建了一半、模块锚点失败”的半成品。
 const halfRoot = join(SANDBOX, `half-fail-${stamp}`);
 mkdirSync(join(halfRoot, "uart", ".fpga-workbench.json"), { recursive: true });
 const halfFail = runStderr("setup-scaffold.mjs", [halfRoot, "--kind", "project", "--modules", "uart", "--force"]);
-check(halfFail.code === 1, `骨架建到一半失败 → 退出码 1(实际 ${String(halfFail.code)})`);
+check(halfFail.code === 2, `--modules 在落盘前拒绝 → 退出码 2(实际 ${String(halfFail.code)})`);
 check(
-  !halfFail.output.includes("原有文件没有改动") && /已经发生的动作[^]*新建目录 \d+ 个:/u.test(halfFail.output),
-  "失败信息带着「已经发生的动作」**及其明细**,不再谎报「原有文件没有改动」",
+  halfFail.output.includes("--modules 已停用"),
+  "拒绝原因明确指向已停用的参数",
   halfFail.output.slice(-400)
 );
-const actionLine = (prefix) => halfFail.output.split(/\r?\n/u).map((line) => line.trim()).find((line) => line.startsWith(prefix)) ?? "";
-const halfDirs = actionLine("新建目录 ");
-const halfFiles = actionLine("新建 / 覆盖文件 ");
 check(
-  /新建目录 \d+ 个:/u.test(halfDirs) && !halfDirs.includes("(无)") && halfFiles.includes(".fpga-workbench.json"),
-  "如实列出一半的活:建了哪些目录、写好了哪个锚点(不回滚、不谎报)",
-  `${halfDirs} | ${halfFiles}`
-);
-check(
-  existsSync(join(halfRoot, "project", "impl")) && existsSync(join(halfRoot, "uart", "rtl"))
-    && readFileSync(join(halfRoot, ".fpga-workbench.json"), "utf8").includes("project"),
-  "留下的那些**确实在盘上**(零删除:不删、不回滚,处置交给使用者)"
+  !existsSync(join(halfRoot, "doc")) && !existsSync(join(halfRoot, ".fpga-workbench.json")),
+  "拒绝时工程目录与根锚点都没有落盘"
 );
 
 // 写前全量可写性预检:只读的目标要在**动手之前**发现(不然就是建了一半才发现写不进去)
@@ -1477,26 +1505,26 @@ check(
 // "跳过"就成了谎报的前提:全部"已存在"→ 打出"骨架已完整,无需改动。",可锚点/规则文件根本没写出来。
 // 两条都要:退出码 1、点名那个位置、用户那个目录原样不动(零删除)。
 const anchorDirRoot = join(SANDBOX, `anchor-is-dir-${stamp}`);
-mkdirSync(join(anchorDirRoot, "uart", ".fpga-workbench.json", "inner"), { recursive: true });
-writeFileSync(join(anchorDirRoot, "uart", ".fpga-workbench.json", "inner", "keep.txt"), "keep\n");
-const anchorDir1 = runStderr("setup-scaffold.mjs", [anchorDirRoot, "--kind", "project", "--modules", "uart"]);
-const anchorDir2 = runStderr("setup-scaffold.mjs", [anchorDirRoot, "--kind", "project", "--modules", "uart"]);
+mkdirSync(join(anchorDirRoot, ".fpga-workbench.json", "inner"), { recursive: true });
+writeFileSync(join(anchorDirRoot, ".fpga-workbench.json", "inner", "keep.txt"), "keep\n");
+const anchorDir1 = runStderr("setup-scaffold.mjs", [anchorDirRoot, "--kind", "project"]);
+const anchorDir2 = runStderr("setup-scaffold.mjs", [anchorDirRoot, "--kind", "project"]);
 check(
   anchorDir1.code === 1 && anchorDir2.code === 1,
-  `模块锚点位置是目录(不给 --force)→ 两次都退 1(实际 ${String(anchorDir1.code)} / ${String(anchorDir2.code)})`
+  `工程根锚点位置是目录 → 两次都退 1(实际 ${String(anchorDir1.code)} / ${String(anchorDir2.code)})`
 );
 check(
   !anchorDir1.output.includes("骨架已完整") && !anchorDir2.output.includes("骨架已完整") &&
-    anchorDir2.output.includes(join(anchorDirRoot, "uart", ".fpga-workbench.json")),
+    anchorDir2.output.includes(join(anchorDirRoot, ".fpga-workbench.json")),
   "第二次全「已存在」时也不谎报「骨架已完整」,并点名那个位置",
   anchorDir2.output.slice(-300)
 );
 check(
-  !existsSync(join(anchorDirRoot, "project")) && !existsSync(join(anchorDirRoot, "uart", "rtl")),
-  "拒绝发生在任何落盘之前(工程与模块的环节目录都没建)"
+  !existsSync(join(anchorDirRoot, "doc")) && !existsSync(join(anchorDirRoot, "src")),
+  "拒绝发生在任何落盘之前(工程目录都没建)"
 );
 check(
-  readFileSync(join(anchorDirRoot, "uart", ".fpga-workbench.json", "inner", "keep.txt"), "utf8").includes("keep"),
+  readFileSync(join(anchorDirRoot, ".fpga-workbench.json", "inner", "keep.txt"), "utf8").includes("keep"),
   "用户那个目录连同里面的东西原样没动(零删除)"
 );
 
@@ -1655,7 +1683,7 @@ check(
 // 第五轮 3.4:模块名只收一段 —— 带路径分隔符的模块名要退 2(以前会拼出 rtl/a/b.sv)
 const nameProbeRoot = join(SANDBOX, `name-rule-${stamp}`);
 mkdirSync(nameProbeRoot, { recursive: true });
-const nameProbe = runStderr("module-rtl-new.mjs", [nameProbeRoot, "a/b", "--template", join(TEMPLATES, "rtl.sv")]); // 提示走 stderr
+const nameProbe = runStderr("module-rtl-new.mjs", [nameProbeRoot, "a/b", "--template", categorizedTemplates.rtl]); // 提示走 stderr
 check(
   nameProbe.code === 2 && /模块名不合法/u.test(nameProbe.output) && !existsSync(join(nameProbeRoot, "rtl", "a")),
   `模块名带 / → 退 2 且不落文件(第五轮 3.4;实际 ${String(nameProbe.code)})`,
@@ -1802,9 +1830,10 @@ check(
 // 场景 E:器件一致性(模块 spec vs 它所属工程 spec,用户口径 2026-09-21:器件只写一处)
 const projRoot = join(SANDBOX, `device-${stamp}`);
 const devMod = join(projRoot, "uart_rx");
-mkdirSync(join(projRoot, "project", "spec"), { recursive: true });
+mkdirSync(join(projRoot, "doc"), { recursive: true });
 mkdirSync(join(devMod, "spec"), { recursive: true });
-writeFileSync(join(projRoot, "project", "spec", "spec.md"), "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+writeFileSync(join(projRoot, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+writeFileSync(join(projRoot, "doc", "spec.md"), "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
 writeFileSync(join(devMod, "spec", "spec.md"), "# 模块 spec\n\n- 器件型号:xc7z020clg484-1\n");
 const deviceBad = runStdout("module-report-check.mjs", [devMod]);
 check(
@@ -1859,9 +1888,10 @@ check(
 // N-04:UltraScale 型号按**字段行**读(老正则 `x[a-z]?\d` 匹配不上 xcku040/xczu7ev → 静默不报)
 const usRoot = join(SANDBOX, `ultrascale-${stamp}`);
 const usMod = join(usRoot, "uart_rx");
-mkdirSync(join(usRoot, "project", "spec"), { recursive: true });
+mkdirSync(join(usRoot, "doc"), { recursive: true });
 mkdirSync(join(usMod, "spec"), { recursive: true });
-writeFileSync(join(usRoot, "project", "spec", "spec.md"), "# 工程 spec\n\n- 器件型号:xcku040-ffva1156-2-e\n");
+writeFileSync(join(usRoot, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+writeFileSync(join(usRoot, "doc", "spec.md"), "# 工程 spec\n\n- 器件型号:xcku040-ffva1156-2-e\n");
 writeFileSync(join(usMod, "spec", "spec.md"), "# 模块 spec\n\n- 器件型号:xczu7ev-ffvc1156-2-e\n");
 const usBad = runStdout("module-report-check.mjs", [usMod]);
 check(
@@ -1873,9 +1903,10 @@ check(
 // 场景 H:第四轮复审 Q4-01 / Q4-02 —— 器件以工程 spec 为准;模块 top 不许借工程的
 const q4Root = join(SANDBOX, `q4-device-${stamp}`);
 const q4Mod = join(q4Root, "uart_rx");
-mkdirSync(join(q4Root, "project", "spec"), { recursive: true });
+mkdirSync(join(q4Root, "doc"), { recursive: true });
 mkdirSync(join(q4Mod, "spec"), { recursive: true });
-const q4ProjectSpec = join(q4Root, "project", "spec", "spec.md");
+writeFileSync(join(q4Root, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+const q4ProjectSpec = join(q4Root, "doc", "spec.md");
 const q4ModuleSpec = join(q4Mod, "spec", "spec.md");
 const q4Script = join(q4Mod, "synth", "run_synth.tcl");
 const q4Run = () => runStdout("module-synth-new.mjs", [q4Mod, "uart_rx", "--kind", "synth-script", "--force"]);
@@ -1967,9 +1998,9 @@ check(
 const checklistPath = join(ROOT, "docs", "CLIENT_CHECKLIST.md");
 const checklistText = existsSync(checklistPath) ? readFileSync(checklistPath, "utf8") : "";
 check(
-  checklistText.split("\n").filter((line) => /^\|\s*\d+\s*\|/u.test(line)).length >= 8 &&
+  checklistText.split("\n").filter((line) => /^\|\s*\d+\s*\|/u.test(line)).length >= 9 &&
     /重启 DSH Desktop/u.test(checklistText) && /NOT_TESTED/u.test(checklistText),
-  "docs/CLIENT_CHECKLIST.md 存在、有 8 条检查、并写着 NOT_TESTED 的记账方式(第四轮 Q4-13)"
+  "docs/CLIENT_CHECKLIST.md 存在、有 9 条检查、并写着 NOT_TESTED 的记账方式(第四轮 Q4-13)"
 );
 // 场景 G:sync-installed 半途失败 → 必须说清"混合状态"、退出码非 0(第三轮复审 N-10)
 //   造法:在沙箱 profile 里把本该写文件的位置**放成目录**(copyFileSync 对它必然 EPERM),

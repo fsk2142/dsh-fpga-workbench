@@ -133,7 +133,7 @@ const bundledRootScan = scanTemplates({
   libraryRoot: BUNDLED_TEMPLATE_ROOT
 });
 check(
-  bundledRootScan.groups[0]?.items.filter((item) => item.relativePath === "rtl/systemverilog-module.sv").length === 1,
+  bundledRootScan.groups[0]?.items.filter((item) => item.relativePath === "rtl/systemverilog_module.sv").length === 1,
   "使用插件默认模板库路径时内置文件不会以“内置 + 模板库”重复出现"
 );
 check(
@@ -446,6 +446,28 @@ check(
   "v1 选择直接迁到 v3 能力卡"
 );
 check(Object.keys(legacyMigrationPatch({ settingsModelVersion: "3", compilerPath: "C:\\old.exe" })).length === 0, "版本 3 不重复迁移");
+const repairedV3BundledTemplates = legacyMigrationPatch({
+  settingsModelVersion: "3",
+  projectRtlTemplate: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates\\rtl.sv",
+  projectConstraintsTemplate: "C:/Work/dsh-fpga-workbench/presets/fpga-workbench/templates/constraints.xdc",
+  projectSynthesisTemplate: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates\\run_synth.tcl",
+  projectImplementationTemplate: "builtin:implementation/vivado-implementation.tcl",
+  moduleRtlTemplate: "C:\\my-templates\\rtl.sv",
+  moduleTestbenchTemplate: "library:simulation/testbench/custom.sv"
+});
+check(
+  repairedV3BundledTemplates.projectRtlTemplate === "builtin:rtl/systemverilog-module.sv" &&
+    repairedV3BundledTemplates.projectConstraintsTemplate === "builtin:constraints/vivado-xdc.xdc" &&
+    repairedV3BundledTemplates.projectSynthesisTemplate === "builtin:synthesis/vivado-synthesis.tcl",
+  "版本 3 里残留的旧插件模板路径会永久规范化为分类内置模板 ID"
+);
+check(
+  repairedV3BundledTemplates.projectImplementationTemplate === undefined &&
+    repairedV3BundledTemplates.moduleRtlTemplate === undefined &&
+    repairedV3BundledTemplates.moduleTestbenchTemplate === undefined &&
+    repairedV3BundledTemplates.settingsModelVersion === undefined,
+  "模板路径修复不碰现有内置 ID、用户模板库选择、自定义路径或模型版本"
+);
 check(
   !Object.values(migratedV1).some((value) => value === ""),
   "迁移补丁不通过写空字符串删除任何旧设置"
@@ -677,7 +699,7 @@ check(
   !clientSource.includes("检测本组工具") && clientSource.includes("detectNote"),
   "没有全量检测按钮:展开工具卡才检测该工具,结论写在自己的路径行下面"
 );
-check(clientSource.includes("没检测到"), "通用工具没检测到路径时就地说明");
+check(clientSource.includes("没检测到"), "工具设置里的工具没检测到路径时就地说明");
 // "留空的后果"必须由宿主说:模板是"用自带那份"、库映射文件是"用安装目录那份"、运行时是"按 PATH 找"。
 // 客户端原来自己编一句「留空即用自带」—— 对后两类是错话,用户在设置页上实际看到了。
 check(
@@ -1483,8 +1505,8 @@ check(wrongRtl.source === "bundled" && wrongRtl.missing === "C:\\nope\\rtl.sv", 
 const capabilityTemplateText = describeEnv(prepared, () => true);
 check(
   capabilityTemplateText.includes("模板·RTL 模板") &&
-    capabilityTemplateText.includes("rtl\\systemverilog-module.sv") &&
-    capabilityTemplateText.includes("simulation\\compile\\modelsim-compile.do"),
+    capabilityTemplateText.includes("rtl\\systemverilog_module.sv") &&
+    capabilityTemplateText.includes("simulation\\compile\\modelsim_compile.do"),
   "提示在对应能力卡下列出分类模板决定"
 );
 check(
@@ -1563,7 +1585,7 @@ const missingSelectedTemplate = describeEnv(
 );
 check(
   missingSelectedTemplate.includes("gone.do") && missingSelectedTemplate.includes("原选择已保留") &&
-    !missingSelectedTemplate.includes("modelsim-run.do（内置）"),
+    !missingSelectedTemplate.includes("modelsim_run.do（内置）"),
   "显式模板消失时提示保留原选择，不静默退回内置"
 );
 

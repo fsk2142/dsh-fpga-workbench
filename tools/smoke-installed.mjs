@@ -121,8 +121,8 @@ if (host !== undefined) {
     const moving = Object.entries(patch).filter(([, value]) => value !== "");
     console.log(
       moving.length === 0
-        ? "      待迁移的旧键:无(已迁移过,或本来就没填)"
-        : `      待迁移的旧键:${moving.map(([key, value]) => `${key}=${value}`).join(", ")}`
+        ? "      待迁移/规范化的旧设置:无(已处理过,或本来就没填)"
+        : `      待迁移/规范化的旧设置:${moving.map(([key, value]) => `${key}=${value}`).join(", ")}`
     );
     const declaredKeys = new Set(toolchain?.FIELDS?.map((field) => field.key) ?? []);
     check(moving.every(([key]) => declaredKeys.has(key)), "迁移补丁只写已声明的设置键");
@@ -164,7 +164,7 @@ if (mode !== undefined) {
     const text = describeEnv(values, probeFilesystem);
     check(text.length > 200, `提示段能组装出内容(${text.length} 字符)`);
     check(text.includes("这是能力配置，不是执行顺序"), "提示段明确设置不是自动化流水线");
-    check(text.includes("通用工具"), "提示段说明已登记的通用工具");
+    check(text.includes("工具设置中已登记且路径可用的工具"), "提示段说明工具设置里已登记的工具");
     check(text.includes("模块工具能力偏好") && text.includes("工程工具能力偏好"), "提示段分别说明模块与工程能力工具");
     check(text.includes("语言与标准"), "提示段含「语言与标准」一节");
     check(text.includes("模板库:"), "提示段说明模板库来源与按需扫描规则");

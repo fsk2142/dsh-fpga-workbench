@@ -178,19 +178,18 @@ export function snakeCase(name) {
 
 /**
  * 按 kind 推出默认的落盘位置(相对模块根)。
- * @param kind - `rtl` / `tb` / `xdc` / `run-do` / `synth-script` / `comp`。
- * @param name - 模块名(`run-do` / `comp` 不用它:那两类文件不替模块名)。
- * @param template - 模板路径(扩展名跟着它走,用户模板是 `.vhd` 就出 `.vhd`;`run-do` / `synth-script` / `comp` 文件名固定)。
- * @returns 相对路径:`rtl/<模块名>.<ext>` / `verif/tb_<snake>.<ext>` / `synth/<模块名>.<ext>` / `verif/run.do` / `synth/run_synth.tcl` / `verif/comp.py`。
+ * @param kind - `rtl` / `tb` / `xdc` / `sim-compile` / `sim-run` / `synth-script` / `comp`。
+ * @param name - 模块名(脚本类不用它:文件名固定、正文原样复制)。
+ * @param template - 模板路径(语言模板的扩展名跟着它走；脚本类文件名固定)。
+ * @returns 相对路径:`rtl/<模块名>.<ext>` / `verif/tb_<snake>.<ext>` / `synth/<模块名>.<ext>` / `verif/compile.do` / `verif/run.do` / `synth/run_synth.tcl` / `verif/comp.py`。
  */
 export function defaultDestination(kind, name, template) {
   const ext = extname(template);
   if (kind === "rtl") return join("rtl", `${name}${ext}`);
   if (kind === "tb") return join("verif", `tb_${snakeCase(name)}${ext}`);
   if (kind === "xdc") return join("synth", `${name}${ext}`);
-  // run.do 的文件名是**固定**的:跑法里 `do run.do` 写死了它,换个名字就对不上;
-  // 用户自己的模板也不改这个名字(所以这里不看 name,也不看模板扩展名)。
-  if (kind === "run-do") return join("verif", "run.do");
+  if (kind === "sim-compile") return join("verif", "compile.do");
+  if (kind === "sim-run") return join("verif", "run.do");
   // 综合脚本同理:跑法里写的是 `synth/run_synth.tcl`(报告也按这个目录收)
   if (kind === "synth-script") return join("synth", "run_synth.tcl");
   // 比对脚本同理:技能里给的是 `python verif/comp.py <参照> <输出>`
@@ -257,7 +256,7 @@ function parseArgs(argv) {
  * 按模板起文件(打印用了哪份模板、替了什么、还有哪些要在编辑时改)。
  *
  * 这是内部模块,不直接当命令用 —— 各环节的入口给它固定的 kind:
- * `module-rtl-new.mjs`(RTL)、`module-verif-new.mjs`(测试平台 / `run-do` / `comp`)、
+ * `module-rtl-new.mjs`(RTL)、`module-verif-new.mjs`(测试平台 / `sim-compile` / `sim-run` / `comp`)、
  * `module-synth-new.mjs`(约束 / `synth-script`)。这样命令一看就知道属于哪个环节,
  * 也不需要调用方去记 `--kind`。
  * @param options - `{ root, name, template, kind, out, force, dryRun }`;`synth-script` 另收 `{ part, top }`(从 spec 读到的值)。
@@ -265,8 +264,8 @@ function parseArgs(argv) {
  */
 export function stampFile(options) {
   const { root, name, template, kind } = options;
-  // `run-do` / `comp` 是**原样复制**:落点固定、正文不替模块名 —— 所以不要模块名。
-  const copyAsIs = kind === "run-do" || kind === "comp";
+  // 脚本模板是**原样复制**:落点固定、正文不替模块名 —— 所以不要模块名。
+  const copyAsIs = ["sim-compile", "sim-run", "comp"].includes(kind);
   if (root === undefined || template === undefined || (name === undefined && !copyAsIs)) {
     console.error(
       copyAsIs
@@ -323,7 +322,7 @@ export function stampFile(options) {
   }
 
   const source = readFileSync(template, "utf8");
-  // `run-do` / `comp` 一个字符都不改(模板头里的 `<ModuleName>` 留给起完按工程改),所以只提示还留着的占位符
+  // 脚本模板一个字符都不改,所以只提示还留着的占位符
   let text;
   let replaced = [];
   let remaining;
@@ -394,8 +393,8 @@ export function stampFile(options) {
  */
 export function parseStampArgs(argv) {
   // 位置参数只取**第一个选项之前**的那些(与 setup-scaffold 同一条规矩):否则选项的值会被当成
-  // 模块根/模块名 —— 实测 `module-verif-new.mjs --kind run-do` 漏给根目录时,`run-do` 会被当成根,
-  // 于是在 `./run-do/` 下起出 verif/run.do 还退 0(少给参数变成了"悄悄写到别处")。
+  // 模块根/模块名 —— 实测脚本类 kind 漏给根目录时,kind 的值会被当成根,
+  // 于是在当前目录下悄悄写到别处。这里只认选项前的显式位置参数。
   const positional = [];
   for (const arg of argv) {
     if (arg.startsWith("-")) break;

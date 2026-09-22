@@ -46,7 +46,7 @@ node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> 
 模块名,要另换位置用 `--out`)。扩展名跟着模板走:先在设置里选对**仿真语言**
 (SystemVerilog → `.sv` / Verilog → `.v` / VHDL → `.vhd`)。
 
-测试平台必须满足三条(写法自带 `tb.sv` 里都有,这里只写判据):
+测试平台必须满足三条(写法在所选 Testbench 模板里都有,这里只写判据):
 
 - **失败留下可搜的标记**:判定用 `$fatal(1, ...)`,产生 `** Fatal:` 行。只 `$display` 一句 FAIL
   脚本搜不到,这条是硬红线(`$fatal` 不会让 vsim 退出码变非零,见「判据」)
@@ -61,29 +61,32 @@ node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> 
 编译命令也换成对应语言的形式(`vcom` 对应 VHDL,`vlog`/`xvlog -sv` 对应 SV)。
 
 **先用设置里选定的仿真器** —— 看会话开头「本机 FPGA 工具链」的**已就绪清单**:仿真器是
-ModelSim / Vivado XSim / Verilator、路径是什么,都写在那里。**不得另行挑选一个。**
+ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里。**不得另行挑选一个。**
 
-**ModelSim / Questa(默认)**
+**ModelSim / QuestaSim(默认)**
 
-`run -all`、`quit -f` 是**仿真器自己的命令**,不是 shell 命令 —— 写进 `verif/run.do`,再一次调用。
+编译与运行使用两份独立模板:`verif/compile.do` 只收集并编译，`verif/run.do` 只加载已编译的
+`work/`、运行并判定。这样可反复改激励/换顶层而不把两个职责混成一份不可复核的大脚本。
 
-**别手抄 `run.do`**:用模板起一份(它把踩过的坑固化了,起完按工程改):
+**别手抄脚本**:用分类模板各起一份(它们把踩过的坑固化了,起完按当前模块改旋钮):
 
 ```powershell
-node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind run-do
+node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-compile
+node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run
 cd <模块根>/verif
-& "<仿真器路径>" -c -do "do run.do; quit -f"
+& "<仿真器路径>" -c -do compile.do
+& "<仿真器路径>" -c -do run.do
 ```
 
 模板里这几段**别删**(删了就退回"看着跑完了、其实没跑"的形态):
 
-- 收集时**跳过 `rtl/ip/` 下的 `*_stub.*`**:IP 自带的黑盒 stub 与真模型**同名**,放它进编译会
+- `compile.do` 收集时**跳过 `rtl/ip/` 下的 `*_stub.*`**:IP 自带的黑盒 stub 与真模型**同名**,放它进编译会
   **静默覆盖真模型**(vlog 只给 Warning),整轮仿真跑在空模块上还打印成功标记;跳过了要打印出来。
-- 编译用 `catch` 判定,失败即 `quit -f -code 1`;
-- **`onfinish stop` 必须在 elaborate 之后**,否则 `$finish`/`$fatal` 直接结束会话,后面全成死代码;
-- 结尾的 **run-level gate** 扫 `sim.log`:有 `Error`/`Fatal` 或缺成功标记 → `-code 1`。
+- `compile.do` 对 VHDL/Verilog 分派并用 `catch` 判定,失败即 `quit -f -code 1`;
+- `run.do` 的 **`onfinish stop` 必须在 elaborate 之后**,否则 `$finish`/`$fatal` 直接结束会话;
+- `run.do` 结尾的 **run-level gate** 扫 `sim.log`:有 `Error`/`Fatal` 或缺成功标记 → `-code 1`。
 
-**判据:跑 `run.do` 的退出码说了算** —— 但要知道它为什么可信:裸 `vsim` 的退出码**不可信**
+**判据:先要求 `compile.do` 退出 0，再看 `run.do` 的退出码** —— 裸 `vsim` 的退出码**不可信**
 (实测 2020.4:`$fatal` 之后 `run -all` 既不抛错也不改退出码,退出码仍是 0),是**模板里的 gate**
 把它变成可靠判据的。**没有 gate 的脚本不能按退出码判。**
 
@@ -220,7 +223,7 @@ try {
 - **只有取值真的不同才算 FAIL** —— 宽度少一位、符号或字节序不同导致**数值变了**、丢掉某个通道,
   这些看着像格式,实际是功能问题,不得当格式放过
 
-**比对脚本用自带模板 `templates/comp.py` 起一份**(它已经做到了"先归一化、只比值"):
+**比对脚本用模板库 `verification/python_data_verification.py` 起一份**(它已经做到"先归一化、只比值"):
 
 ```powershell
 node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp
@@ -322,9 +325,10 @@ FAIL);② `verif/*.md` / `synth/*.md` 里引用的路径是否都在(缺了 → 
 | 干什么 | 命令 | 在哪一节 |
 |---|---|---|
 | 起测试平台 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"` | 第一步 |
-| 起仿真脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind run-do` | 第二步 |
+| 起仿真编译脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-compile` | 第二步 |
+| 起仿真运行脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run` | 第二步 |
 | 起比对脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp` | 第四步 |
-| 跑出来 | 按选中的仿真器:ModelSim 是 `& "<仿真器路径>" -c -do run.do`(在 `verif/` 下),选了 XSim 就是 `xvlog`/`xelab`/`xsim` 三步 —— 写法都见第二步 | 第二步 |
+| 跑出来 | 按选中的仿真器:ModelSim / QuestaSim 依次执行 `compile.do`、`run.do`(在 `verif/` 下),选了 XSim 就是 `xvlog`/`xelab`/`xsim` 三步 | 第二步 |
 | 看波形 | 用已经确认过的 `verif/run.do` 起 GUI(XSim 用它的 snapshot),不另起一套加载 | 第三步 |
 | **核证据路径** | `node "<自带命令目录>\module\module-report-check.mjs" <模块根>` | 产物(写 `PASS` 之前) |
 

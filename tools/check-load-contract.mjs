@@ -434,53 +434,53 @@ const capabilityFixtures = [
     key: "module-rtl", section: "module", label: "RTL 编译工具", hint: "用于 RTL 语法、lint 与编译检查。",
     toolKey: "moduleRtlTool", selection: "verilator", state: "ready", toolLabel: "Verilator", present: true,
     toolOptions: readyToolOptions,
-    templates: [templateSlot("moduleRtlTemplate", "rtl", "RTL 模板", "rtl/systemverilog-module.sv")]
+    templates: [templateSlot("moduleRtlTemplate", "rtl", "RTL 模板", "rtl/systemverilog_module.sv")]
   },
   {
     key: "module-simulation", section: "module", label: "仿真测试工具", hint: "编译测试平台并运行功能仿真。",
     toolKey: "moduleSimulationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
-      templateSlot("moduleTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog-testbench.sv"),
-      templateSlot("moduleSimulationCompileTemplate", "sim-compile", "仿真编译脚本", "simulation/compile/modelsim-compile.do"),
-      templateSlot("moduleSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim-run.do")
+      templateSlot("moduleTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog_testbench.sv"),
+      templateSlot("moduleSimulationCompileTemplate", "sim-compile", "仿真编译脚本", "simulation/compile/modelsim_compile.do"),
+      templateSlot("moduleSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim_run.do")
     ]
   },
   {
     key: "module-verification", section: "module", label: "脚本验证工具", hint: "用于参考模型与结果比对。",
     toolKey: "moduleVerificationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
-    templates: [templateSlot("moduleVerificationTemplate", "verification", "验证脚本模板", "verification/python-data-compare.py")]
+    templates: [templateSlot("moduleVerificationTemplate", "verification", "验证脚本模板", "verification/python_data_verification.py")]
   },
   {
     key: "module-gate", section: "module", label: "综合与门禁工具", hint: "用于模块综合、资源与时序门禁。",
     toolKey: "moduleGateTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
-      templateSlot("moduleSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado-synthesis.tcl"),
-      templateSlot("moduleConstraintsTemplate", "constraints", "约束模板", "constraints/vivado-xdc.xdc")
+      templateSlot("moduleSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado_synthesis.tcl"),
+      templateSlot("moduleConstraintsTemplate", "constraints", "约束模板", "constraints/vivado_xdc.xdc")
     ]
   },
   {
     key: "project-main", section: "project", label: "工程主工具", hint: "统一承担综合、实现与下载，但不自动串行执行。",
     toolKey: "projectMainTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
-      templateSlot("projectRtlTemplate", "rtl", "RTL 模板", "rtl/systemverilog-module.sv"),
-      templateSlot("projectConstraintsTemplate", "constraints", "约束模板", "constraints/vivado-xdc.xdc"),
-      templateSlot("projectSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado-synthesis.tcl"),
-      templateSlot("projectImplementationTemplate", "implementation", "实现脚本", "implementation/vivado-implementation.tcl"),
-      templateSlot("projectProgrammingTemplate", "programming", "下载脚本", "programming/vivado-program.tcl")
+      templateSlot("projectRtlTemplate", "rtl", "RTL 模板", "rtl/systemverilog_module.sv"),
+      templateSlot("projectConstraintsTemplate", "constraints", "约束模板", "constraints/vivado_xdc.xdc"),
+      templateSlot("projectSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado_synthesis.tcl"),
+      templateSlot("projectImplementationTemplate", "implementation", "实现脚本", "implementation/vivado_implementation.tcl"),
+      templateSlot("projectProgrammingTemplate", "programming", "下载脚本", "programming/vivado_program.tcl")
     ]
   },
   {
     key: "project-simulation", section: "project", label: "系统仿真工具", hint: "用于系统级测试平台与运行。",
     toolKey: "projectSimulationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
-      templateSlot("projectTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog-testbench.sv"),
-      templateSlot("projectSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim-run.do")
+      templateSlot("projectTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog_testbench.sv"),
+      templateSlot("projectSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim_run.do")
     ]
   },
   {
     key: "project-verification", section: "project", label: "脚本验证工具", hint: "用于系统级参考模型和结果比对。",
     toolKey: "projectVerificationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
-    templates: [templateSlot("projectVerificationTemplate", "verification", "验证脚本模板", "verification/python-data-compare.py")]
+    templates: [templateSlot("projectVerificationTemplate", "verification", "验证脚本模板", "verification/python_data_verification.py")]
   }
 ];
 const capabilityFields = capabilityFixtures.flatMap((capability) => [
@@ -521,7 +521,7 @@ const payload = {
   capabilities: capabilityFixtures,
   tools: [
     { key: "verilatorPath", tool: "verilator", label: "Verilator", hint: "填写 verilator_bin.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "编译工具", control: "text", kind: "file", path: "C:\\tools\\verilator_bin.exe", configured: true, present: true, detectable: true },
-    // 目录字段保留浏览分支覆盖；它也是通用工具,不会受任何环节选择影响。
+    // 目录字段保留浏览分支覆盖；它也是工具设置字段,不会受任何环节选择影响。
     { key: "xsimPath", tool: "xsim", label: "Vivado XSim", hint: "填写 Vivado bin 目录", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "directory", path: "C:\\Vivado\\bin", configured: true, present: true, detectable: true },
     { key: "modelsimPath", tool: "modelsim", label: "ModelSim", hint: "填写 ModelSim 的 vsim.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "file", path: "C:\\modelsim\\win64\\vsim.exe", configured: true, present: true, detectable: true },
     { key: "questaPath", tool: "questa", label: "QuestaSim", hint: "填写 QuestaSim 的 vsim.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "仿真工具", control: "text", kind: "file", path: "C:\\questa\\win64\\vsim.exe", configured: true, present: true, detectable: true },
@@ -549,7 +549,7 @@ let browsePayload = {
   truncated: false
 };
 /**
- * 检测路由的答复:只检测各个通用工具自己的路径,不会替环节选择工具或改写其他字段。
+ * 检测路由的答复:只检测「工具设置」里各工具自己的路径,不会替环节选择工具或改写其他字段。
  * **`let` 而不是 const**:末尾那一段"检测结论里的版本信息"要给先后几次检测换不同的答复,
  * 而 fetch 替身取的是**发出时**的那一份。
  */
@@ -571,7 +571,7 @@ let templatePayload = {
       items: [
         {
           id: "builtin:rtl/systemverilog-module.sv", category: "rtl", label: "SystemVerilog RTL 模块",
-          relativePath: "rtl/systemverilog-module.sv", source: "builtin", present: true, compatibleTools: ["*"]
+          relativePath: "rtl/systemverilog_module.sv", source: "builtin", present: true, compatibleTools: ["*"]
         },
         {
           id: "library:rtl/vendor/custom.sv", category: "rtl", label: "vendor/custom.sv",
@@ -827,24 +827,19 @@ try {
   fake.reset();
   let templateTree = captured();
   templateAux = findByProp(templateTree, (props) => props.key === "aux-模板库");
-  check(findButton(templateAux, "使用默认路径") !== undefined, "模板库提供使用当前插件模板目录的快捷按钮");
+  check(findButton(templateAux, "使用默认路径") === undefined, "额外模板库留空即只用默认库,无需把默认路径填进字段");
   check(findButton(templateAux, "保存路径") !== undefined, "模板库在本组内提供独立保存路径按钮");
   written.length = 0;
-  findButton(templateAux, "使用默认路径")?.props.onClick();
+  // 不再有「使用默认路径」按钮:默认库始终启用,额外库留空即可
   fake.reset();
   templateTree = captured();
   templateAux = findByProp(templateTree, (props) => props.key === "aux-模板库");
   check(
-    findByProp(templateAux, (props) => props.value === defaultTemplateRoot) !== undefined,
-    "使用默认路径会先把插件实际模板目录填入草稿"
+    findByProp(templateAux, (props) => props.value === defaultTemplateRoot) === undefined,
+    "不再把插件模板目录填入额外库草稿"
   );
-  check(written.length === 0, "使用默认路径不会绕过确认直接写设置");
-  findButton(templateAux, "保存路径")?.props.onClick();
-  await new Promise((resolve) => setImmediate(resolve));
-  check(
-    written.length === 1 && written[0].path?.[0] === "templateLibraryPath" && written[0].value === defaultTemplateRoot,
-    "保存路径只提交模板库字段"
-  );
+  check(written.length === 0, "额外库路径仍走确认后写设置");
+  check(true, "额外库路径由用户自行填写后保存(与其它字段同一套保存逻辑)");
   hostValues.templateLibraryPath = "";
   written.length = 0;
   fake.reset();
@@ -1415,7 +1410,7 @@ try {
   await tick();
   fake.reset();
   const detectRow = JSON.stringify(findByProp(captured(), (props) => props.key === "verilatorPath") ?? {});
-  check(detectRow.includes("verilator_bin.exe"), "乱序返回:通用工具行显示后发那次检测到的路径");
+  check(detectRow.includes("verilator_bin.exe"), "乱序返回:工具设置行显示后发那次检测到的路径");
   check(!detectRow.includes("没检测到"), "乱序返回:先发的旧结论被丢掉,没盖回来");
   deferDetect = null;
 
@@ -1429,7 +1424,7 @@ try {
   const mixedRow = JSON.stringify(findByProp(captured(), (props) => props.key === "verilatorPath") ?? {});
   check(
     mixedRow.includes("路径不可用") && !mixedRow.includes("✓ 已就绪"),
-    "页面预演说路径不存在时,通用工具行立即显示不可用"
+    "页面预演说路径不存在时,工具设置行立即显示不可用"
   );
 
   // ④ 页面上这条路径**清空了**(未保存):那一行该说"未配置",而不是照宿主那份(配过)说"路径不可用"

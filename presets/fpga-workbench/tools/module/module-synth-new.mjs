@@ -6,25 +6,22 @@
 //   node module-synth-new.mjs <模块根> <模块名> --kind synth-script
 //                      [--template <综合脚本路径>] [--out <相对路径>] [--force] [--dry-run]
 // 默认落到 `synth/<模块名>.xdc`。`--kind synth-script` 固定落 `synth/run_synth.tcl`(文件名不跟
-// 模板扩展名走);不给 `--template` 时用自带那份 `templates/run_synth.tcl`。
+// 模板扩展名走);不给 `--template` 时用分类模板库里的 `synthesis/vivado_synthesis.tcl`。
 // 综合脚本里的**器件型号与顶层模块名从 spec 读出来填进去** —— 器件与时钟只写一处,别再手抄。
-// **器件来源(用户口径 2026-09-21)**:模块 spec 不重述器件,以**工程 spec** 为准 ——
-//   ① 模块自己的 `spec/spec.md` 写了 → 用它;
-//   ② 没有 → 用**兄弟目录** `../project/spec/spec.md`(本模式的工程骨架:<工程根>/project/ + <工程根>/<模块>/);
-//   ③ 两处都没有 → **拒绝生成**(退出码 2),而不是继承模板里的默认器件 —— 那会拿一个看起来可信的
-//      错值去综合(实测:老 IP 与工程器件不同族 → IP 被锁、模块找不到,查很久)。
+// **器件来源**:模块根若位于某个工程目录之下,向上找到 `kind: project` 锚点并读 `doc/spec.md`;
+// 否则读模块自己的 `spec/spec.md`。不再猜“兄弟 project/”目录 —— 工程目录是用户指定的任意路径。
 // 顶层模块名同理:spec 里没有就按**模块名**填(那不是猜 —— 本模式约定 `rtl/<模块名>.sv` 就是顶层)。
 // 模板路径看会话开头「本机 FPGA 工具链」的模板一节。
 // 写完记得:约束文件名与里面的时钟名必须与器件配置里的写法完全一致(见 fpga-module-synth)。
 // 退出码:0 成功 / 1 目标已存在且未加 --force / 2 参数或环境不对(含"器件没定")
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parseStampArgs, stampFile } from "../lib/stamp.mjs";
 
 /** 自带的综合脚本模板:`tools/` 与 `templates/` 同级(装进 profile 后这个相对关系不变)。 */
-const BUNDLED_RUN_SYNTH = fileURLToPath(new URL("../../templates/run_synth.tcl", import.meta.url));
+const BUNDLED_RUN_SYNTH = fileURLToPath(new URL("../../templates/synthesis/vivado_synthesis.tcl", import.meta.url));
 
 // 器件型号:spec.md 没有固定模板,所以按**型号串**认,不按第几节认 —— Xilinx/AMD 的型号一律以
 // `xc` 起头,后面可以是 `7a100t`(7 系列)也可以是 `ku040`/`zu7ev`/`vu9p`(UltraScale 那种两字母系列),
@@ -90,8 +87,8 @@ export function fieldsFromSpec(specPath) {
 /**
  * 按「**工程 spec 优先** → 模块 spec」的顺序读器件,顶层名只认模块自己的 spec。
  *
- * 器件(用户口径:器件只写一处,工程是权威 —— 第四轮复审 Q4-01):
- *   - 兄弟工程 spec(`<模块根的兄弟>/project/spec/spec.md`)里有器件 → **以它为准**;
+ * 器件只写一处,工程是权威:
+ *   - 向上找到 `kind: project` 锚点后,若其 `doc/spec.md` 有器件 → **以它为准**;
  *     模块 spec 也写了、但**不一致** → 返回 `conflict`(调用方**拒绝生成**,不替用户选一个);
  *   - 工程 spec 没有(独立模块) → 用模块 spec 自己写的;
  *   - 两处都没有 → `part` 为 `undefined`(调用方拒绝生成)。
@@ -101,11 +98,30 @@ export function fieldsFromSpec(specPath) {
  * @returns `{ specPath, projectSpecPath, part, top, partSource, conflict }`;
  *   `conflict` 为 `{ module, project, projectSpecPath }`(只在不同时为 `undefined` 之外的对象)。
  */
+function enclosingProjectSpec(root) {
+  let cursor = resolve(root);
+  while (true) {
+    const anchor = join(cursor, ".fpga-workbench.json");
+    if (existsSync(anchor)) {
+      try {
+        if (JSON.parse(readFileSync(anchor, "utf8"))?.kind === "project") {
+          return join(cursor, "doc", "spec.md");
+        }
+      } catch {
+        // 读不懂的锚点不拿来猜工程；模块自己的 spec 仍可独立工作。
+      }
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) return undefined;
+    cursor = parent;
+  }
+}
+
 export function readSpecFields(root) {
   const specPath = join(root, "spec", "spec.md");
-  const projectSpecPath = join(root, "..", "project", "spec", "spec.md");
+  const projectSpecPath = enclosingProjectSpec(root);
   const mine = fieldsFromSpec(specPath);
-  const fromProject = fieldsFromSpec(projectSpecPath);
+  const fromProject = projectSpecPath === undefined ? {} : fieldsFromSpec(projectSpecPath);
 
   if (fromProject.part !== undefined && mine.part !== undefined && mine.part.toLowerCase() !== fromProject.part.toLowerCase()) {
     // 两处都写了、还不一样:器件以工程为准,模块那份是错的 —— 拒绝,并把两处都列出来
@@ -192,15 +208,17 @@ function main() {
   if (args.root !== undefined && spec.part !== undefined && !partLooksComplete(spec.part)) {
     console.error(`器件串不完整,先不起综合脚本:解析到的是 ${spec.part}`);
     console.error("  要写完整型号,例如 xc7a100tfgg484-2(器件 + 封装 + 速度等级)——");
-    console.error(`  工程 spec:${spec.projectSpecPath} 或模块 spec:${spec.specPath}`);
+    console.error(spec.projectSpecPath === undefined
+      ? `  模块 spec:${spec.specPath}`
+      : `  工程 spec:${spec.projectSpecPath} 或模块 spec:${spec.specPath}`);
     return 2;
   }
   // 器件定不下来就**拒绝**:留着模板里的默认器件等于拿一个看起来可信的错值去综合(见文件头)。
   if (args.root !== undefined && spec.part === undefined) {
     console.error("器件没定,先不起综合脚本(继承模板默认器件会拿错器件去综合):");
     console.error(`  模块 spec:${spec.specPath} 里没有器件型号`);
-    console.error(`  工程 spec:${spec.projectSpecPath} 里也没有`);
-    console.error("  器件只写一处(用户口径):写进工程 spec,或写进这个模块的 spec;再跑本命令。");
+    if (spec.projectSpecPath !== undefined) console.error(`  工程 spec:${spec.projectSpecPath} 里也没有`);
+    console.error("  写进模块 spec；若模块位于工程目录下,也可写进该工程的 doc/spec.md。再跑本命令。");
     return 2;
   }
   // 顶层名:只认**模块自己的** spec,没有就按模块名填(第四轮复审 Q4-02:工程 spec 里那个是

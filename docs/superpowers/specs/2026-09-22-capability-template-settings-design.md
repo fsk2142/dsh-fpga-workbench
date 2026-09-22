@@ -128,15 +128,15 @@ templates/ 或用户选择的 FPGA-Templates/
 
 ```text
 presets/fpga-workbench/templates/
-├─ rtl/systemverilog-module.sv
-├─ constraints/vivado-xdc.xdc
-├─ verification/python-data-compare.py
-├─ simulation/testbench/systemverilog-testbench.sv
-├─ simulation/compile/modelsim-compile.do
-├─ simulation/run/modelsim-run.do
-├─ synthesis/vivado-synthesis.tcl
-├─ implementation/vivado-implementation.tcl
-└─ programming/vivado-program.tcl
+├─ rtl/systemverilog_module.sv
+├─ constraints/vivado_xdc.xdc
+├─ verification/python_data_comp.py
+├─ simulation/testbench/systemverilog_testbench.sv
+├─ simulation/compile/modelsim_compile.do
+├─ simulation/run/modelsim_run.do
+├─ synthesis/vivado_synthesis.tcl
+├─ implementation/vivado_implementation.tcl
+└─ programming/vivado_program.tcl
 ```
 
 ModelSim 编译脚本只负责编译；运行脚本只负责加载、运行和结果门禁。Vivado 综合、实现、下载脚本互不自动调用。脚本必须要求显式配置项目事实、失败时返回失败，不隐藏地组成流水线。

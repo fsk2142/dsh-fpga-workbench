@@ -42,7 +42,7 @@ import { pathToFileURL } from "node:url";
 
 import { realEscape, writeFileRecoverable } from "../lib/stamp.mjs";
 // 器件从 spec 里怎么读,**复用综合脚本那一套**(不各写一份,免得两个工具读法不一致)
-import { fieldsFromSpec } from "./module-synth-new.mjs";
+import { fieldsFromSpec, readSpecFields } from "./module-synth-new.mjs";
 
 /** 结论文件所在的环节目录(只扫顶层 `*.md`;`explore/`、`work/` 那些中间产物不看)。 */
 const REPORT_DIRS = ["spec", "verif", "synth"];
@@ -331,7 +331,7 @@ export function auditReports(moduleRoot) {
  *
  * 为什么:器件只该有一处来源(工程 spec),模块 spec 重述一份迟早对不上 —— 而 RTL 与 IP 都按那个
  * 串生成(实测踩过:模块按 xcku3p 综合、IP 却是在 xc7a100t 工程里定制的 → IP 被锁、`module not found`)。
- * 工程根按本模式的布局找:模块根的**兄弟** `../project/spec/spec.md`(见 `setup-scaffold` 的工程骨架)。
+ * 工程根按锚点找:从模块根向上找到 `kind: project`,再读该工程的 `doc/spec.md`。
  * @param moduleRoot - 模块根。
  * @returns `{ module?, project?, ok }`;两边都没写器件时为 `{ ok: true }`。
  */
@@ -341,7 +341,8 @@ export function deviceConsistency(moduleRoot) {
   // UltraScale 型号(字母两三位)匹配不上,解析结果 undefined → 检查**静默不报**;
   // ② 全文第一条未必是目标器件(附录、备选、引用别的工程都会先出现)。
   const mine = fieldsFromSpec(join(moduleRoot, "spec", "spec.md")).part;
-  const theirs = fieldsFromSpec(join(moduleRoot, "..", "project", "spec", "spec.md")).part;
+  const projectSpecPath = readSpecFields(moduleRoot).projectSpecPath;
+  const theirs = projectSpecPath === undefined ? undefined : fieldsFromSpec(projectSpecPath).part;
   if (mine === undefined || theirs === undefined) return { module: mine, project: theirs, ok: true };
   return { module: mine, project: theirs, ok: mine.toLowerCase() === theirs.toLowerCase() };
 }

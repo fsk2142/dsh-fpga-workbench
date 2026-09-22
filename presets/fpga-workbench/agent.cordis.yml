@@ -43,9 +43,11 @@
       | 用户要什么 | 加载哪个 |
       |---|---|
       | 谈需求、定方案、画实现思路流程图 | fpga-module-spec / fpga-project-spec |
-      | 写或改 RTL、查规范、定位编译与 lint 报错 | fpga-module-rtl |
+      | 写或改模块 RTL、查模块规范、定位编译与 lint 报错 | fpga-module-rtl |
+      | 写工程专用 RTL / 顶层，或检查工程 RTL | fpga-project-rtl / fpga-project-lint |
       | 写测试平台、把数据跑出来、拿参考模型比、查为什么对不上 | fpga-module-verif |
-      | 跑综合、解释综合报错、看资源;判定综合后时序(约束、CDC) | fpga-module-synth |
+      | 跑模块综合、解释报错、看资源与综合后时序 | fpga-module-synth |
+      | 跑工程综合、看资源与综合后时序摘要 | fpga-project-synth |
       | 判工程级 post-route 时序是否收敛 | fpga-project-timing |
       | 审代码或方案、查早期风险、通盘看东西齐不齐对不对 | fpga-module-review(按需,不强制) |
       | 顶层骨架、接口对接、elaboration | fpga-project-integrate |
@@ -57,7 +59,7 @@
       几条硬要求:
 
       - **动手规则的唯一出处是本模式工作区规则**:动手前先看清现状、方案要不要先出图确认、局部
-        问题怎么闭环、结论与证据怎么留 —— 都写在骨架落下的 `<工作区根>/AGENTS.fpga.md` 里(正文
+        问题怎么闭环、结论与证据怎么留 —— 都写在骨架落下的 `<用户指定工程目录>/AGENTS.fpga.md` 里(正文
         来自包内 README 的 `fpga-mode-rules` 区块)。**下面几条只是它的引用与摘要,不要在这里另立
         一套**;项目里还没有那份文件时,按 `fpga-module-spec` / `fpga-module-rtl` 等技能里各自那条
         判据办。

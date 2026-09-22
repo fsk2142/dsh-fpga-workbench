@@ -330,9 +330,28 @@ const written = [];
  */
 const hostValues = {
   verilatorPath: "C:\\tools\\verilator_bin.exe",
-  moduleRtlCompilerTool: "verilator",
-  moduleRtlCompilerPath: "",
-  projectImplFpgaTool: "auto",
+  moduleRtlTool: "verilator",
+  moduleRtlTemplate: "",
+  moduleSimulationTool: "auto",
+  moduleTestbenchTemplate: "",
+  moduleSimulationCompileTemplate: "",
+  moduleSimulationRunTemplate: "",
+  moduleVerificationTool: "auto",
+  moduleVerificationTemplate: "",
+  moduleGateTool: "auto",
+  moduleSynthesisTemplate: "",
+  moduleConstraintsTemplate: "",
+  projectMainTool: "auto",
+  projectRtlTemplate: "",
+  projectConstraintsTemplate: "",
+  projectSynthesisTemplate: "",
+  projectImplementationTemplate: "",
+  projectProgrammingTemplate: "",
+  projectSimulationTool: "auto",
+  projectTestbenchTemplate: "",
+  projectSimulationRunTemplate: "",
+  projectVerificationTool: "auto",
+  projectVerificationTemplate: "",
   xsimPath: "C:\\Vivado\\bin",
   modelsimPath: "C:\\modelsim\\win64\\vsim.exe",
   // 第三个可编辑字段的宿主值:用来验"这次确实存了、期间也没再被改过"的键会正常清掉
@@ -375,6 +394,102 @@ const scope = {
 };
 let captured;
 let browserRequested = 0;
+
+const readyToolOptions = [
+  { value: "auto", label: "由 AI 从已就绪工具中判断", ready: true, disabled: false },
+  { value: "verilator", label: "Verilator", ready: true, disabled: false, state: "ready" },
+  { value: "iverilog", label: "Icarus Verilog", ready: false, disabled: true, state: "unconfigured" },
+  { value: "none", label: "明确不用", ready: true, disabled: false }
+];
+const autoToolOptions = [
+  { value: "auto", label: "由 AI 从已就绪工具中判断", ready: true, disabled: false },
+  { value: "modelsim", label: "ModelSim / Questa", ready: true, disabled: false, state: "ready" },
+  { value: "xsim", label: "Vivado XSim", ready: true, disabled: false, state: "ready" },
+  { value: "vivado", label: "Vivado", ready: false, disabled: true, state: "unconfigured" },
+  { value: "python", label: "Python 3", ready: false, disabled: true, state: "unconfigured" },
+  { value: "none", label: "明确不用", ready: true, disabled: false }
+];
+const templateSlot = (key, category, label, name) => ({
+  key,
+  category,
+  label,
+  selection: "",
+  state: "default",
+  present: true,
+  source: "builtin",
+  id: `builtin:${name}`,
+  templateLabel: name.split("/").at(-1),
+  summary: `使用内置默认模板：${name.split("/").at(-1)}`
+});
+const capabilityFixtures = [
+  {
+    key: "module-rtl", section: "module", label: "RTL 编译工具", hint: "用于 RTL 语法、lint 与编译检查。",
+    toolKey: "moduleRtlTool", selection: "verilator", state: "ready", toolLabel: "Verilator", present: true,
+    toolOptions: readyToolOptions,
+    templates: [templateSlot("moduleRtlTemplate", "rtl", "RTL 模板", "rtl/systemverilog-module.sv")]
+  },
+  {
+    key: "module-simulation", section: "module", label: "仿真测试工具", hint: "编译测试平台并运行功能仿真。",
+    toolKey: "moduleSimulationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
+    templates: [
+      templateSlot("moduleTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog-testbench.sv"),
+      templateSlot("moduleSimulationCompileTemplate", "sim-compile", "仿真编译脚本", "simulation/compile/modelsim-compile.do"),
+      templateSlot("moduleSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim-run.do")
+    ]
+  },
+  {
+    key: "module-verification", section: "module", label: "脚本验证工具", hint: "用于参考模型与结果比对。",
+    toolKey: "moduleVerificationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
+    templates: [templateSlot("moduleVerificationTemplate", "verification", "验证脚本模板", "verification/python-data-compare.py")]
+  },
+  {
+    key: "module-gate", section: "module", label: "综合与门禁工具", hint: "用于模块综合、资源与时序门禁。",
+    toolKey: "moduleGateTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
+    templates: [
+      templateSlot("moduleSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado-synthesis.tcl"),
+      templateSlot("moduleConstraintsTemplate", "constraints", "约束模板", "constraints/vivado-xdc.xdc")
+    ]
+  },
+  {
+    key: "project-main", section: "project", label: "工程主工具", hint: "统一承担综合、实现与下载，但不自动串行执行。",
+    toolKey: "projectMainTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
+    templates: [
+      templateSlot("projectRtlTemplate", "rtl", "RTL 模板", "rtl/systemverilog-module.sv"),
+      templateSlot("projectConstraintsTemplate", "constraints", "约束模板", "constraints/vivado-xdc.xdc"),
+      templateSlot("projectSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado-synthesis.tcl"),
+      templateSlot("projectImplementationTemplate", "implementation", "实现脚本", "implementation/vivado-implementation.tcl"),
+      templateSlot("projectProgrammingTemplate", "programming", "下载脚本", "programming/vivado-program.tcl")
+    ]
+  },
+  {
+    key: "project-simulation", section: "project", label: "系统仿真工具", hint: "用于系统级测试平台与运行。",
+    toolKey: "projectSimulationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
+    templates: [
+      templateSlot("projectTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog-testbench.sv"),
+      templateSlot("projectSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim-run.do")
+    ]
+  },
+  {
+    key: "project-verification", section: "project", label: "脚本验证工具", hint: "用于系统级参考模型和结果比对。",
+    toolKey: "projectVerificationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
+    templates: [templateSlot("projectVerificationTemplate", "verification", "验证脚本模板", "verification/python-data-compare.py")]
+  }
+];
+const capabilityFields = capabilityFixtures.flatMap((capability) => [
+  {
+    key: capability.toolKey, label: "工具", hint: "只选择顶部已经就绪的工具。", required: false, skips: [],
+    section: capability.section, sectionLabel: capability.section === "module" ? "模块工具" : "工程工具",
+    capability: capability.key, capabilityLabel: capability.label, group: capability.label,
+    control: "select", path: capability.selection, configured: true, present: true, default: "auto",
+    options: capability.toolOptions.map(({ value, label }) => ({ value, label }))
+  },
+  ...capability.templates.map((template) => ({
+    key: template.key, label: template.label, hint: "从内置模板与模板库中选择。", required: false, skips: [],
+    section: capability.section, sectionLabel: capability.section === "module" ? "模块工具" : "工程工具",
+    capability: capability.key, capabilityLabel: capability.label, group: capability.label,
+    category: template.category, control: "template", path: template.selection, configured: false, present: true, default: ""
+  }))
+]);
 /**
  * 状态路由的答复(不带查询串那条 = 初次取字段定义)。字段表本身固定;末段要换的是带
  * `pendingCleanup` 的那份 preset(见 `statusPreset`)。
@@ -394,11 +509,7 @@ const payload = {
     { key: "xsim", role: "simulator", groupLabel: "仿真工具", label: "Vivado XSim", pathKey: "xsimPath", fieldKeys: ["xsimPath"], kind: "directory", path: "C:\\Vivado\\bin", configured: true, present: true, detectable: true, state: "ready" },
     { key: "modelsim", role: "simulator", groupLabel: "仿真工具", label: "ModelSim / Questa", pathKey: "modelsimPath", fieldKeys: ["modelsimPath", "modelsimIniPath"], kind: "file", path: "C:\\modelsim\\win64\\vsim.exe", configured: true, present: true, detectable: true, state: "ready" }
   ],
-  stages: [
-    { key: "module-rtl", section: "module", label: "RTL", bindings: ["moduleRtlCompiler"] },
-    { key: "module-review", section: "module", label: "审查", bindings: [], note: "复用相关环节工具" },
-    { key: "project-impl", section: "project", label: "实现", bindings: ["projectImplFpga"] }
-  ],
+  capabilities: capabilityFixtures,
   tools: [
     { key: "verilatorPath", tool: "verilator", label: "Verilator", hint: "填写 verilator_bin.exe", required: false, skips: [], section: "common", sectionLabel: "工具设置", group: "编译工具", control: "text", kind: "file", path: "C:\\tools\\verilator_bin.exe", configured: true, present: true, detectable: true },
     // 目录字段保留浏览分支覆盖；它也是通用工具,不会受任何环节选择影响。
@@ -407,16 +518,13 @@ const payload = {
     // 第三个可编辑字段(键/标签/组名照 lib/toolchain.js 的 FIELDS):一次保存提交**两个**键时,
     // 才分得清"存下去且没人再动它"(该清)和"存下去但期间又被改过"(该留)。
     { key: "modelsimIniPath", tool: "modelsim", label: "库映射文件", hint: "填 modelsim.ini", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "C:\\modelsim\\modelsim.ini", configured: true, present: true, group: "语言与库映射", control: "text", kind: "file", detectable: false },
-    { key: "rtlLangStd", label: "RTL 语言与标准", hint: "开发约定", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "systemverilog-2017", configured: true, present: true, group: "语言与库映射", control: "select", default: "systemverilog-2017", options: [{ value: "systemverilog-2017", label: "SystemVerilog 1800-2017" }] },
-    { key: "moduleRtlCompilerTool", label: "编译 / lint 工具", hint: "该环节首选工具", required: false, skips: [], section: "module", sectionLabel: "模块工具", stage: "module-rtl", stageLabel: "RTL", group: "RTL", bindingKey: "moduleRtlCompiler", control: "select", path: "verilator", configured: true, present: true, default: "auto", options: [{ value: "auto", label: "由 AI 根据任务判断" }, { value: "verilator", label: "Verilator" }, { value: "iverilog", label: "Icarus Verilog" }, { value: "none", label: "不用" }] },
-    { key: "moduleRtlCompilerPath", label: "本环节覆盖路径", hint: "留空使用通用路径", required: false, skips: [], section: "module", sectionLabel: "模块工具", stage: "module-rtl", stageLabel: "RTL", group: "RTL", bindingKey: "moduleRtlCompiler", control: "text", kind: "file", path: "", configured: false, present: true, advanced: true, blankNote: "留空使用通用路径" },
-    { key: "projectImplFpgaTool", label: "实现工具", hint: "该环节首选 FPGA 套件", required: false, skips: [], section: "project", sectionLabel: "工程工具", stage: "project-impl", stageLabel: "实现", group: "实现", bindingKey: "projectImplFpga", control: "select", path: "auto", configured: true, present: true, default: "auto", options: [{ value: "auto", label: "由 AI 根据任务判断" }, { value: "vivado", label: "Vivado" }, { value: "none", label: "不用" }] },
+    { key: "rtlLangStd", label: "RTL 语言与标准", hint: "语言设置", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "systemverilog-2017", configured: true, present: true, group: "语言与库映射", control: "select", default: "systemverilog-2017", options: [{ value: "systemverilog-2017", label: "SystemVerilog 1800-2017" }] },
+    { key: "templateLibraryPath", label: "模板库路径", hint: "能力卡展开时扫描固定分类。", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "", configured: false, present: true, group: "模板库", control: "text", kind: "directory", detectable: false, blankNote: "留空只使用插件内置模板" },
+    ...capabilityFields,
     { key: "legacyCompiler", label: "旧键", hint: "不显示", section: "common", group: "旧键", control: "hidden", path: "", configured: false, present: false }
   ],
-  bindings: [
-    { key: "moduleRtlCompiler", section: "module", stage: "module-rtl", label: "编译 / lint 工具", selection: "verilator", toolLabel: "Verilator", state: "ready", source: "common", path: "C:\\tools\\verilator_bin.exe", present: true },
-    { key: "projectImplFpga", section: "project", stage: "project-impl", label: "实现工具", selection: "auto", state: "auto", present: true }
-  ],
+  templateLibrary: { path: "", configured: false, present: true },
+  migrationWarnings: [],
   missing: [],
   ok: true
 };
@@ -442,6 +550,35 @@ let detectPayload = {
 };
 let detectRequested = 0;
 const detectUrls = [];
+let templatePayload = {
+  capability: "module-rtl",
+  groups: [
+    {
+      key: "rtl",
+      label: "RTL 模板",
+      directory: "rtl",
+      items: [
+        {
+          id: "builtin:rtl/systemverilog-module.sv", category: "rtl", label: "SystemVerilog RTL 模块",
+          relativePath: "rtl/systemverilog-module.sv", source: "builtin", present: true, compatibleTools: ["*"]
+        },
+        {
+          id: "library:rtl/vendor/custom.sv", category: "rtl", label: "vendor/custom.sv",
+          relativePath: "rtl/vendor/custom.sv", source: "library", present: true, compatibleTools: null
+        }
+      ],
+      builtinCount: 1,
+      libraryCount: 1,
+      truncated: false,
+      errors: []
+    }
+  ],
+  library: { path: "C:\\templates", configured: true, present: true },
+  errors: [],
+  ok: true
+};
+let templateRequested = 0;
+const templateUrls = [];
 /** 状态路由带查询串的请求次数 = 客户端为"未保存的改动"预演了几次状态。 */
 let previewRequested = 0;
 /**
@@ -454,8 +591,8 @@ let statusPayload = payload;
  * 那条路径上"整行不显示"也是要验的行为之一;末段再给它一份带 `pendingCleanup` 的。
  */
 let statusPreset;
-/** 预演答复:可同时改字段与对应绑定,用来验证未保存状态和乱序保护。 */
-const previewAnswer = (fieldOverrides, fieldKey = "verilatorPath", bindingKey, bindingOverrides = {}) => ({
+/** 预演答复:可同时改字段与对应能力,用来验证未保存状态和乱序保护。 */
+const previewAnswer = (fieldOverrides, fieldKey = "verilatorPath", capabilityKey, capabilityOverrides = {}) => ({
   ...payload,
   tools: payload.tools.map((entry) => (entry.key === fieldKey ? { ...entry, ...fieldOverrides } : entry)),
   toolCards: payload.toolCards.map((card) => card.pathKey === fieldKey
@@ -468,7 +605,9 @@ const previewAnswer = (fieldOverrides, fieldKey = "verilatorPath", bindingKey, b
           : (fieldOverrides.present ?? card.present) === true ? "ready" : "invalid"
       }
     : card),
-  bindings: payload.bindings.map((binding) => (binding.key === bindingKey ? { ...binding, ...bindingOverrides } : binding))
+  capabilities: payload.capabilities.map((capability) =>
+    capability.key === capabilityKey ? { ...capability, ...capabilityOverrides } : capability
+  )
 });
 /** 列目录答复:一个只有一项的目录;路径本身用来分辨是哪一次请求列出来的。 */
 const listingOf = (path) => ({
@@ -486,6 +625,11 @@ const listingOf = (path) => ({
 let deferPreview = null;
 let deferDetect = null;
 let deferBrowse = null;
+let deferTemplate = null;
+let rejectTemplate = false;
+let malformedTemplate = false;
+let rejectDetect = false;
+let malformedDetect = false;
 /** 让下一轮预演直接拒绝,验证失败不能被静默吞掉。 */
 let rejectPreview = false;
 const fetchStub = (url) => {
@@ -501,11 +645,24 @@ const fetchStub = (url) => {
   if (target.includes("/detect")) {
     detectRequested += 1;
     detectUrls.push(target);
+    if (rejectDetect) return Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({ error: "offline" }) });
+    if (malformedDetect) return Promise.resolve({ ok: true, json: () => Promise.resolve({ unexpected: true }) });
     // 答复照**发出时**那一份取(与上面预演那条同一套):先发后回的乱序里,先发那笔
     // 带的就是它发出时的数据,不被后来的改动串味。
     const data = detectPayload;
     if (deferDetect !== null) {
       return new Promise((resolve) => deferDetect.push(() => resolve({ ok: true, json: () => Promise.resolve(data) })));
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
+  }
+  if (target.includes("/templates")) {
+    templateRequested += 1;
+    templateUrls.push(target);
+    if (rejectTemplate) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "scan failed" }) });
+    if (malformedTemplate) return Promise.resolve({ ok: true, json: () => Promise.resolve({ capability: "module-rtl" }) });
+    const data = templatePayload;
+    if (deferTemplate !== null) {
+      return new Promise((resolve) => deferTemplate.push(() => resolve({ ok: true, json: () => Promise.resolve(data) })));
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
   }
@@ -631,11 +788,26 @@ check(
   detectRequested === detectBeforeAuto,
   `打开设置页不会自动检测所有工具(实际发出 ${detectRequested - detectBeforeAuto} 次检测请求)`
 );
+check(templateRequested === 0, "能力卡都收起时不会扫描模板库");
 
 const rendered = JSON.stringify(secondTree ?? {});
-for (const expected of ["工具设置", "模块工具", "工程工具", "RTL", "审查", "实现", "Verilator", "来自通用路径", "开发约定与模板", "已就绪"]) {
+for (const expected of [
+  "工具设置", "模块工具", "工程工具", "RTL 编译工具", "仿真测试工具", "脚本验证工具", "综合与门禁工具",
+  "工程主工具", "系统仿真工具", "工具：Verilator", "RTL 模板：使用内置默认模板"
+]) {
   check(rendered.includes(expected), `三层设置界面出现「${expected}」`);
 }
+check(!rendered.includes("开发约定与模板"), "界面不再保留旧的「开发约定与模板」区块");
+check(!rendered.includes("本环节覆盖路径"), "能力卡里没有重复的工具路径输入框");
+const commonSection = findByProp(secondTree, (props) => props.key === "section-common");
+check(
+  JSON.stringify(commonSection ?? {}).includes("已就绪 3 / 3") &&
+    findByProp(commonSection, (props) => String(props.className ?? "").includes("fpga-set-collapsed")) !== undefined,
+  "工具设置整体默认收起并显示就绪数量"
+);
+findButton(commonSection, "展开设置")?.props?.onClick();
+fake.reset();
+secondTree = captured();
 const verilatorCard = findByProp(secondTree, (props) => props.key === "tool-verilator");
 check(
   findByProp(verilatorCard, (props) => String(props.className ?? "").includes("fpga-set-collapsed")) !== undefined,
@@ -654,18 +826,6 @@ check(typeof help?.props?.["aria-describedby"] === "string", "问号可通过键
 check(rendered.includes("填写 verilator_bin.exe"), "完整说明仍存在于 tooltip 中");
 check(!rendered.includes("当前阶段") && !rendered.includes("下一阶段") && !rendered.includes("完成百分比"), "界面不引入流水线状态");
 check(!rendered.includes("旧键"), "隐藏字段没有被渲染出来");
-const overrideBefore = findByProp(secondTree, (props) => props.key === "moduleRtlCompilerPath");
-check(overrideBefore !== undefined, "显式工具时显示环节覆盖路径");
-const stageSelectRow = findByProp(secondTree, (props) => props.key === "moduleRtlCompilerTool");
-const stageSelect = findByProp(stageSelectRow, (props) => typeof props.onChange === "function" && props.value === "verilator");
-stageSelect?.props?.onChange({ target: { value: "auto" } });
-fake.reset();
-const autoTree = captured();
-check(findByProp(autoTree, (props) => props.key === "moduleRtlCompilerPath") === undefined, "auto 时隐藏无意义的路径覆盖框");
-check(hostValues.verilatorPath === "C:\\tools\\verilator_bin.exe", "换环节选择不清空通用路径");
-findByProp(autoTree, (props) => props.key === "moduleRtlCompilerTool")?.children?.find((node) => node?.type === "select")?.props?.onChange({ target: { value: "verilator" } });
-fake.reset();
-captured();
 check(browserRequested === 0, "没点「浏览…」时不会去请求接口(不白跑)");
 
 // 检测入口合并在每张卡的“路径设置/修改路径”里，不另放一组全量检测按钮。
@@ -787,58 +947,200 @@ try {
   check(false, "过滤与回车能选中", String(error));
 }
 
-// 环节下拉只表达这个环节的偏好,不能顺手改写/清空通用路径,也不能因为切换选择就重跑检测。
+// 能力卡只选择顶部已经就绪的工具；不拥有路径，也不会因为展开或切换选择而重跑工具检测。
 try {
   written.length = 0;
   fake.reset();
   const beforeChoice = captured();
-  const selectorRow = findByProp(beforeChoice, (props) => props.key === "moduleRtlCompilerTool");
+  const capabilityCard = findByProp(beforeChoice, (props) => props.key === "capability-module-rtl");
+  findButton(capabilityCard, "展开设置")?.props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  const openedCapability = captured();
+  const selectorRow = findByProp(openedCapability, (props) => props.key === "moduleRtlTool");
   const selectNode = findByProp(selectorRow, (props) => props.value === "verilator" && typeof props.onChange === "function");
-  check(selectNode !== undefined, "找得到模块 RTL 环节的工具下拉");
+  check(selectNode !== undefined, "找得到模块 RTL 能力的工具下拉");
+  const unreadyIcarus = findByProp(selectNode, (props) => props.value === "iverilog");
+  const autoOption = findByProp(selectNode, (props) => props.value === "auto");
+  const noneOption = findByProp(selectNode, (props) => props.value === "none");
+  check(unreadyIcarus?.props?.disabled === true, "未就绪工具可见但不可选");
+  check(autoOption?.props?.disabled !== true && noneOption?.props?.disabled !== true, "auto 与 none 始终可选");
   const detectsBeforeChoice = detectRequested;
   const previewsBeforeChoice = previewRequested;
   selectNode.props.onChange({ target: { value: "none" } });
   fake.reset();
   const unused = captured();
-  check(findByProp(unused, (props) => props.key === "moduleRtlCompilerPath") === undefined, "选择不用时隐藏本环节覆盖路径");
+  check(findByProp(unused, (props) => props.key === "moduleRtlCompilerPath") === undefined, "能力卡始终没有阶段覆盖路径");
   check(
     findByProp(unused, (props) => props.value === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe") !== undefined,
-    "环节改成不用时仍保留通用 Verilator 路径"
+    "能力改成不用时仍保留顶部 Verilator 路径"
   );
-  check(detectRequested === detectsBeforeChoice, "切换环节选择不会重跑通用工具检测");
-  check(written.length === 0, "切换环节选择只进入未保存区(不立刻写设置)");
+  check(detectRequested === detectsBeforeChoice, "展开能力卡和切换选择都不会重跑工具检测");
+  check(written.length === 0, "切换能力工具只进入未保存区(不立刻写设置)");
 
-  // 未保存的选择也要预演绑定状态,但不保存、不改通用路径。
+  // 未保存的选择也要预演能力状态，但不保存、不改顶部路径。
   fake.runEffects();
   await new Promise((resolve) => setTimeout(resolve, 400));
-  check(previewRequested > previewsBeforeChoice, "未保存的环节选择会预演绑定状态");
+  check(previewRequested > previewsBeforeChoice, "未保存的能力选择会预演状态");
 
   fake.reset();
   const noneTree = captured();
   findByProp(
-    findByProp(noneTree, (props) => props.key === "moduleRtlCompilerTool"),
+    findByProp(noneTree, (props) => props.key === "moduleRtlTool"),
     (props) => props.value === "none" && typeof props.onChange === "function"
   )?.props.onChange({ target: { value: "verilator" } });
   fake.reset();
   const restoredChoice = captured();
-  check(findByProp(restoredChoice, (props) => props.key === "moduleRtlCompilerPath") !== undefined, "显式选工具后重新显示环节覆盖路径");
-  check(hostValues.verilatorPath === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", "切换环节选择没有改写已保存的通用路径");
-
-  // 显式工具切到另一个显式工具时,预演返回前不能沿用上一个工具的徽标与路径类型。
-  findByProp(
-    findByProp(restoredChoice, (props) => props.key === "moduleRtlCompilerTool"),
-    (props) => props.value === "verilator" && typeof props.onChange === "function"
-  )?.props.onChange({ target: { value: "iverilog" } });
-  fake.reset();
-  const awaitingPreview = captured();
-  check(JSON.stringify(awaitingPreview ?? {}).includes("正在检查当前选择"), "显式工具切换后先显示等待检查,不冒充上一个工具已就绪");
-  check(findByProp(awaitingPreview, (props) => props.key === "moduleRtlCompilerPath") === undefined, "工具类型尚未预演完成时暂不显示旧类型的覆盖路径");
-  findByProp(
-    findByProp(awaitingPreview, (props) => props.key === "moduleRtlCompilerTool"),
-    (props) => props.value === "iverilog" && typeof props.onChange === "function"
-  )?.props.onChange({ target: { value: "verilator" } });
+  check(findByProp(restoredChoice, (props) => props.key === "moduleRtlCompilerPath") === undefined, "显式工具也不会出现第二份路径");
+  check(hostValues.verilatorPath === "C:\\msys64\\mingw64\\bin\\verilator_bin.exe", "切换能力选择没有改写已保存的顶部路径");
+  findButton(findByProp(restoredChoice, (props) => props.key === "capability-module-rtl"), "取消")?.props.onClick();
 } catch (error) {
-  check(false, "环节选择与通用路径互不改写", String(error));
+  check(false, "能力选择与顶部工具路径互不改写", String(error));
+}
+
+// 模板库只在能力卡展开时按需扫描；关闭重开必须重新扫描，旧请求不能覆盖新请求。
+try {
+  const beforeTemplates = templateRequested;
+  fake.reset();
+  let tree = captured();
+  let card = findByProp(tree, (props) => props.key === "capability-module-rtl");
+  findButton(card, "展开设置").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  check(templateRequested === beforeTemplates + 1, "展开能力卡才扫描一次模板库");
+  check(templateUrls.at(-1)?.includes("capability=module-rtl"), "模板扫描请求只携带当前能力标识");
+  fake.reset();
+  tree = captured();
+  card = findByProp(tree, (props) => props.key === "capability-module-rtl");
+  const cardText = JSON.stringify(card ?? {});
+  check(cardText.includes("vendor/custom.sv") && !cardText.includes("仿真编译脚本"), "展开卡只显示当前能力需要的模板分类");
+  findButton(card, "收起").props.onClick();
+  fake.reset();
+  tree = captured();
+  card = findByProp(tree, (props) => props.key === "capability-module-rtl");
+  findButton(card, "展开设置").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  check(templateRequested === beforeTemplates + 2, "能力卡关闭后重开会重新扫描模板库");
+  fake.reset();
+  findButton(findByProp(captured(), (props) => props.key === "capability-module-rtl"), "收起").props.onClick();
+} catch (error) {
+  check(false, "能力卡按展开状态扫描模板库", String(error));
+}
+
+try {
+  const savedTemplatePayload = templatePayload;
+  deferTemplate = [];
+  templatePayload = {
+    ...savedTemplatePayload,
+    groups: savedTemplatePayload.groups.map((group) => ({
+      ...group,
+      items: group.items.map((item) => ({ ...item, label: `旧请求-${item.label}` }))
+    }))
+  };
+  fake.reset();
+  let tree = captured();
+  let card = findByProp(tree, (props) => props.key === "capability-module-rtl");
+  findButton(card, "展开设置").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  templatePayload = {
+    ...savedTemplatePayload,
+    groups: savedTemplatePayload.groups.map((group) => ({
+      ...group,
+      items: group.items.map((item) => ({ ...item, label: `新请求-${item.label}` }))
+    }))
+  };
+  fake.reset();
+  tree = captured();
+  card = findByProp(tree, (props) => props.key === "capability-module-rtl");
+  findButton(card, "收起").props.onClick();
+  fake.reset();
+  tree = captured();
+  card = findByProp(tree, (props) => props.key === "capability-module-rtl");
+  findButton(card, "展开设置").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  check(deferTemplate.length === 2, `模板竞态:两次扫描都已挂起(实际 ${deferTemplate.length} 次)`);
+  deferTemplate[1]();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  let settled = findByProp(captured(), (props) => props.key === "capability-module-rtl");
+  check(JSON.stringify(settled ?? {}).includes("新请求-vendor/custom.sv"), "模板竞态:后发扫描先显示");
+  deferTemplate[0]();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  settled = findByProp(captured(), (props) => props.key === "capability-module-rtl");
+  check(!JSON.stringify(settled ?? {}).includes("旧请求-vendor/custom.sv"), "模板竞态:先发旧扫描不会盖回界面");
+  findButton(settled, "收起").props.onClick();
+  templatePayload = savedTemplatePayload;
+} catch (error) {
+  check(false, "模板扫描具备乱序保护", String(error));
+} finally {
+  deferTemplate = null;
+}
+
+// 非 2xx 与畸形答复都必须明确报错，不能伪装成“扫描为空”或“没检测到”。
+try {
+  rejectTemplate = true;
+  fake.reset();
+  let tree = captured();
+  let card = findByProp(tree, (props) => props.key === "capability-module-rtl");
+  findButton(card, "展开设置").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  tree = captured();
+  check(JSON.stringify(tree ?? {}).includes("模板读取失败"), "模板接口非 2xx 时明确显示读取失败");
+  findButton(findByProp(tree, (props) => props.key === "capability-module-rtl"), "收起").props.onClick();
+  rejectTemplate = false;
+
+  malformedTemplate = true;
+  fake.reset();
+  tree = captured();
+  card = findByProp(tree, (props) => props.key === "capability-module-rtl");
+  findButton(card, "展开设置").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  tree = captured();
+  check(JSON.stringify(tree ?? {}).includes("模板读取失败"), "模板接口畸形答复时明确显示读取失败");
+  findButton(findByProp(tree, (props) => props.key === "capability-module-rtl"), "收起").props.onClick();
+} catch (error) {
+  check(false, "模板接口异常可见", String(error));
+} finally {
+  rejectTemplate = false;
+  malformedTemplate = false;
+}
+
+try {
+  rejectDetect = true;
+  fake.reset();
+  let tree = captured();
+  let card = findByProp(tree, (props) => props.key === "tool-verilator");
+  if (findButton(card, "收起") !== undefined) {
+    findButton(card, "收起").props.onClick();
+    fake.reset();
+    tree = captured();
+    card = findByProp(tree, (props) => props.key === "tool-verilator");
+  }
+  findButton(card, "修改路径").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  tree = captured();
+  check(JSON.stringify(tree ?? {}).includes("工具检测失败") && !JSON.stringify(tree ?? {}).includes("没检测到(Verilator)"), "工具接口非 2xx 不会伪装成没检测到");
+  findButton(findByProp(tree, (props) => props.key === "tool-verilator"), "收起").props.onClick();
+  rejectDetect = false;
+
+  malformedDetect = true;
+  fake.reset();
+  tree = captured();
+  card = findByProp(tree, (props) => props.key === "tool-verilator");
+  findButton(card, "修改路径").props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.reset();
+  tree = captured();
+  check(JSON.stringify(tree ?? {}).includes("工具检测失败") && !JSON.stringify(tree ?? {}).includes("没检测到(Verilator)"), "工具接口畸形答复不会伪装成没检测到");
+  findButton(findByProp(tree, (props) => props.key === "tool-verilator"), "收起").props.onClick();
+} catch (error) {
+  check(false, "工具检测接口异常可见", String(error));
+} finally {
+  rejectDetect = false;
+  malformedDetect = false;
 }
 
 // 「浏览…」**一律给页面内列表,不弹系统窗口**(用户口径:弹窗出过好几回问题;而且实测在这种
@@ -1226,17 +1528,24 @@ try {
   statusPayload = previewAnswer(
     {},
     "verilatorPath",
-    "moduleRtlCompiler",
-    { selection: "iverilog", toolLabel: "Icarus Verilog", state: "ready", source: "common", path: "C:\\iverilog.exe" }
+    "module-rtl",
+    { selection: "auto", state: "auto", present: true }
   );
   deferPreview = [];
   fake.reset();
-  const clean = captured();
+  let clean = captured();
+  const cleanCard = findByProp(clean, (props) => props.key === "capability-module-rtl");
+  if (findButton(cleanCard, "展开设置") !== undefined) {
+    findButton(cleanCard, "展开设置").props.onClick();
+    await tick();
+    fake.reset();
+    clean = captured();
+  }
   const cleanSelect = findByProp(
-    findByProp(clean, (props) => props.key === "moduleRtlCompilerTool"),
+    findByProp(clean, (props) => props.key === "moduleRtlTool"),
     (props) => props.value === "verilator" && typeof props.onChange === "function"
   );
-  cleanSelect.props.onChange({ target: { value: "iverilog" } });
+  cleanSelect.props.onChange({ target: { value: "auto" } });
   fake.reset();
   const draftA = captured();
   fake.runEffects();
@@ -1244,8 +1553,8 @@ try {
   check(deferPreview.length >= 1, `草稿竞态:预演 A 已挂起(实际 ${deferPreview.length} 次)`);
 
   const selectA = findByProp(
-    findByProp(draftA, (props) => props.key === "moduleRtlCompilerTool"),
-    (props) => props.value === "iverilog" && typeof props.onChange === "function"
+    findByProp(draftA, (props) => props.key === "moduleRtlTool"),
+    (props) => props.value === "auto" && typeof props.onChange === "function"
   );
   // 改回已保存的 verilator 会清掉这条草稿；故意不跑 effect,直接放行旧的 A。
   selectA.props.onChange({ target: { value: "verilator" } });
@@ -1253,9 +1562,9 @@ try {
   await tick();
   fake.reset();
   const afterB = captured();
-  const bindingText = JSON.stringify(findByProp(afterB, (props) => props.key === "binding-moduleRtlCompiler") ?? {});
-  check(!bindingText.includes("正在检查当前选择"), "草稿一变,旧预演在新防抖请求启动前就立即失效");
-  check(findByProp(afterB, (props) => props.key === "moduleRtlCompilerPath") !== undefined, "旧预演不会把当前工具的覆盖路径误隐藏");
+  const capabilityText = JSON.stringify(findByProp(afterB, (props) => props.key === "capability-tool-summary-module-rtl") ?? {});
+  check(!capabilityText.includes("由 AI 从已就绪工具中判断"), "草稿一变,旧能力预演在新防抖请求启动前就立即失效");
+  check(capabilityText.includes("Verilator"), "旧预演不会把当前能力摘要盖回旧选择");
 } catch (error) {
   check(false, "草稿变化会立即作废旧预演", String(error));
 } finally {

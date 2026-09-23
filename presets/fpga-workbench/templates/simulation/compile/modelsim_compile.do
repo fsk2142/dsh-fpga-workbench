@@ -43,6 +43,13 @@ proc collect_hdl {dir} {
     }
   }
   foreach sub [lsort [glob -nocomplain -directory $dir -type d *]] {
+    # 第八轮复审 E8-04:`glob -type d` 会把**链接目录**(symlink / Junction)也算进来 —— 顺着它们
+    # 会把工程外的 HDL 收进编译清单(源码来源不受控、证据不可复核),循环链接还会让递归打转。
+    # 判据:链接目录**跳过并点名**;跳过链接也就天然断了环,所以不需要额外的 visited 集合。
+    if {[file type $sub] eq "link"} {
+      puts "\[ME\] SKIP linked dir (not followed): $sub"
+      continue
+    }
     foreach f [collect_hdl $sub] { lappend result $f }
   }
   return $result

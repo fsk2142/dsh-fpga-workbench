@@ -2349,6 +2349,40 @@ check(
   p2Tb.output.slice(-200)
 );
 
+// 第八轮复审(同批)三条:仿真门的精确匹配、两处递归不收链接目录、混合 VHDL 不能算全覆盖 PASS。
+check(
+  /if \{\$raw eq "ALL TESTS PASSED \(err_cnt=0\)"/u.test(bundledRunOnly) &&
+    !/string match "\*ALL TESTS PASSED\*"/u.test(bundledRunOnly),
+  "run.do 的成功判定是**精确整行**(不是子串匹配 —— 否则\"no ALL TESTS PASSED\"这种否定句会假 PASS)"
+);
+const compileTemplateText = readFileSync(join(TEMPLATES, "simulation", "compile", "modelsim_compile.do"), "utf8");
+check(
+  /file type \$sub\] eq "link"/u.test(compileTemplateText),
+  "compile.do 递归收集时**跳过链接目录**(不收工程外 HDL;跳过即断环)"
+);
+check(
+  /file type \$d\] eq "link"/u.test(bundledRunSynth),
+  "vivado_synthesis.tcl 的 collect_files 同样跳过链接目录(与 compile.do 同一条判据)"
+);
+const mixRoot = join(SANDBOX, `mixvhdl-${stamp}`);
+mkdirSync(join(mixRoot, "src", "rtl"), { recursive: true });
+mkdirSync(join(mixRoot, "doc"), { recursive: true });
+writeFileSync(join(mixRoot, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+writeFileSync(join(mixRoot, "doc", "spec.md"), "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+writeFileSync(join(mixRoot, "src", "rtl", "good.sv"), readFileSync(categorizedTemplates.rtl, "utf8"));
+writeFileSync(join(mixRoot, "src", "rtl", "legacy.vhd"), "-- VHDL\nentity legacy is end entity;\n");
+const mixRun = runStdout("project-rtl-check.mjs", [mixRoot]);
+check(
+  mixRun.code === 2 && /PARTIAL/u.test(mixRun.output) && /1 个 VHDL/u.test(mixRun.output),
+  `混合 SV+VHDL 输出 PARTIAL 且退 2(不是静默 PASS;实际 ${String(mixRun.code)})`,
+  mixRun.output.slice(-300)
+);
+const mixJson = JSON.parse(runStdout("project-rtl-check.mjs", [mixRoot, "--json"]).output);
+check(
+  mixJson.coverage === "partial" && mixJson.skippedFiles.length === 1 && mixJson.checkedFiles.length === 1,
+  `JSON 里 coverage/skippedFiles 可机器区分(实际 coverage=${String(mixJson.coverage)})`
+);
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;
 

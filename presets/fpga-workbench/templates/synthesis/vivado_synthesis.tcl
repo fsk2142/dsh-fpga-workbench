@@ -88,6 +88,12 @@ proc collect_files {dir exts skip_stubs} {
     lappend out $f
   }
   foreach d [lsort [glob -nocomplain -directory $dir -type d *]] {
+    # 第八轮复审 E8-04:与 compile.do 的 collect_hdl 同一条判据 —— `glob -type d` 会把**链接目录**
+    # (symlink / Junction)算进来,顺着走会把工程外的源码收进综合、来源不可复核;跳过链接即断环。
+    if {[file type $d] eq "link"} {
+      puts "\[run_synth\] SKIP linked dir (not followed): $d"
+      continue
+    }
     set out [concat $out [collect_files $d $exts $skip_stubs]]
   }
   return $out

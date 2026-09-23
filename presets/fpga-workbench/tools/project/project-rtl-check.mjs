@@ -600,7 +600,17 @@ function main() {
   const failures = report.flatMap((entry) => entry.issues.filter(isFailure));
   const warnings = report.flatMap((entry) => entry.issues.filter((issue) => !isFailure(issue)));
   if (asJson) {
-    console.log(JSON.stringify({ project: root, files: report, skippedVhdl: uncheckedVhdl, failures: failures.length, warnings: warnings.length }, null, 2));
+    console.log(JSON.stringify({
+      project: root,
+      files: report,
+      skippedVhdl: uncheckedVhdl,
+      // 第八轮复审 E8-06:覆盖面要机器可判 —— 有未检查的 VHDL 时不能只报 PASS。
+      checkedFiles: report.map((entry) => entry.file),
+      skippedFiles: uncheckedVhdl,
+      coverage: uncheckedVhdl.length > 0 ? "partial" : "full",
+      failures: failures.length,
+      warnings: warnings.length
+    }, null, 2));
   } else {
     for (const entry of report) {
       const bad = entry.issues.filter(isFailure).length;
@@ -612,11 +622,19 @@ function main() {
     if (uncheckedVhdl.length > 0) {
       console.log(`注意:另有 ${uncheckedVhdl.length} 个 VHDL 未做机械检查(${uncheckedVhdl.slice(0, 5).join("、")}${uncheckedVhdl.length > 5 ? " …" : ""}) —— 本检查器只覆盖 .sv/.v,不要把上面的结论当成全覆盖`);
     }
-    console.log(failures.length === 0
-      ? `\nPASS: ${report.length} 个文件，${warnings.length} 项警告（不阻塞）`
-      : `\nFAIL (${failures.length} 项阻塞，${warnings.length} 项警告)`);
+    // 第八轮复审 E8-06:有未检查的 VHDL 时**不能写 PASS** —— 那是"部分覆盖",机器调用会把 PASS
+    // 当成"整个工程都过了"。按状态契约定成 PARTIAL(退 2),并写清覆盖了多少、漏了多少。
+    const partial = uncheckedVhdl.length > 0;
+    if (failures.length > 0) {
+      console.log(`\nFAIL (${failures.length} 项阻塞，${warnings.length} 项警告)` + (partial ? `；另有 ${uncheckedVhdl.length} 个 VHDL 未检查` : ""));
+    } else if (partial) {
+      console.log(`\nPARTIAL: ${report.length} 个文件已检查、${warnings.length} 项警告；另有 ${uncheckedVhdl.length} 个 VHDL **未检查**(本检查器只覆盖 .sv/.v) —— 这**不是**全覆盖通过`);
+    } else {
+      console.log(`\nPASS: ${report.length} 个文件，${warnings.length} 项警告（不阻塞）`);
+    }
   }
-  return failures.length === 0 ? 0 : 1;
+  if (failures.length > 0) return 1;
+  return uncheckedVhdl.length > 0 ? 2 : 0;
 }
 
 const invokedDirectly = process.argv[1] !== undefined

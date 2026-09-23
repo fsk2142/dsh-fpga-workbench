@@ -45,6 +45,7 @@ import {
   nextManifest,
   newlyReportedCleanup,
   nextReportedCleanup,
+  nonRegularOverwriteTargets,
   presetFileDiff,
   presetSyncNeeded,
   probeFilesystem,
@@ -1225,6 +1226,49 @@ check(
   backupChangedFiles(backupSource, backupSource, join(backupRoot, "never")) === undefined,
   "两边一致时不做任何备份"
 );
+// 第八轮复审 E8-02:用户预设目录里的同名 **链接 / Junction** 不能被 cpSync 换成普通文件
+// (文本有备份、链接关系恢复不了)。判据是生产函数 `nonRegularOverwriteTargets`;夹具用
+// **Junction**(Windows 上不需要特权即可创建)—— 真文件 symlink 需要特权,造不出时记 SKIP,不记 PASS。
+const e802Root = join(TMP_ROOT, `e802-${RUN_ID}-${String(Date.now())}`);
+const e802Dest = join(e802Root, "user");
+mkdirSync(join(e802Dest, "skills"), { recursive: true });
+writeFileSync(join(e802Dest, "skills", "SKILL.md"), "用户自己写的内容\n");
+writeFileSync(join(e802Dest, "普通文件.md"), "正常文件\n");
+let e802JunctionMade = false;
+try {
+  mkdirSync(join(e802Root, "outside"), { recursive: true });
+  writeFileSync(join(e802Root, "outside", "secret.md"), "OUTSIDE_SENTINEL\n");
+  symlinkSync(join(e802Root, "outside"), join(e802Dest, "skills", "linked"), "junction");
+  e802JunctionMade = true;
+} catch (error) {
+  console.log(`  SKIP E8-02 夹具:造不出 Junction(${String(error.code ?? error.message)})—— 记 SKIP,不记 PASS`);
+}
+if (e802JunctionMade) {
+  const targets = nonRegularOverwriteTargets(e802Dest, [
+    "skills/SKILL.md",
+    "普通文件.md",
+    "skills/linked",
+    "skills/linked/secret.md",
+    "还没建的.md"
+  ]);
+  check(
+    targets.includes("skills/linked"),
+    `非普通文件目标(junction 本目录)被点出来:${JSON.stringify(targets)}`
+  );
+  check(
+    targets.includes("skills/linked/secret.md"),
+    `穿过 junction 的目标也被点出来(不会顺着链接去覆盖外部文件):${JSON.stringify(targets)}`
+  );
+  check(
+    !targets.includes("普通文件.md") && !targets.includes(join("skills", "SKILL.md")) && !targets.includes("还没建的.md"),
+    `普通文件与还不存在的目标**不**算非普通文件(不误伤正常同步):${JSON.stringify(targets)}`
+  );
+  check(
+    readFileSync(join(e802Root, "outside", "secret.md"), "utf8").includes("OUTSIDE_SENTINEL"),
+    "判据只读目录项、不动外部文件的内容"
+  );
+}
+
 check(
   backupChangedFiles(backupSource, join(backupRoot, "不存在"), join(backupRoot, "never")) === undefined,
   "目标不存在时不做备份"

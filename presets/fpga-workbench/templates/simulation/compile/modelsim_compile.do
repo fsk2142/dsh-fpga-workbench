@@ -128,11 +128,21 @@ foreach f $kept {
 }
 
 # Mapping priority: explicit knob -> selected environment mapping -> simulator install.
+# E8-09: an EXPLICITLY given mapping file must exist - refuse instead of silently falling back
+# to the simulator install default (otherwise you believe your ini took effect, but another one did).
 set INI $INI_OVERRIDE
+set INI_EXPLICIT [expr {$INI ne ""}]
 foreach var {MODELSIM_INI MODELSIM} {
   if {$INI eq "" && [info exists ::env($var)]} {
     set INI [string trim [set ::env($var)]]
+    set INI_EXPLICIT [expr {$INI ne ""}]
   }
+}
+if {$INI_EXPLICIT && ![file isfile $INI]} {
+  puts "\n\[ME\] ERROR: modelsim.ini not found: $INI"
+  puts "\[ME\] This was given explicitly (INI_OVERRIDE / MODELSIM_INI / MODELSIM); refusing to fall"
+  puts "\[ME\] back to the install default. Fix the path, or clear it to use the default library map."
+  quit -f -code 1
 }
 if {$INI eq "" || ![file isfile $INI]} {
   set MTI_ROOT [file dirname [file dirname [file normalize [info nameofexecutable]]]]
@@ -172,6 +182,17 @@ if {[llength $vlog_src] > 0} {
     quit -f -code 1
   }
 }
+
+# E8-07: record the compile INPUTS so run.do can tell whether work/ matches the current sources.
+# mtime + size only (portable, no platform hashing); a same-mtime same-size edit could slip through.
+set stamp_path [file join work ".fpga-compile-stamp"]
+set stamp_fh [open $stamp_path w]
+puts $stamp_fh "# compiled [clock format [clock seconds] -format {%Y-%m-%dT%H:%M:%S}]"
+foreach f [concat $vhdl_src $vlog_src] {
+  puts $stamp_fh "$f\t[file mtime $f]\t[file size $f]"
+}
+close $stamp_fh
+puts "\[ME\] compile stamp: $stamp_path"
 
 puts "\n\[ME\] COMPILE PASSED: local work/ is ready"
 quit -f -code 0

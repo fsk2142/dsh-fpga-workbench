@@ -42,3 +42,22 @@ export function coverageVerdict(checkedCount, skipped) {
 export function shortenList(files) {
   return `${files.slice(0, 5).join("、")}${files.length > 5 ? " …" : ""}`;
 }
+
+/**
+ * 只对**综合 RTL** 有意义的结构门禁(仿真辅助代码套不上,套了就是成片误报)。
+ * 通用规则(文件头、Tab / 非英文 / 行尾、编译隔离)不在这里,它们对所有 HDL 一视同仁。
+ */
+const RTL_STRUCTURE_RULES = new Set(["九个小节块", "设计断言"]);
+
+/**
+ * 仿真辅助代码(sim/ 下的非 tb_*:package / interface / BFM / 记分板 / 驱动…)的规则裁剪。
+ *
+ * 第八轮复审 E8-05:这类文件以前按"普通 RTL"查,于是要求九个 RTL 小节 banner 和设计断言 ——
+ * 合法的仿真辅助代码未必长那样,报出来就是噪声,而噪声会把人训练成"忽略检查结果"。
+ * 裁剪的只是结构门禁;真正通用的格式与编译隔离规则仍然照查(第九轮复审② 同一条思路)。
+ * @param issues - checkFile() 的原始结果。
+ * @returns 裁掉 RTL 结构门禁后的结果。
+ */
+export function stripStructuralOnly(issues) {
+  return issues.filter((issue) => !RTL_STRUCTURE_RULES.has(issue.rule));
+}

@@ -11,6 +11,9 @@
 set TB_PATTERN    {tb_*.sv tb_*.v tb_*.vhd tb_*.vhdl}
 set TOP_OVERRIDE  {}
 set INI_OVERRIDE  {}
+# E8-11: one knob for vendor / precompiled libraries (space separated names -> vsim -L <lib>).
+# Precompiled XPM or a project's own vendor library. Empty = exactly the old behaviour.
+set VENDOR_LIBS   {}
 set RESULT_LOG    {sim.log}
 
 onbreak { resume }
@@ -28,6 +31,35 @@ set TB_FILE [lsort -unique $TB_FILE]
 
 if {![file isdirectory work]} {
   puts "\n\[ME\] ERROR: local work/ library is missing - run the compile template first"
+  quit -f -code 1
+}
+# E8-07: work/ existing is not enough - it must match the CURRENT sources. compile.do writes a
+# stamp (mtime + size per input); re-check every entry here and refuse to run on a mismatch.
+set STAMP [file join work ".fpga-compile-stamp"]
+if {![file isfile $STAMP]} {
+  puts "\n\[ME\] ERROR: no compile stamp in work/ ($STAMP) - run the compile template first"
+  puts "\[ME\] (without it the library cannot be tied to the current sources; no simulation verdict)"
+  quit -f -code 1
+}
+set stamp_fh [open $STAMP r]
+set stamp_text [read $stamp_fh]
+close $stamp_fh
+set stale {}
+foreach line [split $stamp_text "\n"] {
+  set line [string trim $line]
+  if {$line eq "" || [string match "#*" $line]} continue
+  lassign [split $line "\t"] path mtime size
+  if {![file isfile $path]} {
+    lappend stale "$path (gone)"
+    continue
+  }
+  if {[file mtime $path] != $mtime || [file size $path] != $size} {
+    lappend stale "$path (changed after compile)"
+  }
+}
+if {[llength $stale] > 0} {
+  puts "\n\[ME\] ERROR: work/ does not match the current sources - re-run compile.do first:"
+  foreach f $stale { puts "\[ME\]   $f" }
   quit -f -code 1
 }
 if {[llength $TB_FILE] == 0} {
@@ -61,7 +93,11 @@ set INI_FWD [string map {\\ /} $INI]
 puts "\[ME\] modelsim.ini: $INI_FWD"
 
 if {[catch {
-  vsim -c -modelsimini $INI_FWD -lib work -l $RESULT_LOG -voptargs=+acc=rn $TOP
+  set vendor_args {}
+foreach lib [split $VENDOR_LIBS " "] {
+  if {$lib ne ""} { lappend vendor_args -L $lib }
+}
+vsim -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG -voptargs=+acc=rn $TOP
 } message]} {
   puts "\n\[ME\] ERROR: vsim failed to start: $message"
   quit -f -code 1

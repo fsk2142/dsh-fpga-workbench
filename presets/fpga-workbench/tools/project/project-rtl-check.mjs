@@ -25,7 +25,7 @@ import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { evidenceFileInside } from "../lib/stamp.mjs";
-import { coverageVerdict, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
+import { coverageVerdict, stripStructuralOnly, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
 
 /**
  * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
@@ -571,10 +571,13 @@ function main() {
   // 仿真目录里**只有 `tb_*` 是测试平台**(F5-02):driver/helper/行为模型按普通 HDL 规则查,
   // 不强制成功标记与 err_cnt gate。
   const isTestbenchName = (file) => TESTBENCH.test(file.split(/[\\/]/u).pop() ?? "");
+  // 角色三分(E8-05):`hdl` = 自身的综合 RTL(完整结构门禁);`testbench` = tb_*(TB gate);
+  // `sim-support` = 仿真辅助代码(package / interface / BFM / 记分板),只查通用规则。
+  const simRole = (file) => (isTestbenchName(file) ? "testbench" : "sim-support");
   const targets = [
-    ...collectHdl(rtlDir).map((file) => [file, false]),
-    ...(existsSync(simpleSimDir) ? collectHdl(simpleSimDir).map((file) => [file, isTestbenchName(file)]) : []),
-    ...(existsSync(projectSimDir) ? collectHdl(projectSimDir).map((file) => [file, isTestbenchName(file)]) : [])
+    ...collectHdl(rtlDir).map((file) => [file, false, "hdl"]),
+    ...(existsSync(simpleSimDir) ? collectHdl(simpleSimDir).map((file) => [file, isTestbenchName(file), simRole(file)]) : []),
+    ...(existsSync(projectSimDir) ? collectHdl(projectSimDir).map((file) => [file, isTestbenchName(file), simRole(file)]) : [])
   ];
   if (targets.length === 0) {
     const vhdl = [rtlDir, simpleSimDir, projectSimDir].flatMap((dir) => existsSync(dir) ? collectHdl(dir, VHDL) : []);
@@ -591,10 +594,11 @@ function main() {
   const skippedVhdlRel = skippedVhdlFiles.map((file) => relative(root, file).split(sep).join("/"));
   const verdict = coverageVerdict(targets.length, skippedVhdlFiles);
   const report = [
-    ...targets.map(([file, isTb]) => ({
+    ...targets.map(([file, isTb, role]) => ({
       file: relative(root, file).split(sep).join("/"),
-      role: isTb ? "testbench" : "hdl",
-      issues: checkFile(file, isTb)
+      role,
+      // sim-support:只查通用规则(文件头 / Tab / 非英文 / 行尾 / 编译隔离),不套九小节与设计断言。
+      issues: role === "sim-support" ? stripStructuralOnly(checkFile(file, isTb)) : checkFile(file, isTb)
     })),
     // IP 时序卡:工程根 ip/ 下每个 IP 一张(与文件项同形一起打印)
     ...ipCardEntries(join(root, "ip"), root).map((entry) => ({ ...entry, role: "ip-card" }))

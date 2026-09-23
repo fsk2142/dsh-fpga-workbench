@@ -2401,6 +2401,62 @@ check(
   `模块级 --json 是干净可 parse 的 JSON,且 coverage/skippedFiles 可机器区分(实际 coverage=${String(mixModuleJson.coverage)})`
 );
 
+// 第八轮 E8-08:`--gate` 下"没有可核的东西"要退 2(默认退 0,保持向后兼容)。
+const gateRoot = join(SANDBOX, `gate-${stamp}`);
+mkdirSync(join(gateRoot, "rtl"), { recursive: true });
+writeFileSync(join(gateRoot, "rtl", "good.sv"), readFileSync(categorizedTemplates.rtl, "utf8"));
+const gateDefault = runStdout("module-report-check.mjs", [gateRoot]);
+const gateStrict = runStdout("module-report-check.mjs", [gateRoot, "--gate"]);
+check(
+  gateDefault.code === 0 && gateStrict.code === 2 && /NO_REPORTS|NO_EVIDENCE/u.test(gateStrict.output),
+  `NO_REPORTS 默认退 0、--gate 退 2(实际 ${String(gateDefault.code)} / ${String(gateStrict.code)})`,
+  gateStrict.output.slice(-200)
+);
+
+// 第八轮 E8-05:sim/ 下的仿真辅助代码(package/interface/BFM/记分板)不套 RTL 结构门禁,
+// 但通用规则(文件头 / 编译隔离)照查;tb_* 仍走 TB gate。
+const simRoleRoot = join(SANDBOX, `simrole-${stamp}`);
+mkdirSync(join(simRoleRoot, "src", "rtl"), { recursive: true });
+mkdirSync(join(simRoleRoot, "sim"), { recursive: true });
+mkdirSync(join(simRoleRoot, "doc"), { recursive: true });
+writeFileSync(join(simRoleRoot, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+writeFileSync(join(simRoleRoot, "doc", "spec.md"), "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+writeFileSync(join(simRoleRoot, "src", "rtl", "good.sv"), readFileSync(categorizedTemplates.rtl, "utf8"));
+const rtlTemplateHeader = readFileSync(categorizedTemplates.rtl, "utf8").split("\n").slice(0, 14).join("\n");
+writeFileSync(
+  join(simRoleRoot, "sim", "scoreboard.sv"),
+  `${rtlTemplateHeader}\n\n\`resetall\n\`default_nettype none\n\nmodule scoreboard; endmodule\n\n\`default_nettype wire\n`
+);
+const simRoleRun = runStdout("project-rtl-check.mjs", [simRoleRoot]);
+check(
+  simRoleRun.code === 0 && !/九个小节块|设计断言/u.test(simRoleRun.output),
+  `sim/ 下的仿真辅助代码不套 RTL 结构门禁(实际退出码 ${String(simRoleRun.code)})`,
+  simRoleRun.output.slice(-300)
+);
+const simRoleJson = JSON.parse(runStdout("project-rtl-check.mjs", [simRoleRoot, "--json"]).output);
+check(
+  simRoleJson.files.some((entry) => entry.role === "sim-support" && entry.file.includes("scoreboard")),
+  `JSON 里标出 sim-support 角色(实际 ${JSON.stringify(simRoleJson.files.map((entry) => `${entry.file}:${String(entry.role)}`))})`
+);
+
+// 第八轮 E8-07 / E8-09 / E8-11:两份仿真模板的代码形状(真机行为另有实测证据,见提交说明)。
+check(
+  /\.fpga-compile-stamp/u.test(compileTemplateText) && /file mtime \$f\]/u.test(compileTemplateText),
+  "compile.do 编译成功后写 work/.fpga-compile-stamp(记录每个输入的 mtime + size)"
+);
+check(
+  /no compile stamp in work\//u.test(bundledRunOnly) && /changed after compile/u.test(bundledRunOnly),
+  "run.do 校验该标记,源码改过就拒绝运行(E8-07)"
+);
+check(
+  /INI_EXPLICIT/u.test(compileTemplateText) && /modelsim\.ini not found/u.test(compileTemplateText),
+  "compile.do:显式指定的 modelsim.ini 不存在就报错,不静默退回安装默认(E8-09)"
+);
+check(
+  /set VENDOR_LIBS/u.test(bundledRunOnly) && /-L \$lib/u.test(bundledRunOnly),
+  "run.do:VENDOR_LIBS 旋钮逐个变成 vsim -L(E8-11)"
+);
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;
 

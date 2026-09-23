@@ -33,7 +33,8 @@
 // 用法:
 //   node module-report-check.mjs [<模块目录>] [--json] [--record]
 // 模块目录默认当前目录。`--record` 只做一件事:把当前引用的证据的摘要写进报告文件(不动别的)。
-// 退出码:0 全过(可以只有警告) / 1 有引用了却不存在的证据路径 / 2 用法或环境错误。
+// 退出码:0 全过(可以只有警告;NO_REPORTS / NO_EVIDENCE 也退 0)/ 1 有引用了却不存在的证据路径 /
+//          2 用法或环境错误,或 `--gate` 下的 NO_REPORTS / NO_EVIDENCE。
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -374,11 +375,14 @@ export function deviceConsistency(moduleRoot) {
 function main() {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
-    console.log("用法:node module-report-check.mjs [<模块目录>] [--json] [--record]");
+    console.log("用法:node module-report-check.mjs [<模块目录>] [--json] [--record] [--gate]");
     console.log("  --record  把当前引用的证据的 sha256 摘要写进报告文件末尾(可恢复覆盖,先留 .bak)");
+    console.log("  --gate    「没有可核的东西」(NO_REPORTS / NO_EVIDENCE)也算失败,退 2(默认退 0,保持兼容)");
     return 0;
   }
   const asJson = args.includes("--json");
+  // E8-08:严格 gate —— "没有可核的东西"(NO_REPORTS / NO_EVIDENCE)在 --gate 下退 2,别被机器当成"核过了"。
+  const gate = args.includes("--gate");
   const record = args.includes("--record");
   const moduleRoot = args.find((arg) => !arg.startsWith("-")) ?? process.cwd();
   if (!existsSync(moduleRoot)) {
@@ -534,7 +538,12 @@ function main() {
         : `\nFAIL (${summary})`
     );
   }
-  return hard.length === 0 ? 0 : 1;
+  if (hard.length > 0) return 1;
+  // 第八轮复审 E8-08:默认仍退 0(保持向后兼容 —— 这就是现在所有调用方的契约),
+  // 但 `--gate` 下"没有可核的东西"(NO_REPORTS / NO_EVIDENCE)要退 2:
+  // 机器调用最容易把"没东西可核"当成"核过了",那正是这条 flag 要堵的。
+  if (gate && (status === "no-reports" || status === "no-evidence")) return 2;
+  return 0;
 }
 
 /** 直接跑本文件时才进 CLI;被 import 时只导出上面的函数。 */

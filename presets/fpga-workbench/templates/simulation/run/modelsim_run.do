@@ -28,6 +28,15 @@ onbreak { resume }
 onerror { quit -f -code 1 }
 
 set VERIF_ROOT [file normalize [pwd]]
+
+# DSH-N01:根目录**自己**也不能是链接 —— 后面对源码做新鲜度复核时会重新采集,根是链接就整段跑到
+# 工程外了(Windows Junction 在 Tcl `file type` 上实测报 link)。这条挡在「工作库/标记」检查之前,
+# 免得报的是「先跑 compile.do」这种次因。
+set RTL_ROOT [file normalize [file join $VERIF_ROOT $RTL_DIR]]
+if {[file type $RTL_ROOT] eq "link"} {
+  puts "\n\[ME\] ERROR: RTL_ROOT is a symlink/Junction; refusing to follow it: $RTL_ROOT"
+  quit -f -code 1
+}
 # 只认 HDL 测试平台(F5-03):tb_notes.txt / tb_*.md / *.bak 不算 TB
 set TB_FILE {}
 foreach pat $TB_PATTERN {
@@ -83,7 +92,6 @@ proc collect_hdl {dir} {
   }
   return $out
 }
-set verif_root_norm [string map {\\ /} $VERIF_ROOT]
 set ip_prefix [string map {\\ /} [file normalize [file join $VERIF_ROOT $RTL_DIR ip]]]/
 set current {}
 foreach f [collect_hdl [file normalize [file join $VERIF_ROOT $RTL_DIR]]] {

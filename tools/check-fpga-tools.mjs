@@ -222,6 +222,22 @@ for (const [label, file] of [
   );
 }
 
+// DSH-N01:E8-04 只挡了**递归子目录**的链接;collector 的**根目录自己**是 symlink/Junction 时,整段
+// 采集会跑到工程外(结论就不再只覆盖工程内文件)。五个采集入口都必须显式拒绝根链接。
+for (const [label, file] of [
+  ["ModelSim compile", join(TEMPLATES, "simulation", "compile", "modelsim_compile.do")],
+  ["ModelSim run", join(TEMPLATES, "simulation", "run", "modelsim_run.do")],
+  ["模块综合", join(TEMPLATES, "synthesis", "vivado_module_synthesis.tcl")],
+  ["RTL linter", join(TEMPLATES, "linter", "vivado_rtl_lint.tcl")],
+  ["工程综合", join(TEMPLATES, "synthesis", "vivado_project_synthesis.tcl")]
+]) {
+  const source = readFileSync(file, "utf8");
+  check(
+    /\[file type \$[A-Z_]+\] eq "link"/u.test(source) && /refusing to follow it/u.test(source),
+    `${label}模板拒绝**根目录**是 symlink/Junction(不只挡递归子目录)`
+  );
+}
+
 const categorizedTemplates = {
   rtl: join(TEMPLATES, "rtl", "systemverilog_module.sv"),
   constraints: join(TEMPLATES, "constraints", "vivado_module_xdc.xdc"),

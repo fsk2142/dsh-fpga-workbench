@@ -47,6 +47,10 @@ set STRATEGY   "default"
 
 # ---- 派生路径(不用改) ------------------------------------------------------ #
 set RTL      [file normalize [file join $MODULE_ROOT $RTL_DIR]]
+# DSH-N01:根目录自己也不能是链接(同上;理由见 compile.do 的同一段)。
+if {[file type $RTL] eq "link"} {
+  fail "RTL root is a symlink/Junction; refusing to follow it: $RTL"
+}
 set RPT      [file normalize [file join $MODULE_ROOT $REPORT_DIR]]
 set PROJ_DIR [file join $RPT "vivado_proj"]
 set PROJ     "synth_proj"

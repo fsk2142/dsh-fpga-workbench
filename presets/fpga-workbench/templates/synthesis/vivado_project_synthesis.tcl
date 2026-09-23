@@ -46,6 +46,10 @@ set RESET_RUN    1
 
 # ---- 派生路径(不用改) ------------------------------------------------------ #
 set PRJ_ROOT [file normalize [file join $PROJECT_ROOT $PRJ_DIR]]
+# DSH-N01:工程目录自己也不能是链接(否则整个工程都在工程根外)。
+if {[file type $PRJ_ROOT] eq "link"} {
+  fail "prj dir is a symlink/Junction; refusing to follow it: $PRJ_ROOT"
+}
 set RPT      [file normalize [file join $PROJECT_ROOT $REPORT_DIR]]
 
 # ---- 两个失败出口:英文说清楚 + 非零退出码 ---------------------------------- #

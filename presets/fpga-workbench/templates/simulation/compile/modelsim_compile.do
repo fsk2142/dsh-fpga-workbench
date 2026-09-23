@@ -32,6 +32,12 @@ onerror { quit -f -code 1 }
 
 set VERIF_ROOT [file normalize [pwd]]
 set RTL_ROOT   [file normalize [file join $VERIF_ROOT $RTL_DIR]]
+# DSH-N01:根目录**自己**也不能是链接 —— E8-04 只挡了递归子目录;`rtl -> 工程外` 会让采集整个跑到
+# 外面去,结论就不再只覆盖工程内文件(Windows Junction 在 Tcl `file type` 上实测报 link)。
+if {[file type $RTL_ROOT] eq "link"} {
+  puts "\n\[ME\] ERROR: RTL_ROOT is a symlink/Junction; refusing to follow it: $RTL_ROOT"
+  quit -f -code 1
+}
 set ::SKIPPED_STUBS {}
 set ::IP_PREFIX "[string map {\\ /} [file normalize [file join $RTL_ROOT "ip"]]]/"
 

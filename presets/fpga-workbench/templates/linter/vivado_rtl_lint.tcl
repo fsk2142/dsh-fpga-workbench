@@ -22,6 +22,11 @@ if {$TOP eq "REPLACE_TOP" || $PART eq "REPLACE_PART"} {
 }
 
 set SRC [file normalize [file join $MODULE_ROOT $SRC_DIR]]
+# DSH-N01:根目录自己也不能是链接(同上)。
+if {[file type $SRC] eq "link"} {
+  puts "\n\[ME\] ERROR: HDL root is a symlink/Junction; refusing to follow it: $SRC"
+  quit -f -code 2
+}
 if {![file isdirectory $SRC]} {
   puts "\[ME\] ERROR: HDL root not found: $SRC"
   quit -f -code 2

@@ -82,7 +82,10 @@ if {[file isfile $RESULT_LOG]} {
     if {[string match "** Error*" $line] || [string match "** Fatal*" $line]} {
       incr errors
     }
-    if {[string match "*ALL TESTS PASSED*" $line]} { incr passed }
+    # E8-03:只认**完整成功行**;否定句/自述“没看到 marker”不得算通过
+    set raw [string trim $line]
+    if {[string match "# *" $raw]} { set raw [string trim [string range $raw 2 end]] }
+    if {$raw eq "ALL TESTS PASSED (err_cnt=0)" || $raw eq "ALL TESTS PASSED"} { incr passed }
   }
 }
 

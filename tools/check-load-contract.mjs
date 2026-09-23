@@ -428,7 +428,7 @@ const templateSlot = (key, category, label, name) => ({
   source: "builtin",
   id: `builtin:${name}`,
   templateLabel: name.split("/").at(-1),
-  summary: `使用内置默认模板：${name.split("/").at(-1)}`
+  summary: "由 AI 自行决定"
 });
 const capabilityFixtures = [
   {
@@ -806,7 +806,7 @@ check(templateRequested === 0, "能力卡都收起时不会扫描模板库");
 const rendered = JSON.stringify(secondTree ?? {});
 for (const expected of [
   "工具设置", "模块工具", "工程工具", "RTL 编译工具", "仿真测试工具", "脚本验证工具", "综合与门禁工具",
-  "工程主工具", "系统仿真工具", "工具：Verilator", "RTL 模板：使用内置默认模板",
+  "工程主工具", "系统仿真工具", "工具：Verilator", "RTL 模板：由 AI 自行决定",
   "ModelSim", "QuestaSim", "语言标准", "仿真库", "ModelSim 库映射文件", "QuestaSim 库映射文件"
 ]) {
   check(rendered.includes(expected), `三层设置界面出现「${expected}」`);

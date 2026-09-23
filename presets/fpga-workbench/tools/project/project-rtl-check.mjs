@@ -209,7 +209,10 @@ const PARAM_LIKE = /^[A-Z][A-Z0-9_]*$/u;
 function classifyNeq(operands, pairs) {
   if (pairs.length === 0) return "quiet";
   if (!/\b(?:if|while|for)\s*\(|\bassert\b|\?/u.test(operands)) return "quiet"; // 不是判定:如 `$display(..., a != b)`
-  const isPlain = (pair) => !PARAM_LIKE.test(pair[1]) && !PARAM_LIKE.test(pair[2]);
+  // E8-10:期望命名的**数据**信号优先于“全大写像参数”;计数/索引仍静默
+  const COUNT_NAME = /(?:^|_)(?:cnt|count|idx|index|num|i|n)(?:_|$)|(?:^|_)(?:cnt|idx)$/iu;
+  const isDataExpected = (name) => EXPECTED_SIGNAL.test(name) && !COUNT_NAME.test(name);
+  const isPlain = (pair) => isDataExpected(pair[1]) || isDataExpected(pair[2]) || (!PARAM_LIKE.test(pair[1]) && !PARAM_LIKE.test(pair[2]));
   const plain = pairs.filter(isPlain);
   if (plain.length === 0) return "quiet";
   const named = plain.some((pair) => EXPECTED_SIGNAL.test(pair[1]) || EXPECTED_SIGNAL.test(pair[2]));
@@ -581,6 +584,10 @@ function main() {
     console.error("src/rtl、src/sim 与 sim/ 下没有 .v/.sv 源码:", root);
     return 2;
   }
+  // E8-06:有 SV 时同树 VHDL 也要报出来,不能写成全覆盖 PASS
+  const uncheckedVhdl = [rtlDir, simpleSimDir, projectSimDir]
+    .flatMap((dir) => (existsSync(dir) ? collectHdl(dir, VHDL) : []))
+    .map((file) => relative(root, file).split(sep).join("/"));
   const report = [
     ...targets.map(([file, isTb]) => ({
       file: relative(root, file).split(sep).join("/"),
@@ -593,7 +600,7 @@ function main() {
   const failures = report.flatMap((entry) => entry.issues.filter(isFailure));
   const warnings = report.flatMap((entry) => entry.issues.filter((issue) => !isFailure(issue)));
   if (asJson) {
-    console.log(JSON.stringify({ project: root, files: report, failures: failures.length, warnings: warnings.length }, null, 2));
+    console.log(JSON.stringify({ project: root, files: report, skippedVhdl: uncheckedVhdl, failures: failures.length, warnings: warnings.length }, null, 2));
   } else {
     for (const entry of report) {
       const bad = entry.issues.filter(isFailure).length;
@@ -601,6 +608,9 @@ function main() {
       for (const issue of entry.issues) {
         console.log(`        ${isFailure(issue) ? "FAIL" : "warn"}  ${issue.line > 0 ? `第 ${issue.line} 行:` : ""}${issue.message}`);
       }
+    }
+    if (uncheckedVhdl.length > 0) {
+      console.log(`注意:另有 ${uncheckedVhdl.length} 个 VHDL 未做机械检查(${uncheckedVhdl.slice(0, 5).join("、")}${uncheckedVhdl.length > 5 ? " …" : ""}) —— 本检查器只覆盖 .sv/.v,不要把上面的结论当成全覆盖`);
     }
     console.log(failures.length === 0
       ? `\nPASS: ${report.length} 个文件，${warnings.length} 项警告（不阻塞）`

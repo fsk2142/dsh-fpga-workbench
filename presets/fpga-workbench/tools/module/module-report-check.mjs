@@ -40,7 +40,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { realEscape, writeFileRecoverable } from "../lib/stamp.mjs";
+import { evidencePathInside, realEscape, writeFileRecoverable } from "../lib/stamp.mjs";
 // 器件从 spec 里怎么读,**复用综合脚本那一套**(不各写一份,免得两个工具读法不一致)
 import { fieldsFromSpec, readSpecFields } from "./module-synth-new.mjs";
 
@@ -125,7 +125,8 @@ export function evidenceTokens(text) {
  * @returns 真实落点在模块根内时为 true。
  */
 export function staysInsideModule(moduleRoot, rel) {
-  return realEscape(moduleRoot, join(moduleRoot, rel)) === undefined;
+  // E8-01:最终文件 symlink 也要拒;不存在的路径只做形式/父目录检查
+  return evidencePathInside(moduleRoot, rel);
 }
 export function isSafeRelative(path) {
   if (path.includes("\u0000")) return false;

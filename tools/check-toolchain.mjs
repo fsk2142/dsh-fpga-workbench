@@ -120,7 +120,7 @@ const scannedModuleRtl = scanTemplates({
   libraryRoot: TEMPLATE_LIBRARY_FIXTURE
 });
 const scannedRtlGroup = scannedModuleRtl.groups.find((group) => group.key === "rtl");
-check(TEMPLATE_CATEGORIES.length === 9, `模板库固定九类(实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`);
+check(TEMPLATE_CATEGORIES.length === 11, `模板库固定十一类(实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`);
 check(
   BUILTIN_TEMPLATES.some((item) => item.id === "builtin:rtl/systemverilog-module.sv") &&
     BUILTIN_TEMPLATES.some((item) => item.id === "builtin:simulation/compile/modelsim-compile.do") &&

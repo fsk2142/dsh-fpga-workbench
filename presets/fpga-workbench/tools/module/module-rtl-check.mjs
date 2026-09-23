@@ -195,10 +195,14 @@ const PARAM_LIKE = /^[A-Z][A-Z0-9_]*$/u;
 function classifyNeq(operands, pairs) {
   if (pairs.length === 0) return "quiet";
   if (!/\b(?:if|while|for)\s*\(|\bassert\b|\?/u.test(operands)) return "quiet"; // 不是判定:如 `$display(..., a != b)`
-  const isPlain = (pair) => !PARAM_LIKE.test(pair[1]) && !PARAM_LIKE.test(pair[2]);
+  // E8-10:期望值命名(含 EXP_DATA/EXPECTED_*)优先于“全大写像参数”,否则大写期望信号被吞掉
+  // E8-10:期望命名的**数据**信号(如 EXP_DATA)优先于“全大写像参数”;计数/索引(exp_cnt)仍静默
+  const COUNT_NAME = /(?:^|_)(?:cnt|count|idx|index|num|i|n)(?:_|$)|(?:^|_)(?:cnt|idx)$/iu;
+  const isDataExpected = (name) => EXPECTED_SIGNAL.test(name) && !COUNT_NAME.test(name);
+  const isPlain = (pair) => isDataExpected(pair[1]) || isDataExpected(pair[2]) || (!PARAM_LIKE.test(pair[1]) && !PARAM_LIKE.test(pair[2]));
   const plain = pairs.filter(isPlain);
   if (plain.length === 0) return "quiet";
-  const named = plain.some((pair) => EXPECTED_SIGNAL.test(pair[1]) || EXPECTED_SIGNAL.test(pair[2]));
+  const named = plain.some((pair) => isDataExpected(pair[1]) || isDataExpected(pair[2]));
   return named ? "data" : "confirm";
 }
 

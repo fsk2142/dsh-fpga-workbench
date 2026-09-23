@@ -14,7 +14,7 @@
 // 故意不做的事:不猜模板、不改模板内容、不覆盖已有文件(除非 --force)。
 // **`--force` 覆盖是可恢复的**:旧内容先复制成同目录的 `<目标>.bak-<时间戳>`(路径会打印出来),
 // 新内容先写临时文件、读回来核验过才改名替换 —— 见 {@link writeFileRecoverable}。
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 
 /** 取一个错误的可读文字(非 Error 的抛出物也要能报出来)。 */
@@ -73,6 +73,29 @@ function realPathOf(path) {
  * @param root - 根目录。
  * @param rel - 相对 root 的路径。
  */
+/**
+ * 证据**路径**是否安全(E8-01):不存在时只做形式与父目录检查;
+ * 存在时必须是普通文件(非 symlink)且 realpath 仍在 root 内。
+ */
+export function evidencePathInside(root, rel) {
+  const path = String(rel ?? "").replace(/^\.\//u, "");
+  if (path === "" || path.split(/[\\/]+/u).includes("..") || /^[A-Za-z]:/u.test(path) || path.startsWith("\\\\")) {
+    return false;
+  }
+  const target = join(root, path);
+  if (realEscape(root, target) !== undefined) return false;
+  try {
+    const info = lstatSync(target);
+    if (!info.isFile() || info.isSymbolicLink()) return false;
+    const realRoot = realpathSync(root);
+    const real = realpathSync(target);
+    const relOut = relativePath(realRoot, real);
+    return relOut === "" || (!relOut.startsWith(`..${sep}`) && relOut !== ".." && !isAbsolute(relOut));
+  } catch {
+    return true; // 尚不存在:引用合法性由“缺失”判据管
+  }
+}
+
 export function evidenceFileInside(root, rel) {
   const path = String(rel ?? "").replace(/^\.\//u, "");
   if (path === "" || path.split(/[\\/]+/u).includes("..") || /^[A-Za-z]:/u.test(path) || path.startsWith("\\\\")) {
@@ -81,7 +104,12 @@ export function evidenceFileInside(root, rel) {
   const target = join(root, path);
   if (realEscape(root, target) !== undefined) return false;
   try {
-    return statSync(target).isFile();
+    const info = lstatSync(target);
+    if (!info.isFile() || info.isSymbolicLink()) return false;
+    const realRoot = realpathSync(root);
+    const real = realpathSync(target);
+    const relOut = relativePath(realRoot, real);
+    return relOut === "" || (!relOut.startsWith(`..${sep}`) && relOut !== ".." && !isAbsolute(relOut));
   } catch {
     return false;
   }
@@ -208,12 +236,13 @@ export function defaultDestination(kind, name, template) {
   if (kind === "rtl") return join("rtl", `${name}${ext}`);
   if (kind === "tb") return join("verif", `tb_${snakeCase(name)}${ext}`);
   if (kind === "xdc") return join("synth", `${name}${ext}`);
+  // 模块内使用、外部不引用的脚本 → 落点文件名跟模板走(用户定案,避免再冒出旧 run.do 这种含糊名)
   if (kind === "sim-compile") return join("verif", "compile.do");
   if (kind === "sim-run") return join("verif", "run.do");
-  // 综合脚本同理:跑法里写的是 `synth/run_synth.tcl`(报告也按这个目录收)
-  if (kind === "synth-script") return join("synth", "run_synth.tcl");
   // 比对脚本同理:技能里给的是 `python verif/comp.py <参照> <输出>`
   if (kind === "comp") return join("verif", "comp.py");
+  // 综合脚本同理:跑法里写的是 `synth/run_synth.tcl`(报告也按这个目录收)
+  if (kind === "synth-script") return join("synth", "run_synth.tcl");
   return undefined;
 }
 

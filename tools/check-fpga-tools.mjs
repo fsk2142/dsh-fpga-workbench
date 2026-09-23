@@ -2282,6 +2282,23 @@ check(digestBlocks === 1, `两段摘要块 → --record 之后只剩一段(第�
   );
 }
 
+// 两处**实测误报**(2026-09-23,用户真实模块 eth_crc32 被抓红的那种):
+//   ① 报告里引用**目录**(`verif/`、`rtl/`)是合法的 —— 在根内就够,不该判"越界";
+//   ② `synth/vivado_proj/` 这类"跑出来就有"的可再生物缺失,只该 info,不该 FAIL。
+mkdirSync(join(scopeRoot, "synth"), { recursive: true }); // synth/ 在,vivado_proj/ 故意不建(可再生物缺失)
+mkdirSync(join(scopeRoot, "rtl"), { recursive: true });
+writeFileSync(join(scopeRoot, "rtl", "x.sv"), "module x; endmodule\n");
+writeFileSync(join(scopeRoot, "verif", "verif.md"), ["# 验证报告", "", "结论: PASS", "", "- 目录引用:`verif/`、`rtl/`", "- 可再生:`synth/vivado_proj/`", ""].join("\n"));
+const dirRef = runStdout("module-report-check.mjs", [scopeRoot]);
+check(
+  !/真实落点越出模块根/u.test(dirRef.output),
+  "报告引用**目录**(`verif/` / `rtl/`)不再被判成「越界」(实测误报;实际输出见下)",
+  dirRef.output.slice(-300)
+);
+check(
+  !/FAIL[^\n]*vivado_proj/u.test(dirRef.output) && /vivado_proj[^\n]*(可再生|现在不在)/u.test(dirRef.output),
+  "`synth/vivado_proj/` 这种可再生物缺失只报 info、不判 FAIL(与 .gitignore 的可再生口径一致)"
+);
 // ── F-03:check-patch-file.mjs 不许写死仓库绝对路径 ───────────────────────────
 //
 // 写死 `C:/Work/dsh-fpga-workbench/cordis.patch.yml` 的后果是"克隆到别处就断"。改成按

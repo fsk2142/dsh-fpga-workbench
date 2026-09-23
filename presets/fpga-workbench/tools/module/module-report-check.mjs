@@ -63,7 +63,7 @@ const LINE_SUFFIX = /:\d+(?:[-,]\d+)*$/u;
  * 这些目录里的东西**约定可再生**(跑一次就重新生成,用户自己的口径):引用它们不算错,
  * 只是"当时那份现在没了"。当 info 报,不判 FAIL —— 否则每清一次 work/ 就红一遍。
  */
-const REGENERABLE = /(?:^|\/)work\//u;
+const REGENERABLE = /(?:^|\/)(?:work|vivado_proj|\.Xil|xsim\.dir)\/|(?:^|\/)(?:dfx_runtime\.txt|transcript|vsim?\.wlf|.*\.backup\.[^/]+)$/iu;
 
 /**
  * 从一段文本里抽出**当作证据引用**的模块根相对路径。

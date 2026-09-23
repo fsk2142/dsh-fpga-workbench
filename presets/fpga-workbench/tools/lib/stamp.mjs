@@ -86,13 +86,17 @@ export function evidencePathInside(root, rel) {
   if (realEscape(root, target) !== undefined) return false;
   try {
     const info = lstatSync(target);
+    // **目录引用**:报告里写「`verif/`」这种"这个环节的目录在哪"是合法的 —— 在根内就够了,
+    // 而且我们不会去读它(不读就谈不上"最终 symlink"那种风险)。以前这里一律要求 isFile(),
+    // 于是 eth_crc32 报告里的 `verif/` / `rtl/` / `synth/` 被判成"越出模块根"(实测误报)。
+    if (info.isDirectory()) return true;
     if (!info.isFile() || info.isSymbolicLink()) return false;
     const realRoot = realpathSync(root);
     const real = realpathSync(target);
     const relOut = relativePath(realRoot, real);
     return relOut === "" || (!relOut.startsWith(`..${sep}`) && relOut !== ".." && !isAbsolute(relOut));
   } catch {
-    return true; // 尚不存在:引用合法性由“缺失”判据管
+    return true; // 尚不存在:引用合法性由"缺失"判据管
   }
 }
 

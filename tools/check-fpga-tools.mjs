@@ -200,20 +200,22 @@ check(
 
 const categorizedTemplates = {
   rtl: join(TEMPLATES, "rtl", "systemverilog_module.sv"),
-  constraints: join(TEMPLATES, "constraints", "vivado_xdc.xdc"),
+  constraints: join(TEMPLATES, "constraints", "vivado_module_xdc.xdc"),
   verification: join(TEMPLATES, "verification", "python_data_verification.py"),
   testbench: join(TEMPLATES, "simulation", "testbench", "systemverilog_testbench.sv"),
   compile: join(TEMPLATES, "simulation", "compile", "modelsim_compile.do"),
   run: join(TEMPLATES, "simulation", "run", "modelsim_run.do"),
-  synthesis: join(TEMPLATES, "synthesis", "vivado_synthesis.tcl"),
+  synthesis: join(TEMPLATES, "synthesis", "vivado_module_synthesis.tcl"),
+  "project-constraints": join(TEMPLATES, "constraints", "vivado_project_xdc.xdc"),
   implementation: join(TEMPLATES, "implementation", "vivado_implementation.tcl"),
   programming: join(TEMPLATES, "programming", "vivado_program.tcl"),
+  "project-synthesis": join(TEMPLATES, "synthesis", "vivado_project_synthesis.tcl"),
   linter: join(TEMPLATES, "linter", "vivado_rtl_lint.tcl"),
   bitstream: join(TEMPLATES, "bitstream", "vivado_bitstream.tcl")
 };
 check(
   Object.values(categorizedTemplates).every((path) => existsSync(path)),
-  "十一份分类内置模板都存在(模块九 + 工程级 linter / bitstream)",
+  "十三份内置模板都存在(模块九 + 工程级 linter / bitstream / 工程综合 / 工程约束)",
   Object.entries(categorizedTemplates).filter(([, path]) => !existsSync(path)).map(([key]) => key).join("、")
 );
 const categorizedRtlIssues = blocking(categorizedTemplates.rtl, false);

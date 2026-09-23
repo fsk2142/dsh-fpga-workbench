@@ -17,6 +17,12 @@ set VENDOR_LIBS   {}
 set RESULT_LOG    {sim.log}
 # E8(item A-3): the same HDL root compile.do used (project sim/ layout: {../src/rtl}).
 set RTL_DIR       {../rtl}
+# RTL_DIR default is the module layout {../rtl} (run from <module>/verif/). A project runs this from
+# its root sim/, where RTL lives in ../src/rtl - switch only when the configured one is missing.
+if {![file isdirectory [file join [pwd] $RTL_DIR]] && [file isdirectory [file join [pwd] ../src/rtl]]} {
+  puts "\[ME\] RTL_DIR not found at {../rtl}; using project layout {../src/rtl}"
+  set RTL_DIR {../src/rtl}
+}
 
 onbreak { resume }
 onerror { quit -f -code 1 }

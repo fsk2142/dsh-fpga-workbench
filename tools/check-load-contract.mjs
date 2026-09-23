@@ -455,7 +455,7 @@ const capabilityFixtures = [
     key: "module-gate", section: "module", label: "综合与门禁工具", hint: "用于模块综合、资源与时序门禁。",
     toolKey: "moduleGateTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
-      templateSlot("moduleSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado_synthesis.tcl"),
+      templateSlot("moduleSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado_module_synthesis.tcl"),
       templateSlot("moduleConstraintsTemplate", "constraints", "约束模板", "constraints/vivado_xdc.xdc")
     ]
   },
@@ -465,7 +465,7 @@ const capabilityFixtures = [
     templates: [
       templateSlot("projectRtlTemplate", "rtl", "RTL 模板", "rtl/systemverilog_module.sv"),
       templateSlot("projectConstraintsTemplate", "constraints", "约束模板", "constraints/vivado_xdc.xdc"),
-      templateSlot("projectSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado_synthesis.tcl"),
+      templateSlot("projectSynthesisTemplate", "project-synthesis", "综合脚本", "synthesis/vivado_project_synthesis.tcl"),
       templateSlot("projectImplementationTemplate", "implementation", "实现脚本", "implementation/vivado_implementation.tcl"),
       templateSlot("projectProgrammingTemplate", "programming", "下载脚本", "programming/vivado_program.tcl")
     ]

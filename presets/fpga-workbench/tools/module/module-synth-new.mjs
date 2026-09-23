@@ -6,7 +6,7 @@
 //   node module-synth-new.mjs <模块根> <模块名> --kind synth-script
 //                      [--template <综合脚本路径>] [--out <相对路径>] [--force] [--dry-run]
 // 默认落到 `synth/<模块名>.xdc`。`--kind synth-script` 固定落 `synth/run_synth.tcl`(文件名不跟
-// 模板扩展名走);不给 `--template` 时用分类模板库里的 `synthesis/vivado_synthesis.tcl`。
+// 模板扩展名走);不给 `--template` 时用分类模板库里的 `synthesis/vivado_module_synthesis.tcl`。
 // 综合脚本里的**器件型号与顶层模块名从 spec 读出来填进去** —— 器件与时钟只写一处,别再手抄。
 // **器件来源**:模块根若位于某个工程目录之下,向上找到 `kind: project` 锚点并读 `doc/spec.md`;
 // 否则读模块自己的 `spec/spec.md`。不再猜“兄弟 project/”目录 —— 工程目录是用户指定的任意路径。
@@ -21,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseStampArgs, stampFile } from "../lib/stamp.mjs";
 
 /** 自带的综合脚本模板:`tools/` 与 `templates/` 同级(装进 profile 后这个相对关系不变)。 */
-const BUNDLED_RUN_SYNTH = fileURLToPath(new URL("../../templates/synthesis/vivado_synthesis.tcl", import.meta.url));
+const BUNDLED_RUN_SYNTH = fileURLToPath(new URL("../../templates/synthesis/vivado_module_synthesis.tcl", import.meta.url));
 
 // 器件型号:spec.md 没有固定模板,所以按**型号串**认,不按第几节认 —— Xilinx/AMD 的型号一律以
 // `xc` 起头,后面可以是 `7a100t`(7 系列)也可以是 `ku040`/`zu7ev`/`vu9p`(UltraScale 那种两字母系列),

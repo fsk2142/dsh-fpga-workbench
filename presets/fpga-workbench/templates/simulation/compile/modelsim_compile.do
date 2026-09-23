@@ -17,6 +17,12 @@
 #
 # Edit only these knobs when the normal module layout is not enough.
 set RTL_DIR        {../rtl}
+# RTL_DIR default is the module layout {../rtl} (run from <module>/verif/). A project runs this from
+# its root sim/, where RTL lives in ../src/rtl - switch only when the configured one is missing.
+if {![file isdirectory [file join [pwd] $RTL_DIR]] && [file isdirectory [file join [pwd] ../src/rtl]]} {
+  puts "\[ME\] RTL_DIR not found at {../rtl}; using project layout {../src/rtl}"
+  set RTL_DIR {../src/rtl}
+}
 set TB_PATTERN     {tb_*.sv tb_*.v tb_*.vhd tb_*.vhdl}
 set INI_OVERRIDE   {}
 set EXTRA_INCDIRS  {}

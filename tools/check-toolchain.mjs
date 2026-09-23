@@ -122,8 +122,8 @@ const scannedModuleRtl = scanTemplates({
 });
 const scannedRtlGroup = scannedModuleRtl.groups.find((group) => group.key === "rtl");
 check(
-  TEMPLATE_CATEGORIES.length === 12,
-  `模板库固定十二类(11 类有内置;project-synthesis 是有分类、暂无内置 —— 模块级综合模板不能当工程默认;实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`
+  TEMPLATE_CATEGORIES.length === 13,
+  `模板库固定十三类(模块九 + 工程级 linter / bitstream / 综合 / 约束;模块与工程的综合、约束各有一份内置,实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`
 );
 check(
   BUILTIN_TEMPLATES.some((item) => item.id === "builtin:rtl/systemverilog-module.sv") &&
@@ -175,8 +175,20 @@ check(
 
 const builtinDefault = resolveTemplateSelection({ selection: "", category: "synthesis", tool: "vivado" });
 check(
-  builtinDefault.state === "default" && builtinDefault.id === "builtin:synthesis/vivado-synthesis.tcl",
+  builtinDefault.state === "default" && builtinDefault.id === "builtin:synthesis/vivado-module-synthesis.tcl",
   "空选择 + Vivado 解析为适配的内置默认模板"
+);
+// 工程综合现在有**自己那份**内置:Vivado 下解析到工程版,Quartus 下没有适配。
+const projectSynthesisDefault = resolveTemplateSelection({ selection: "", category: "project-synthesis", tool: "vivado" });
+check(
+  projectSynthesisDefault.state === "default" &&
+    projectSynthesisDefault.id === "builtin:project-synthesis/vivado-project-synthesis.tcl",
+  "工程综合的空选择解析到**工程版**内置(不是模块那本)"
+);
+const projectSynthesisQuartus = resolveTemplateSelection({ selection: "", category: "project-synthesis", tool: "quartus" });
+check(
+  projectSynthesisQuartus.state === "unsupported-default" && projectSynthesisQuartus.present === false,
+  "Quartus 下工程综合没有适配内置,保留空选择"
 );
 const unsupportedDefault = resolveTemplateSelection({ selection: "", category: "synthesis", tool: "quartus" });
 check(
@@ -506,8 +518,9 @@ const repairedV3BundledTemplates = legacyMigrationPatch({
 });
 check(
   repairedV3BundledTemplates.projectRtlTemplate === "builtin:rtl/systemverilog-module.sv" &&
-    repairedV3BundledTemplates.projectConstraintsTemplate === "builtin:constraints/vivado-xdc.xdc" &&
-      // 工程综合**没有**库内内置(那份 vivado_synthesis.tcl 是模块级的:写 <ModuleName>、从模块根跑、
+    // 工程侧:旧平面路径是**模块**脚本 → 与工程综合同口径,清空而不是静默绑给工程。
+    repairedV3BundledTemplates.projectConstraintsTemplate === undefined &&
+      // 工程综合有**自己那份**内置(工程版 Tcl);旧平面路径仍**清空**,不静默绑成模块脚本:
       // 落 synth/vivado_proj/)→ 旧路径只清空、不映射成模块模板,免得 AI 在工程里另建一套模块目录。
       repairedV3BundledTemplates.projectSynthesisTemplate === undefined,
   "版本 3 里残留的旧插件模板路径会规范化为分类内置 ID;工程综合没有内置 → 清空(由 AI 自行决定)"
@@ -1696,7 +1709,7 @@ const quartusTemplateText = describeEnv(
   (path) => path === "C:\\Quartus\\quartus_sh.exe"
 );
 check(
-  quartusTemplateText.includes("当前工具没有适配的约束模板") &&
+  quartusTemplateText.includes("当前工具没有适配的工程约束模板") &&
     // (模块行的『没有适配的综合脚本』不在这里断言:夹具的 checkPath 把所有模板文件都当缺失,
     //  文案会在『内置参考缺失』与『没有适配』之间摇摆;该语义由 resolveTemplateSelection API 用例覆盖。)
     quartusTemplateText.includes("当前工具没有适配的实现脚本") &&

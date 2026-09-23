@@ -24,7 +24,9 @@ import { chmodSync, closeSync, existsSync, copyFileSync, mkdirSync, openSync, re
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkFile, collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
+// checkFile 现在住在共享纯规则模块里(DSH-N06);checker 只留目录发现与角色等入口侧。
+import { checkFile } from "../presets/fpga-workbench/tools/lib/rtl-check-rules.mjs";
+import { collectHdl } from "../presets/fpga-workbench/tools/module/module-rtl-check.mjs";
 import { PART_SHAPE_CASES, partLooksComplete } from "../presets/fpga-workbench/tools/module/module-synth-new.mjs";
 import {
   hasDigestBlock,
@@ -236,6 +238,30 @@ for (const [label, file] of [
     /\[file type \$[A-Z_]+\] eq "link"/u.test(source) && /refusing to follow it/u.test(source),
     `${label}模板拒绝**根目录**是 symlink/Junction(不只挡递归子目录)`
   );
+}
+
+// DSH-N06:规则只有**一份**出处 —— 两个 checker 都不许再自己定义 checkFile/规则常量,
+// 必须从 tools/lib/rtl-check-rules.mjs 导入。
+{
+  const sharedRules = readFileSync(join(ROOT, "presets", "fpga-workbench", "tools", "lib", "rtl-check-rules.mjs"), "utf8");
+  check(
+    /export function checkFile\(/u.test(sharedRules) && /export function classifyNeq\(/u.test(sharedRules),
+    "共享纯规则模块导出 checkFile / classifyNeq(唯一出处)"
+  );
+  for (const [label, file] of [
+    ["module", join(ROOT, "presets", "fpga-workbench", "tools", "module", "module-rtl-check.mjs")],
+    ["project", join(ROOT, "presets", "fpga-workbench", "tools", "project", "project-rtl-check.mjs")]
+  ]) {
+    const source = readFileSync(file, "utf8");
+    check(
+      !/^(?:export\s+)?function checkFile\b/mu.test(source),
+      `${label} checker 不再自己定义 checkFile(改为从共享模块导入)`
+    );
+    check(
+      /from "\.\.\/lib\/rtl-check-rules\.mjs"/u.test(source),
+      `${label} checker 从共享纯规则模块导入`
+    );
+  }
 }
 
 const categorizedTemplates = {
@@ -2444,6 +2470,27 @@ check(
   `混合 SV+VHDL 输出 PARTIAL 且退 2(不是静默 PASS;实际 ${String(mixRun.code)})`,
   mixRun.output.slice(-300)
 );
+// DSH-N06:同一句 `exp_cnt != i` 必须**两边一致** —— 工程侧以前用裸 EXPECTED_SIGNAL(与自己注释矛盾),
+// 模块只给警告、工程却判 FAIL;现在规则共用一份,这条断言把工程侧也钉住。
+const neqProjectRoot = join(SANDBOX, `neq-project-${stamp}`);
+mkdirSync(join(neqProjectRoot, "src", "rtl"), { recursive: true });
+mkdirSync(join(neqProjectRoot, "src", "sim"), { recursive: true });
+mkdirSync(join(neqProjectRoot, "doc"), { recursive: true });
+writeFileSync(join(neqProjectRoot, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+writeFileSync(join(neqProjectRoot, "doc", "spec.md"), "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+writeFileSync(join(neqProjectRoot, "src", "rtl", "gut.sv"), readFileSync(categorizedTemplates.rtl, "utf8"));
+const neqTbHeader = readFileSync(categorizedTemplates.rtl, "utf8").split("\n").slice(0, 14).join("\n");
+writeFileSync(
+  join(neqProjectRoot, "src", "sim", "tb_dut.sv"),
+  `${neqTbHeader}\n\n\`resetall\n\`default_nettype none\n\nmodule tb_dut;\n  logic [7:0] exp_cnt;\n  logic [7:0] i;\n  initial begin\n    if (exp_cnt != i) $display("x");\n  end\nendmodule\n\n\`default_nettype wire\n`
+);
+const neqProjectRun = runStdout("project-rtl-check.mjs", [neqProjectRoot]);
+check(
+  neqProjectRun.output.includes("这一行有 '!='") && !neqProjectRun.output.includes("数据比对用了"),
+  "工程侧:期望命名的计数/索引比常量只给警告,不判数据比对 FAIL(与模块侧同一条规则)",
+  neqProjectRun.output.slice(-300)
+);
+
 const mixJson = JSON.parse(runStdout("project-rtl-check.mjs", [mixRoot, "--json"]).output);
 check(
   mixJson.coverage === "partial" && mixJson.skippedFiles.length === 1 && mixJson.checkedFiles.length === 1,

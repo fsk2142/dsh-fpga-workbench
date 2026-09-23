@@ -207,11 +207,13 @@ const categorizedTemplates = {
   run: join(TEMPLATES, "simulation", "run", "modelsim_run.do"),
   synthesis: join(TEMPLATES, "synthesis", "vivado_synthesis.tcl"),
   implementation: join(TEMPLATES, "implementation", "vivado_implementation.tcl"),
-  programming: join(TEMPLATES, "programming", "vivado_program.tcl")
+  programming: join(TEMPLATES, "programming", "vivado_program.tcl"),
+  linter: join(TEMPLATES, "linter", "vivado_rtl_lint.tcl"),
+  bitstream: join(TEMPLATES, "bitstream", "vivado_bitstream.tcl")
 };
 check(
   Object.values(categorizedTemplates).every((path) => existsSync(path)),
-  "九份分类内置模板都存在",
+  "十一份分类内置模板都存在(模块九 + 工程级 linter / bitstream)",
   Object.entries(categorizedTemplates).filter(([, path]) => !existsSync(path)).map(([key]) => key).join("、")
 );
 const categorizedRtlIssues = blocking(categorizedTemplates.rtl, false);

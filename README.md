@@ -94,8 +94,8 @@ presets/fpga-workbench/
     preset.yml                选择器里显示的名字与描述
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
-    templates/                九类分类模板:RTL、约束、Testbench、仿真编译/运行、验证、
-                              综合、实现、下载；不再保留旧的平面模板副本
+    templates/                十一类分类模板:RTL、约束、Testbench、仿真编译/运行、验证、
+                              综合、实现、下载、Lint、Bitstream；不再保留旧的平面模板副本
     tools/                    自带命令,**按级别分目录**:module/ 只放模块级、project/ 只放工程级、
                               顶层是两级共用(setup-scaffold.mjs)、lib/ 是内部模块(不是命令)
 tools/                        分层自检 + install/sync-installed + 依赖安全/锁文件比对
@@ -147,8 +147,8 @@ tools/                        分层自检 + install/sync-installed + 依赖安�
 RTL 的文件头、九个小节块、端口对齐这些**格式**都是各自的习惯,写死在技能里换个人就废了。
 所以:
 
-- 插件自带九类默认模板(`presets/fpga-workbench/templates/`),分别覆盖 RTL、约束、Testbench、
-  仿真编译、仿真运行、验证、综合、实现和下载。默认模板带工具兼容信息,例如 Vivado 脚本不会被
+- 插件自带十一类默认模板(`presets/fpga-workbench/templates/`),分别覆盖 RTL、约束、Testbench、
+  仿真编译、仿真运行、验证、综合、实现、下载,以及工程级的 Lint 与 Bitstream。默认模板带工具兼容信息,例如 Vivado 脚本不会被
   当成 Quartus 的默认值。
 - 设置里只登记一个可选的**模板库根目录**。目录树固定如下,没有额外的 `fpga/` 分级；
   Testbench 是仿真输入文件,compile/run 是执行脚本,用途不同,因此分别存放:
@@ -438,7 +438,7 @@ profile 用 `DSH_PROFILE_DIR`;那个目录不存在时记 **SKIP** 并打印实�
   | `fpga-project-release` | 发布归档:判据是"照着归档能重建同一版设计" | `doc/release.md` |
 
   这些是可反复跳转的工程能力,不是编号流水线；工程报告平铺在 `doc/`,工具生成内容留在 `prj/`。
-- ✅ 模板:九类分类模板共用一座可选模板库,模块与工程能力卡可以分别选择其中不同的一份；旧六份平面模板已移除
+- ✅ 模板:十一类分类模板共用一座可选模板库,模块与工程能力卡可以分别选择其中不同的一份；旧六份平面模板已移除
 - ⬜ 更强的能力接入:把某些阶段做成**这个模式能直接调用的工具**(由插件起进程)。
   现在命令仍由 agent 用 shell 工具跑 —— 走沙箱、可见、可中断;真做成工具就得接 subprocess
   服务并自己处理超时与日志

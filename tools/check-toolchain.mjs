@@ -43,6 +43,7 @@ import {
   listFiles,
   listTempLeftovers,
   nextManifest,
+  existingUnder,
   newlyReportedCleanup,
   nextReportedCleanup,
   nonRegularOverwriteTargets,
@@ -1230,6 +1231,16 @@ writeFileSync(join(backupSource, "preset.yml"), "一样的内容\n");
 writeFileSync(join(backupTarget, "skills", "SKILL.md"), "用户自己改的\n");
 writeFileSync(join(backupTarget, "preset.yml"), "一样的内容\n");
 writeFileSync(join(backupTarget, "我加的笔记.md"), "用户新增\n");
+
+// 待清理清单:还在的留着,用户清掉的不再列(否则设置页永远念着那两个文件)。
+const cleanupRoot = join(TMP_ROOT, `cleanup-live-${RUN_ID}`);
+mkdirSync(join(cleanupRoot, "templates"), { recursive: true });
+writeFileSync(join(cleanupRoot, "templates", "old_a.tcl"), "旧的\n");
+check(
+  JSON.stringify(existingUnder(cleanupRoot, ["templates/old_a.tcl", "templates/old_b.tcl"])) ===
+    JSON.stringify(["templates/old_a.tcl"]),
+  "待清理清单只列仍然存在的项(清完的就不再念)"
+);
 
 const backedUp = backupChangedFiles(backupSource, backupTarget, join(backupRoot, "out"));
 // 第九轮复审:备份范围收敛到**托管文件**(listFiles(source)) —— foreign 文件既不会被 cpSync 覆盖,

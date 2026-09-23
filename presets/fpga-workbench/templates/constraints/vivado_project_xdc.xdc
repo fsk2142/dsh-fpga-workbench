@@ -14,7 +14,10 @@
 # ============================================================================ #
 
 # ---- 1) 主时钟(按板上的实际频率改周期;写法与模块版一致) ------------------ #
-create_clock -period 10.000 -name clk [get_ports clk]
+# **必须来自 doc/spec.md 的「时钟目标」** —— 不许沿用示例周期。
+# 顶层端口名与周期都要按你的工程写实;多个时钟就写多条(每条一个 create_clock)。
+# create_clock -period <周期ns> -name clk [get_ports <端口名>]
+# 例:125 MHz → -period 8.000;200 MHz → -period 5.000;50 MHz → -period 20.000
 
 # ---- 2) 由主时钟派生的时钟(用 PLL/MMCM 输出时打开对应一条) ---------------- #
 # create_generated_clocks -name -divide_by / derive_pll_clocks 之类的写法按 Vivado 版本选;

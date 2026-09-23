@@ -262,7 +262,9 @@ if {$mainlog eq "" || ![file exists $mainlog]} {
   set mainlog [file join [pwd] "synth" "run_synth.log"]
 }
 set main_crits {}
+set MAIN_LOG_SEEN 0
 if {[file exists $mainlog]} {
+  set MAIN_LOG_SEEN 1
   set fh2 [open $mainlog r]
   set main_text [read $fh2]
   close $fh2
@@ -280,8 +282,10 @@ if {[llength $main_crits]} {
   if {[llength $main_crits] > 10} {
     puts "\[run_synth\]   ...([expr {[llength $main_crits] - 10}] more)"
   }
+} elseif {$MAIN_LOG_SEEN == 0} {
+  puts "\[run_synth\] MAIN LOG NOT INSPECTED (looked for [string map {\\ /} $mainlog]) -- this is NOT the same as clean"
 } else {
-  puts "\[run_synth\] main log: no CRITICAL WARNING"
+  puts "\[run_synth\] main log inspected ([string map {\\ /} $mainlog]): no CRITICAL WARNING"
 }
 puts "\[run_synth\] gate: status='$status', no ERROR / CRITICAL WARNING"
 

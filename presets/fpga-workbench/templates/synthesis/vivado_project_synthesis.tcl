@@ -117,13 +117,16 @@ if {[catch {
 }
 set PRJ_PART_FWD [string map {\\ /} $PRJ_PART]
 puts "\[run_prj_synth\] project part: $PRJ_PART_FWD"
-if {$SPEC_PART ne ""} {
-  puts "\[run_prj_synth\] spec part: $SPEC_PART"
-  if {[string tolower $SPEC_PART] ne [string tolower $PRJ_PART]} {
-    fail "device mismatch: doc/spec.md says '$SPEC_PART' but the project part is '$PRJ_PART' -- fix one of them first (spec is authoritative)"
-  }
-} else {
-  puts "\[run_prj_synth\] WARN: no device found in doc/spec.md -- skipped the spec/project device check"
+# DSH-05:器件以 doc/spec.md 为权威 —— 读不到就不能算「器件已核对」,更不许静默 PASS。
+if {![file isfile [file join $PROJECT_ROOT "doc" "spec.md"]]} {
+  fail "doc/spec.md not found under $PROJECT_ROOT -- the project spec is the authority for the device; create it before running project synthesis"
+}
+if {$SPEC_PART eq ""} {
+  fail "no device part found in doc/spec.md -- write the device there first (spec is authoritative); refusing to report PASS without the spec/project device check"
+}
+puts "\[run_prj_synth\] spec part: $SPEC_PART"
+if {[string tolower $SPEC_PART] ne [string tolower $PRJ_PART]} {
+  fail "device mismatch: doc/spec.md says '$SPEC_PART' but the project part is '$PRJ_PART' -- fix one of them first (spec is authoritative)"
 }
 
 # ---- 预检 3:run 与顶层名 -------------------------------------------------- #
@@ -195,12 +198,19 @@ if {![regexp {^[0-9]+$} $crit_n]} {
 
 # 第 4 层:主日志里可能有 runme.log 看不到的 CRITICAL WARNING(建工程/收文件阶段的)。
 # 逐条列出来 + 计数,不直接判死(多数是提示);按 skill 的判据,出现的每条都要在结论里说明来源。
-set mainlog ""
-foreach {flag value} $argv {
-  if {$flag eq "-log"} { set mainlog $value }
+# DSH-02:-log 是 Vivado **launcher** 参数,普通 $argv 里未必有它,不能靠它猜。三条来源,按序取:
+#   ① 旋钮 MAIN_LOG   ② -tclargs 的第一个参数(像 .log 路径就用)   ③ 本工程的约定路径。
+set MAIN_LOG ""
+if {$MAIN_LOG eq "" && [llength $argv] > 0} {
+  set first [lindex $argv 0]
+  if {[string match "*.log" $first] || [file isfile $first]} { set MAIN_LOG $first }
 }
+if {$MAIN_LOG eq ""} { set MAIN_LOG [file join $RPT "run_prj_synth.log"] }
+set mainlog $MAIN_LOG
+set MAIN_LOG_SEEN 0
 set main_crits {}
 if {$mainlog ne "" && [file exists $mainlog]} {
+  set MAIN_LOG_SEEN 1
   set fh2 [open $mainlog r]
   set main_text [read $fh2]
   close $fh2
@@ -214,8 +224,11 @@ if {$mainlog ne "" && [file exists $mainlog]} {
 if {[llength $main_crits]} {
   puts "\[run_prj_synth\] WARN: main log has [llength $main_crits] CRITICAL WARNING line(s) (not in runme.log) -- list and explain each:"
   foreach line [lrange $main_crits 0 9] { puts "\[run_prj_synth\]   $line" }
+} elseif {$MAIN_LOG_SEEN} {
+  puts "\[run_prj_synth\] main log inspected ([string map {\\ /} $mainlog]): no CRITICAL WARNING"
 } else {
-  puts "\[run_prj_synth\] main log: no CRITICAL WARNING"
+  puts "\[run_prj_synth\] MAIN LOG NOT INSPECTED (looked for [string map {\\ /} $mainlog]) -- this is NOT the same as clean"
+  puts "\[run_prj_synth\]   pass the launcher log explicitly: -tclargs <path>, or set the MAIN_LOG knob"
 }
 puts "\[run_prj_synth\] gate: status='$status', no ERROR / CRITICAL WARNING"
 

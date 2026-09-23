@@ -59,7 +59,9 @@
 # ---------------------------------------------------------------------------- #
 # 2. Clock constraints -- MODULE level (the one section a module fills in)     #
 # ---------------------------------------------------------------------------- #
-create_clock -name clk -period 10.000 [get_ports clk]   ;# 与 simulation/testbench/systemverilog_testbench.sv 的 CLK_PERIOD 同源:改一个必须改另一个
+# **必须来自模块 spec 的目标频率**(见 fpga-module-spec 的「综合与时序策略」)—— 不许沿用示例周期。
+# 与 simulation/testbench 模板里的 CLK_PERIOD **同源**:改一个必须改另一个。
+# create_clock -name clk -period <周期ns> [get_ports clk]
 #
 # ---------------------------------------------------------------------------- #
 # 3. Configuration commands (CFG) -- PROJECT level                             #

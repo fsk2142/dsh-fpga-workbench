@@ -55,6 +55,7 @@ const check = (ok, label, detail) => {
   if (!ok) failures.push(label);
 };
 
+
 // ── 造样本 ──────────────────────────────────────────────────────────────────
 const banner = (text) => `//${text.padEnd(80)}//`;
 const rule = `//${"=".repeat(80)}//`;
@@ -198,6 +199,29 @@ check(
   retiredFlatTemplates.filter((name) => existsSync(join(TEMPLATES, name))).join("、")
 );
 
+// DSH-02:读不到主日志时**不许**说"没有 Critical Warning" —— 那是把"没查"说成"干净"。
+// 两份综合模板都必须带 NOT_INSPECTED 分支,并且说明怎么把日志传进来。
+for (const [label, file] of [
+  ["模块综合", join(TEMPLATES, "synthesis", "vivado_module_synthesis.tcl")],
+  ["工程综合", join(TEMPLATES, "synthesis", "vivado_project_synthesis.tcl")]
+]) {
+  const source = readFileSync(file, "utf8");
+  check(
+    /MAIN LOG NOT INSPECTED/u.test(source) && /NOT the same as clean/u.test(source),
+    `${label}模板在主日志未读到时报 NOT_INSPECTED(而不是"没有 Critical Warning")`
+  );
+}
+
+// DSH-05:器件以 doc/spec.md 为权威 —— 工程综合读不到器件时必须**失败**(不许 WARN 之后照旧 PASS)。
+{
+  const projectSynthSource = readFileSync(join(TEMPLATES, "synthesis", "vivado_project_synthesis.tcl"), "utf8");
+  check(
+    /no device part found in doc\/spec\.md/u.test(projectSynthSource) &&
+      /doc\/spec\.md not found/u.test(projectSynthSource),
+    "工程综合模板:doc/spec.md 缺失或读不到器件 → fail(不给不带器件核对结论的 PASS)"
+  );
+}
+
 const categorizedTemplates = {
   rtl: join(TEMPLATES, "rtl", "systemverilog_module.sv"),
   constraints: join(TEMPLATES, "constraints", "vivado_module_xdc.xdc"),
@@ -207,12 +231,33 @@ const categorizedTemplates = {
   run: join(TEMPLATES, "simulation", "run", "modelsim_run.do"),
   synthesis: join(TEMPLATES, "synthesis", "vivado_module_synthesis.tcl"),
   "project-constraints": join(TEMPLATES, "constraints", "vivado_project_xdc.xdc"),
+
+// DSH-01:内置 XDC 里**不许有生效的默认约束**(尤其 create_clock 的硬编码周期)——
+// 时钟周期必须来自 doc/spec.md / 模块 spec 的目标频率;模板只保留注释示例。
+// 否则只要端口恰好叫 clk,Vivado 会安静地按示例周期约束,工具全绿而工程事实是错的。
   implementation: join(TEMPLATES, "implementation", "vivado_implementation.tcl"),
   programming: join(TEMPLATES, "programming", "vivado_program.tcl"),
   "project-synthesis": join(TEMPLATES, "synthesis", "vivado_project_synthesis.tcl"),
   linter: join(TEMPLATES, "linter", "vivado_rtl_lint.tcl"),
   bitstream: join(TEMPLATES, "bitstream", "vivado_bitstream.tcl")
 };
+
+for (const [key, file] of [
+  ["constraints", categorizedTemplates.constraints],
+  ["project-constraints", categorizedTemplates["project-constraints"]]
+]) {
+  const lines = readFileSync(file, "utf8").split(/\r?\n/u);
+  const active = lines.filter((line) => /^\s*(create_clock|create_generated_clocks)\b/u.test(line));
+  check(
+    active.length === 0,
+    `${key} 内置 XDC 没有生效的默认时钟约束(周期必须来自 spec;实际 ${String(active.length)} 行)`,
+    active.slice(0, 3).join("\n")
+  );
+  check(
+    lines.some((line) => /^\s*#.*create_clock/u.test(line)),
+    `${key} 内置 XDC 保留了**注释示例**,让人知道该写成什么样`
+  );
+}
 check(
   Object.values(categorizedTemplates).every((path) => existsSync(path)),
   "十三份内置模板都存在(模块九 + 工程级 linter / bitstream / 工程综合 / 工程约束)",
@@ -1063,12 +1108,16 @@ check(
 );
 const bundledTbClock = readFileSync(categorizedTemplates.testbench, "utf8");
 const bundledXdcClock = readFileSync(categorizedTemplates.constraints, "utf8");
-const tbPeriod = /CLK_PERIOD\s*=\s*(\d+(?:\.\d+)?)\s*ns/u.exec(bundledTbClock)?.[1];
-const xdcPeriod = /create_clock[^\n]*-period\s+(\d+(?:\.\d+)?)/u.exec(bundledXdcClock)?.[1];
-check(
-  tbPeriod !== undefined && xdcPeriod !== undefined && Number(tbPeriod) === Number(xdcPeriod),
-  `自带 tb.sv 与 constraints.xdc 的默认时钟周期一致(tb=${String(tbPeriod)}ns / xdc=${String(xdcPeriod)}ns)`
-);
+  const tbPeriod = /CLK_PERIOD\s*=\s*(\d+(?:\.\d+)?)\s*ns/u.exec(bundledTbClock)?.[1];
+  // DSH-01 之后内置 XDC **没有生效时钟**(周期必须来自 spec),所以不再比较"两处同数":
+  //   ① XDC 里真写了周期 → TB 必须同数(第五轮那条契约仍然有效);
+  //   ② XDC 没写(内置模板的形态)→ TB 必须写明"周期取自 spec",别让 10 ns 看着像工程事实。
+  const xdcPeriod = /^\s*create_clock[^\n]*-period\s+(\d+(?:\.\d+)?)/mu.exec(bundledXdcClock)?.[1];
+  check(
+    tbPeriod !== undefined &&
+      (xdcPeriod !== undefined ? Number(tbPeriod) === Number(xdcPeriod) : /spec\/spec\.md/u.test(bundledTbClock)),
+    `自带 tb.sv 的 CLK_PERIOD 与 XDC 口径一致(tb=${String(tbPeriod)}ns / xdc=${String(xdcPeriod)}ns)：XDC 有生效周期就同数,没有则 TB 必须写明周期取自 spec`
+  );
 // 第五轮之后追加(我这轮的审计发现):综合门禁自称查"建工程 / 收文件阶段的 CRITICAL WARNING",
 // 实测真综合跑出的主日志里躺着一条 filemgmt 20-742,而它判了 PASS(那些行不进 runme.log,
 // 消息计数也没算它)。现在多一层:扫**主日志**、逐条列出来 + 计数(不直接判死 —— 那类多数是良性)。

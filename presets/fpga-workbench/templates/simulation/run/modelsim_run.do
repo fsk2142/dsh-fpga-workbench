@@ -42,7 +42,9 @@ if {![file isdirectory work]} {
   quit -f -code 1
 }
 # E8-07: work/ existing is not enough - it must match the CURRENT sources. compile.do writes a
-# stamp (mtime + size per input); re-check every entry here and refuse to run on a mismatch.
+# stamp (mtime + size per input) plus the source SET; re-check both here and refuse on a mismatch.
+# Contract (DSH-10): freshness = source set + mtime + size. It is NOT a content hash - a same-size,
+# same-mtime edit could slip through; that is a deliberate trade (no hashing dependency in Tcl).
 set STAMP [file join work ".fpga-compile-stamp"]
 if {![file isfile $STAMP]} {
   puts "\n\[ME\] ERROR: no compile stamp in work/ ($STAMP) - run the compile template first"

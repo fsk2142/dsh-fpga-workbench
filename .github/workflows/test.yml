@@ -1,0 +1,23 @@
+name: test
+
+# 只跑源码层自检(不装 DSH Desktop、不需要 Vivado/ModelSim):
+#   已装副本层(test:installed)与真机验收留在开发者本机,因为前者要 DSH profile、后者要厂商工具。
+# 本仓库没有运行时依赖(插件把依赖注入宿主),所以不需要 npm ci / npm install。
+on:
+  push:
+  pull_request:
+
+jobs:
+  source-checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm test(源码层:判定逻辑 / 模板 / 预设契约)
+        run: npm test

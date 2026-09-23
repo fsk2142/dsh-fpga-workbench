@@ -67,6 +67,26 @@ function realPathOf(path) {
  * @param target - 要写入 / 建目录的目标路径(词法上已在根里,由调用方先挡一层)。
  * @returns 逃出根时给 `{ realRoot, landing }`(`landing` 是真实落点,打印给用户看);没逃出给 `undefined`。
  */
+/**
+ * 证据文件是否安全落在 root 内(F5-11 预备 / F6-01 / F7-04 共用):
+ * 相对路径、realpath 不越根、最终是普通文件(目录/junction 逃逸都不算)。
+ * @param root - 根目录。
+ * @param rel - 相对 root 的路径。
+ */
+export function evidenceFileInside(root, rel) {
+  const path = String(rel ?? "").replace(/^\.\//u, "");
+  if (path === "" || path.split(/[\\/]+/u).includes("..") || /^[A-Za-z]:/u.test(path) || path.startsWith("\\\\")) {
+    return false;
+  }
+  const target = join(root, path);
+  if (realEscape(root, target) !== undefined) return false;
+  try {
+    return statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function realEscape(root, target) {
   const realRoot = realPathOf(root);
   const realParent = realPathOf(dirname(target));

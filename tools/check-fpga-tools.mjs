@@ -1065,6 +1065,18 @@ check(
   tbPeriod !== undefined && xdcPeriod !== undefined && Number(tbPeriod) === Number(xdcPeriod),
   `自带 tb.sv 与 constraints.xdc 的默认时钟周期一致(tb=${String(tbPeriod)}ns / xdc=${String(xdcPeriod)}ns)`
 );
+// 第五轮之后追加(我这轮的审计发现):综合门禁自称查"建工程 / 收文件阶段的 CRITICAL WARNING",
+// 实测真综合跑出的主日志里躺着一条 filemgmt 20-742,而它判了 PASS(那些行不进 runme.log,
+// 消息计数也没算它)。现在多一层:扫**主日志**、逐条列出来 + 计数(不直接判死 —— 那类多数是良性)。
+// 断言锚在**代码形状**上(注释里出现关键词不算),并且必须是真在扫主日志那份文件。
+check(
+  /set main_crits \{\}/u.test(bundledRunSynth) &&
+    /lappend main_crits \$line/u.test(bundledRunSynth) &&
+    /main log has \[llength \$main_crits\] CRITICAL WARNING/u.test(bundledRunSynth) &&
+    /foreach \{flag value\} \$argv/u.test(bundledRunSynth) &&
+    /string match "#\*" \$line/u.test(bundledRunSynth),
+  "run_synth.tcl 收尾判定会扫**主日志**里的 CRITICAL WARNING 并逐条列出(它们不进 runme.log)"
+);
 check(
   /proc xci_part/u.test(bundledRunSynth) &&
     /regexp[^\n]*"DEVICE"/u.test(bundledRunSynth) &&
@@ -1592,7 +1604,7 @@ writeFileSync(
 );
 const hollowCard = runStdout("module-rtl-check.mjs", [ipCardRoot]);
 check(
-  hollowCard.code === 0 && /探针找不到/u.test(hollowCard.output) && /config 要是非空对象/u.test(hollowCard.output) && /可识别的实测字段/u.test(hollowCard.output),
+  hollowCard.code === 0 && /探针不可用|探针找不到/u.test(hollowCard.output) && /config 要是非空对象/u.test(hollowCard.output) && /可识别的实测字段/u.test(hollowCard.output),
   "空洞的卡(config 空、探针不在、没有可识别实测字段)→ 三条都点出来(N-12/Q4-12)",
   hollowCard.output.slice(-400)
 );
@@ -1654,7 +1666,7 @@ writeFileSync(
 );
 const projWithCard = runStdout("project-rtl-check.mjs", [projIpRoot]);
 check(
-  projWithCard.code === 0 && !projWithCard.output.includes("没有 timing.json") && !projWithCard.output.includes("探针找不到"),
+  projWithCard.code === 0 && !projWithCard.output.includes("没有 timing.json") && !/探针不可用|探针找不到/u.test(projWithCard.output),
   "工程 IP 补上完整 timing.json(探针相对工程根)后警告消失"
 );
 const projNoRtl = join(SANDBOX, `project-rtl-noroot-${stamp}`);
@@ -1663,6 +1675,63 @@ check(
   runStdout("project-rtl-check.mjs", [projNoRtl]).code === 2,
   "工程没有 src/rtl/ → 退出码 2"
 );
+
+// F7-01:上板 Skill 必须真正读 DEVICE_FILTER(只写提示不执行 = 死路)
+{
+  const boardSkill = readFileSync(
+    join(ROOT, "presets", "fpga-workbench", "skills", "fpga-project-board", "SKILL.md"),
+    "utf8"
+  );
+  check(
+    boardSkill.includes("get_hw_devices -filter $DEVICE_FILTER") &&
+      boardSkill.includes("info exists DEVICE_FILTER"),
+    "上板 Skill 的设备选择真正使用 DEVICE_FILTER"
+  );
+}
+
+// F7-03/F7-04:根下平铺 IP 文件要提示;probe 目录不能当探针
+{
+  const f7Ip = join(SANDBOX, `project-ip-f7-${stamp}`);
+  mkdirSync(join(f7Ip, "src", "rtl"), { recursive: true });
+  mkdirSync(join(f7Ip, "ip", "fifo"), { recursive: true });
+  writeFileSync(join(f7Ip, "src", "rtl", "good.sv"), goodRtl);
+  writeFileSync(join(f7Ip, "ip", "loose.xci"), "# loose\n");
+  writeFileSync(join(f7Ip, "ip", "fifo", "fifo.xci"), "# xci\n");
+  writeFileSync(join(f7Ip, "ip", "fifo", "probe.sv"), "// probe file\n");
+  writeFileSync(
+    join(f7Ip, "ip", "fifo", "timing.json"),
+    JSON.stringify(
+      { card: "fifo @ probe", measured: "2026-09-22", probe: "ip/fifo", config: { MODE: "std" }, read_latency: 1 },
+      null,
+      2
+    )
+  );
+  const dirProbe = runStdout("project-rtl-check.mjs", [f7Ip]);
+  check(
+    dirProbe.output.includes("ip/loose.xci") && /平铺/.test(dirProbe.output),
+    "ip/ 根下平铺 .xci → 明确提示(F7-03)",
+    dirProbe.output.slice(-300)
+  );
+  check(
+    /探针不可用/.test(dirProbe.output),
+    "probe 指向目录不能当探针(F7-04)",
+    dirProbe.output.slice(-300)
+  );
+  writeFileSync(
+    join(f7Ip, "ip", "fifo", "timing.json"),
+    JSON.stringify(
+      { card: "fifo @ probe", measured: "2026-09-22", probe: "ip/fifo/probe.sv", config: { MODE: "std" }, read_latency: 1 },
+      null,
+      2
+    )
+  );
+  const fileProbe = runStdout("project-rtl-check.mjs", [f7Ip]);
+  check(
+    !/探针不可用/.test(fileProbe.output) && fileProbe.output.includes("ip/loose.xci"),
+    "普通文件 probe 可用;平铺 .xci 提示仍保留",
+    fileProbe.output.slice(-300)
+  );
+}
 
 // F5-02:仿真目录里的 helper 不是 TB —— 不得报「缺成功标记」;真正的 tb_* 仍严查
 {

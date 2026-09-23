@@ -67,8 +67,9 @@ description: 在 FPGA 工程里编写还缺的 RTL 时用:按 doc/spec.md 的模
 3. **写 RTL**:文件名与模块名一致;撞名**停下问用户**。新建文件**按设置里选中的 RTL 模板**
    抄改到 `src/rtl/<模块名>.<扩展名>`(模板路径见会话提示的模板来源;**不要用 `module-rtl-new`**,
    那条默认落模块库的 `rtl/`,不是工程的 `src/rtl/`),或按模板结构手写 —— 以模板格式为准即可
-4. **IP / Block Design**:按上面「自由度」自建。`.xci` 与 Block Design 的 `.bd`(含 wrapper)进 `ip/`,
-   `.coe` 等初始化文件跟对应 IP 一起进 `ip/`;生成/重建脚本有就放 `prj/` 的工程脚本目录。
+4. **IP / Block Design**:按上面「自由度」自建。**一 IP 一目录**:`ip/<ip-name>/` 放 `.xci`、
+   Block Design 的 `.bd`(含 wrapper)、`.coe` 等;生成脚本有就放 `prj/`。
+   **不要**把 `.xci` 平铺在 `ip/` 根下(时序卡按 `ip/<ip-name>/timing.json` 找)。
    **自建 IP 只保留 `.xci` 即可**,不强制补生成脚本。工程里**引用**这些文件,不要复制第二份。
 5. **简单 sim**:`src/sim/tb_*.sv` 或 `tb_*.v`,**跑过一次**、确认没啥大问题即可
    —— **不算正式证据**;顶层不要求简单自测
@@ -110,7 +111,7 @@ description: 在 FPGA 工程里编写还缺的 RTL 时用:按 doc/spec.md 的模
 ## 产物
 
 - RTL:`src/rtl/`、顶层 `src/rtl/`
-- IP / BD / 初始化文件:`ip/`(`.xci` `.bd` `.coe` 等);工程脚本有则放 `prj/`
+- IP / BD / 初始化文件:**`ip/<ip-name>/`**(`.xci` `.bd` `.coe` + `timing.json`);工程脚本有则放 `prj/`
 - 简单 sim:`src/sim/tb_*`(顶层可不写)
 - 要求留档时写 `doc/rtl.md`:结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)
   + 缺谁写了谁 + IP/BD 自建了什么 + 跑过的命令 + 简单 sim 一次结果

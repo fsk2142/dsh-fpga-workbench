@@ -24,6 +24,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { evidenceFileInside } from "../lib/stamp.mjs";
+
 /**
  * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
  *
@@ -102,7 +104,20 @@ function ipCardEntries(ipDir, projectRoot) {
   } catch {
     return [];
   }
-  return names
+  // F7-03:约定是 ip/<ip-name>/ 目录;根下平铺的 .xci 对不上 timing 卡入口,点出来
+  const loose = names
+    .filter((entry) => entry.isFile() && /\.(xci|bd|coe)$/iu.test(entry.name))
+    .map((entry) => ({
+      file: `ip/${entry.name}`,
+      issues: [{
+        rule: "IP 卡",
+        line: 0,
+        message: `IP 文件平铺在 ip/ 根下 —— 约定是 ip/<ip-name>/ 一 IP 一目录(放 .xci/.bd/.coe 与 timing.json);请挪进子目录`
+      }]
+    }));
+  return [
+    ...loose,
+    ...names
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => entry.name)
     .sort()
@@ -135,10 +150,10 @@ function ipCardEntries(ipDir, projectRoot) {
         }
         // 探针必须真的在工程里(相对工程根):不然这张卡说的"谁测的"没法复核
         if (typeof parsed.probe === "string" && parsed.probe.trim() !== "") {
-          const probeRel = parsed.probe.split(/\s+/u)[0].replace(/^\.\//u, "");
-          const inside = !probeRel.split(/[\\/]+/u).includes("..") && !/^[A-Za-z]:/u.test(probeRel) && !probeRel.startsWith("\\\\");
-          if (!inside || !existsSync(join(projectRoot, probeRel))) {
-            problems.push(`probe 指的探针找不到:${probeRel}(要写工程根相对的路径,且文件真的在)`);
+          const probeRel = parsed.probe.split(/\s+/u)[0];
+          // F6-01/F7-04:词法 + realpath 不越根 + 必须是普通文件(目录/junction 不算探针)
+          if (!evidenceFileInside(projectRoot, probeRel)) {
+            problems.push(`probe 指的探针不可用:${probeRel}(要写工程根相对的**普通文件**,且真实落点仍在工程内)`);
           }
         }
         // "有实测数值"才是卡的意义 —— 而且要是**可识别的测量字段**(第四轮 Q4-12:光"有个数字"的话
@@ -158,7 +173,8 @@ function ipCardEntries(ipDir, projectRoot) {
         return warn(`timing.json 解析不了(${String(error?.message ?? error)}) —— 卡读不出来等于没有卡`);
       }
       return { file: shown, issues: [] };
-    });
+    })
+  ];
 }
 
 /** 断言说明的必填字段:每一处断言各写一遍。 */

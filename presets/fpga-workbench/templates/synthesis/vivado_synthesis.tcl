@@ -206,9 +206,9 @@ step "launch_runs synth_1" {
   wait_on_run synth_1
 }
 
-# ---- 收尾判定:别静默通过(三层,缺一层就会漏) -------------------------------- #
-# 1) 任务状态(status / progress);2) 综合任务自己的 runme.log;3) 主进程的消息计数
-# (建工程 / 收文件阶段的 CRITICAL WARNING 不进 runme.log,得单独再查一遍)。
+# ---- 收尾判定:别静默通过(四层,缺一层就会漏) -------------------------------- #
+# 1) 任务状态(status / progress);2) 综合任务自己的 runme.log;3) 主进程的消息计数;
+# 4) **主日志**里的 CRITICAL WARNING(建工程 / 收文件阶段的那几条不进 runme.log,得单独再扫一遍)。
 set status   [get_property STATUS   [get_runs synth_1]]
 set progress [get_property PROGRESS [get_runs synth_1]]
 if {$progress ne "100%" || ![string match "*Complete!*" $status]} {
@@ -242,6 +242,40 @@ if {![regexp {^[0-9]+$} $crit_n]} {
 } elseif {$crit_n > 0} {
   fail "$crit_n CRITICAL WARNING message(s) before synthesis completed --\
         see the log next to this script's -log argument"
+}
+# 第 4 层:主日志里可能有 runme.log 看不到的 CRITICAL WARNING。实测踩过 —— 真综合跑出 PASS,
+# 而主日志里躺着一条 filemgmt 20-742(can not be validated);只报消息计数会漏掉它。
+# 这些**不一定致命**(多数是建工程阶段的提示),所以这里**逐条列出来 + 计数**,不直接判死;
+# 按 skill 的判据,出现的任何 CRITICAL WARNING 都要在人/AI 的结论里逐条说明来源。
+# (路径从 `-log` 参数取;取不到就退回 `synth/run_synth.log` —— 本脚本约定在模块根下跑。)
+set mainlog ""
+foreach {flag value} $argv {
+  if {$flag eq "-log"} { set mainlog $value }
+}
+if {$mainlog eq "" || ![file exists $mainlog]} {
+  set mainlog [file join [pwd] "synth" "run_synth.log"]
+}
+set main_crits {}
+if {[file exists $mainlog]} {
+  set fh2 [open $mainlog r]
+  set main_text [read $fh2]
+  close $fh2
+  foreach line [split $main_text "\n"] {
+    set line [string trim $line]
+    # Vivado 会把被 source 的脚本**逐行回显**进主日志(前缀 `# `)—— 本脚本自己的注释与 puts 里
+    # 就写着 "CRITICAL WARNING" 这几个字,不过滤就会"自己吵自己"(实测:列出的 7 条里 6 条是回显)。
+    if {[string match "#*" $line]} continue
+    if {[string first "CRITICAL WARNING" $line] >= 0} { lappend main_crits $line }
+  }
+}
+if {[llength $main_crits]} {
+  puts "\[run_synth\] WARN: main log has [llength $main_crits] CRITICAL WARNING line(s) (not in runme.log) -- list and explain each:"
+  foreach line [lrange $main_crits 0 9] { puts "\[run_synth\]   $line" }
+  if {[llength $main_crits] > 10} {
+    puts "\[run_synth\]   ...([expr {[llength $main_crits] - 10}] more)"
+  }
+} else {
+  puts "\[run_synth\] main log: no CRITICAL WARNING"
 }
 puts "\[run_synth\] gate: status='$status', no ERROR / CRITICAL WARNING"
 

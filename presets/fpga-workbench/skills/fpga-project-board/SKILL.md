@@ -34,14 +34,17 @@ Vivado 硬件管理器(命令原文记入产物;GUI 亦可,写清点了哪几步
 ```
 connect_hw_server
 open_hw_target
-# 设备选择对齐 vivado_program.tcl:0/多个都要显式处理,禁止盲目 [lindex ... 0]
-set devices [get_hw_devices]
+# 设备选择与 templates/programming/vivado_program.tcl 同一套逻辑(读 DEVICE_FILTER)
+if {[info exists DEVICE_FILTER] && $DEVICE_FILTER ne ""} {
+  set devices [get_hw_devices -filter $DEVICE_FILTER]
+} else {
+  set devices [get_hw_devices]
+}
 if {[llength $devices] == 0} {
-  error "no hardware device matched; check cable and target"
+  error "no hardware device matched; check cable, target, and DEVICE_FILTER"
 }
 if {[llength $devices] > 1} {
-  # 多器件必须显式选:set DEVICE_FILTER {NAME =~ "*xc7a100t*"} 再 get_hw_devices -filter $DEVICE_FILTER
-  error "multiple hardware devices matched; set DEVICE_FILTER and re-run (see templates/programming/vivado_program.tcl)"
+  error "multiple hardware devices matched; set DEVICE_FILTER explicitly (e.g. NAME =~ \"*xc7a100t*\")"
 }
 set device [lindex $devices 0]
 current_hw_device $device

@@ -24,6 +24,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { evidenceFileInside } from "../lib/stamp.mjs";
+
 /**
  * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
  *
@@ -134,11 +136,11 @@ function ipCardEntries(ipDir) {
         }
         // 探针必须真的在模块里(相对模块根):不然这张卡说的"谁测的"没法复核
         if (typeof parsed.probe === "string" && parsed.probe.trim() !== "") {
-          const probeRel = parsed.probe.split(/\s+/u)[0].replace(/^\.\//u, "");
+          const probeRel = parsed.probe.split(/\s+/u)[0];
           const moduleRoot = resolve(ipDir, "..", "..");
-          const inside = !probeRel.split(/[\\/]+/u).includes("..") && !/^[A-Za-z]:/u.test(probeRel) && !probeRel.startsWith("\\\\");
-          if (!inside || !existsSync(join(moduleRoot, probeRel))) {
-            problems.push(`probe 指的探针找不到:${probeRel}(要写模块根相对的路径,且文件真的在)`);
+          // F6-01/F7-04:词法 + realpath 不越根 + 必须是普通文件(目录/junction 不算探针)
+          if (!evidenceFileInside(moduleRoot, probeRel)) {
+            problems.push(`probe 指的探针不可用:${probeRel}(要写模块根相对的**普通文件**,且真实落点仍在模块内)`);
           }
         }
         // "有实测数值"才是卡的意义 —— 而且要是**可识别的测量字段**(第四轮 Q4-12:光"有个数字"的话

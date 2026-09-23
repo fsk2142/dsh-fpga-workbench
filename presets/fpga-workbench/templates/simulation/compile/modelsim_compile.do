@@ -6,10 +6,13 @@
 # code page to transcripts and Chinese gate messages become unreadable.
 #
 # Settings passed through the environment:
-#   RTL_DIR       - HDL root relative to this script (VERIF_ROOT = pwd).
-#                   module verif/ layout: {../rtl}
-#                   project sim/ layout:  {../src/rtl}   (F5-05: change this knob)
-#   MODELSIM_INI  / INI_OVERRIDE - library mapping; set BOTH compile and run the same way (F5-06)
+#   Template knobs (edit the script; not env vars):
+#     RTL_DIR       - HDL root relative to this script (VERIF_ROOT = pwd).
+#                     module verif/ layout: {../rtl}
+#                     project sim/ layout:  {../src/rtl}
+#     INI_OVERRIDE  - force a library mapping file (else MODELSIM_INI env, else install default)
+#   Environment inputs:
+#     MODELSIM_INI / MODELSIM / TB_DEFINES
 #   TB_DEFINES   - space-separated defines, for example "TB_TAP=7 TB_BP=1"
 #
 # Edit only these knobs when the normal module layout is not enough.

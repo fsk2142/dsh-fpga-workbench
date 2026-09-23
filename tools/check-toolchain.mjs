@@ -219,6 +219,30 @@ const escapedLibrarySelection = resolveTemplateSelection({
   libraryRoot: TEMPLATE_LIBRARY_FIXTURE
 });
 check(escapedLibrarySelection.state === "invalid", "用户模板 id 不能用 .. 越出固定分类");
+// F7-02:已保存选择也要过扩展名白名单(不能只挡扫描)
+const badExtSelection = resolveTemplateSelection({
+  selection: "library:rtl/notes.md",
+  category: "rtl",
+  tool: "verilator",
+  libraryRoot: TEMPLATE_LIBRARY_FIXTURE,
+  probe: () => true
+});
+const goodExtSelection = resolveTemplateSelection({
+  selection: "library:rtl/vendor/custom.sv",
+  category: "rtl",
+  tool: "verilator",
+  libraryRoot: TEMPLATE_LIBRARY_FIXTURE,
+  probe: () => true
+});
+check(
+  badExtSelection.state === "invalid" && /扩展名/.test(String(badExtSelection.warning ?? "")),
+  "已保存的 .md 不算 RTL 模板(F7-02)"
+);
+check(
+  goodExtSelection.state === "selected" || goodExtSelection.present === true || goodExtSelection.state === "missing",
+  "合法 .sv 选择仍走正常解析(F7-02 不误伤)",
+  JSON.stringify(goodExtSelection)
+);
 let unknownCapabilityStatus = 0;
 try {
   scanTemplates({ capability: "unknown-capability", capabilities: CAPABILITIES, libraryRoot: TEMPLATE_LIBRARY_FIXTURE });
@@ -446,6 +470,27 @@ check(
   "v1 选择直接迁到 v3 能力卡"
 );
 check(Object.keys(legacyMigrationPatch({ settingsModelVersion: "3", compilerPath: "C:\\old.exe" })).length === 0, "版本 3 不重复迁移");
+// F5-12:Questa / ModelSim 有路径证据就分开;裸 vsim.exe 不硬猜
+{
+  const questaMigrate = legacyMigrationPatch({ settingsModelVersion: "1", simulatorPath: "C:\\questasim64\\win64\\vsim.exe" });
+  const modeltechMigrate = legacyMigrationPatch({ settingsModelVersion: "1", simulatorPath: "C:\\modeltech64\\win64\\vsim.exe" });
+  const bareVsim = legacyMigrationPatch({ settingsModelVersion: "1", simulatorPath: "C:\\tools\\win64\\vsim.exe" });
+  check(
+    (questaMigrate.moduleSimulationTool ?? "") === "questa" && questaMigrate.questaPath === "C:\\questasim64\\win64\\vsim.exe",
+    "旧 Questa vsim 路径迁到 QuestaSim"
+  );
+  check(
+    (modeltechMigrate.moduleSimulationTool ?? "") === "modelsim" && modeltechMigrate.modelsimPath === "C:\\modeltech64\\win64\\vsim.exe",
+    "旧 modeltech 路径迁到 ModelSim"
+  );
+  check(
+    (bareVsim.moduleSimulationTool ?? "") === "custom-simulator" &&
+      !String(bareVsim.modelsimPath ?? "").includes("vsim") &&
+      /无法判断/.test(String(bareVsim.settingsMigrationWarnings ?? "")),
+    "裸 vsim.exe 不硬猜 ModelSim → 自定义仿真器 + 迁移提醒",
+    JSON.stringify({ tool: bareVsim.moduleSimulationTool, ms: bareVsim.modelsimPath, w: bareVsim.settingsMigrationWarnings })
+  );
+}
 const repairedV3BundledTemplates = legacyMigrationPatch({
   settingsModelVersion: "3",
   projectRtlTemplate: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates\\rtl.sv",

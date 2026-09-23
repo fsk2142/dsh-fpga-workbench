@@ -29,7 +29,7 @@ if {![file isdirectory $SRC]} {
 
 proc collect_hdl {dir} {
   set result {}
-  foreach ext {.sv .v} {
+  foreach ext {.sv .v .vhd .vhdl} {
     foreach f [lsort [glob -nocomplain -directory $dir -type f *$ext]] {
       lappend result $f
     }
@@ -55,8 +55,22 @@ puts "\[ME\] lint inputs ([llength $hdl] files) from $SRC"
 
 create_project -in_memory -part $PART
 foreach f $hdl {
-  if {[catch {read_verilog -sv $f} message]} {
-    puts "\[ME\] ERROR: read_verilog failed for $f"
+  # 第九轮复审④:**按扩展名分流读**,不要一律 `read_verilog -sv`:
+  #   .sv        → `read_verilog -sv`(SystemVerilog 编译组);
+  #   .v         → 普通 `read_verilog`(Verilog-2001;强加 -sv 会按 SV 编译组解释,
+  #                Verilog 标识符撞上 SV 保留字时语义会变 —— AMD 文档明确区分);
+  #   .vhd/.vhdl → `read_vhdl -vhdl2008`。
+  set ext [string tolower [file extension $f]]
+  if {[catch {
+    if {$ext in {.vhd .vhdl}} {
+      read_vhdl -vhdl2008 $f
+    } elseif {$ext eq ".sv"} {
+      read_verilog -sv $f
+    } else {
+      read_verilog $f
+    }
+  } message]} {
+    puts "\[ME\] ERROR: read failed for $f"
     puts $message
     quit -f -code 1
   }

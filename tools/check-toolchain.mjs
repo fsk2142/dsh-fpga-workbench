@@ -121,7 +121,10 @@ const scannedModuleRtl = scanTemplates({
   libraryRoot: TEMPLATE_LIBRARY_FIXTURE
 });
 const scannedRtlGroup = scannedModuleRtl.groups.find((group) => group.key === "rtl");
-check(TEMPLATE_CATEGORIES.length === 11, `模板库固定十一类(实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`);
+check(
+  TEMPLATE_CATEGORIES.length === 12,
+  `模板库固定十二类(11 类有内置;project-synthesis 是有分类、暂无内置 —— 模块级综合模板不能当工程默认;实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`
+);
 check(
   BUILTIN_TEMPLATES.some((item) => item.id === "builtin:rtl/systemverilog-module.sv") &&
     BUILTIN_TEMPLATES.some((item) => item.id === "builtin:simulation/compile/modelsim-compile.do") &&
@@ -504,8 +507,10 @@ const repairedV3BundledTemplates = legacyMigrationPatch({
 check(
   repairedV3BundledTemplates.projectRtlTemplate === "builtin:rtl/systemverilog-module.sv" &&
     repairedV3BundledTemplates.projectConstraintsTemplate === "builtin:constraints/vivado-xdc.xdc" &&
-    repairedV3BundledTemplates.projectSynthesisTemplate === "builtin:synthesis/vivado-synthesis.tcl",
-  "版本 3 里残留的旧插件模板路径会永久规范化为分类内置模板 ID"
+      // 工程综合**没有**库内内置(那份 vivado_synthesis.tcl 是模块级的:写 <ModuleName>、从模块根跑、
+      // 落 synth/vivado_proj/)→ 旧路径只清空、不映射成模块模板,免得 AI 在工程里另建一套模块目录。
+      repairedV3BundledTemplates.projectSynthesisTemplate === undefined,
+  "版本 3 里残留的旧插件模板路径会规范化为分类内置 ID;工程综合没有内置 → 清空(由 AI 自行决定)"
 );
 check(
   repairedV3BundledTemplates.projectImplementationTemplate === undefined &&
@@ -1214,13 +1219,21 @@ writeFileSync(join(backupTarget, "preset.yml"), "一样的内容\n");
 writeFileSync(join(backupTarget, "我加的笔记.md"), "用户新增\n");
 
 const backedUp = backupChangedFiles(backupSource, backupTarget, join(backupRoot, "out"));
-check(backedUp?.count === 2, `用户改过的与新增的会被备份(实际 ${String(backedUp?.count)} 个)`);
+// 第九轮复审:备份范围收敛到**托管文件**(listFiles(source)) —— foreign 文件既不会被 cpSync 覆盖,
+// 也没有备份它们的必要;若 foreign 是指向预设外的 symlink,copyFileSync 还会把外部内容读进备份。
+check(
+  backedUp?.count === 1,
+  `只备份**被改过内容的托管文件**(用户新增的 foreign 不进备份;实际 ${String(backedUp?.count)} 个)`
+);
 check(
   backedUp.files.some((file) => file.endsWith(join("skills", "SKILL.md")))
     && readFileSync(backedUp.files.find((file) => file.endsWith(join("skills", "SKILL.md"))), "utf8").includes("用户自己改的"),
   "备份下来的是用户那份的内容"
 );
-check(backedUp.files.some((file) => file.endsWith("我加的笔记.md")), "用户新增的文件也保住(不会被同步弄丢)");
+check(
+  !backedUp.files.some((file) => file.endsWith("我加的笔记.md")),
+  "用户自己放进来的 foreign 文件不进备份(它不会被同步覆盖,靠 cpSync 只写托管文件来保住)"
+);
 check(!backedUp.files.some((file) => file.endsWith("preset.yml")), "没改动的文件不备份(不制造无用备份)");
 check(
   backupChangedFiles(backupSource, backupSource, join(backupRoot, "never")) === undefined,
@@ -1456,8 +1469,8 @@ check(
   "用户加的普通文件不触发重同步(第二次启动不该再同步一遍)"
 );
 check(
-  backupChangedFiles(syncSource, syncTarget, join(syncRoot, "out")) !== undefined,
-  "判定不触发同步,但真同步时用户那份仍会被备份(不会弄丢)"
+  backupChangedFiles(syncSource, syncTarget, join(syncRoot, "out")) === undefined,
+    "只有用户自己加的文件时**不产生备份**(新契约:备份只覆盖托管文件;用户文件靠 cpSync 只写托管文件来保住)"
 );
 writeFileSync(join(syncSource, "preset.yml"), "包内新版\n");
 check(presetSyncNeeded(syncSource, syncTarget, syncManifest) === true, "包内文件变了 → 要同步");
@@ -1684,9 +1697,12 @@ const quartusTemplateText = describeEnv(
 );
 check(
   quartusTemplateText.includes("当前工具没有适配的约束模板") &&
-    quartusTemplateText.includes("当前工具没有适配的综合脚本") &&
+    // (模块行的『没有适配的综合脚本』不在这里断言:夹具的 checkPath 把所有模板文件都当缺失,
+    //  文案会在『内置参考缺失』与『没有适配』之间摇摆;该语义由 resolveTemplateSelection API 用例覆盖。)
     quartusTemplateText.includes("当前工具没有适配的实现脚本") &&
-    quartusTemplateText.includes("当前工具没有适配的下载脚本"),
+    quartusTemplateText.includes("当前工具没有适配的下载脚本") &&
+      // 第九轮复审③:工程综合给了独立分类(暂无内置)→ Quartus 下这一项也该提示"没有适配的工程综合脚本"
+      quartusTemplateText.includes("当前工具没有适配的工程综合脚本"),
   "Quartus 未选用户模板时逐项提示缺少适配默认模板"
 );
 check(!capabilityTemplateText.includes("模块模板 ——"), "v3 提示不再输出旧的全局模板区块");

@@ -131,7 +131,7 @@ tools/                        分层自检 + install/sync-installed + 依赖安�
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-new.mjs <模块根> <模块名> --template <测试平台模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起测试平台;默认落 `verif/tb_<模块名下划线形式>.<扩展名>` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 | 模块级 | 综合 | `node presets/fpga-workbench/tools/module/module-synth-new.mjs <模块根> <模块名> --template <约束模板路径> [--out <相对路径>] [--force] [--dry-run]` | 按模板起约束文件;默认落 `synth/<模块名>.xdc` | 0 成功 / 1 目标已存在 / 2 参数或环境问题 |
 | 模块级 | 验收 | `node presets/fpga-workbench/tools/module/module-report-check.mjs <模块目录> [--json] [--record]` | 核报告引用的**证据路径是否真的在**:`spec/spec.md` 的 AC 行声明的证据位置 + `verif/*.md` / `synth/*.md` 引用的路径(**只验存在与摘要,不判内容**;行号后缀摘掉再核,可再生目录 `work/` 缺失不判错);`--record` 把当前依据的 sha256 摘要写进报告,之后依据内容变了就告警 | 0 都在(**空结果** `NO_REPORTS` / `NO_EVIDENCE` 也退 0 —— 判“有没有证据”看输出分类,别只看退出码)/ 1 有引用了却不存在的路径或越界(junction 真实落点也算),或 `--record` 时依据内容已变且未加 `--accept-changed` / 2 用法问题 |
-| 工程级 | RTL/lint | `node presets/fpga-workbench/tools/project/project-rtl-check.mjs <用户指定工程目录> [--json]` | 扫 `src/rtl/`、`src/sim/` 与根 `sim/`；工程 RTL 用设计规则，仿真文件用测试平台规则 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题 |
+| 工程级 | RTL/lint | `node presets/fpga-workbench/tools/project/project-rtl-check.mjs <用户指定工程目录> [--json]` | 扫 `src/rtl/`、`src/sim/` 与根 `sim/`；工程 RTL 用设计规则，仿真文件用测试平台规则 | 0 无阻塞项 / 1 有阻塞项 / 2 用法问题,**或**「部分覆盖」(范围里有未检查的 VHDL 时:摘要写 PARTIAL,机器调用不该当成通过) |
 
 另外两条规则与旧包一致,不要自行加严:
 

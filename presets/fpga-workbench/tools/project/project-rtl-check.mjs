@@ -25,6 +25,7 @@ import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { evidenceFileInside } from "../lib/stamp.mjs";
+import { coverageVerdict, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
 
 /**
  * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
@@ -585,9 +586,10 @@ function main() {
     return 2;
   }
   // E8-06:有 SV 时同树 VHDL 也要报出来,不能写成全覆盖 PASS
-  const uncheckedVhdl = [rtlDir, simpleSimDir, projectSimDir]
-    .flatMap((dir) => (existsSync(dir) ? collectHdl(dir, VHDL) : []))
-    .map((file) => relative(root, file).split(sep).join("/"));
+  // 第九轮复审②:与模块级共用同一个统计/定性实现(tools/lib/rtl-coverage.mjs)。
+  const skippedVhdlFiles = uncheckedVhdl([rtlDir, simpleSimDir, projectSimDir], collectHdl);
+  const skippedVhdlRel = skippedVhdlFiles.map((file) => relative(root, file).split(sep).join("/"));
+  const verdict = coverageVerdict(targets.length, skippedVhdlFiles);
   const report = [
     ...targets.map(([file, isTb]) => ({
       file: relative(root, file).split(sep).join("/"),
@@ -603,11 +605,13 @@ function main() {
     console.log(JSON.stringify({
       project: root,
       files: report,
-      skippedVhdl: uncheckedVhdl,
-      // 第八轮复审 E8-06:覆盖面要机器可判 —— 有未检查的 VHDL 时不能只报 PASS。
-      checkedFiles: report.map((entry) => entry.file),
-      skippedFiles: uncheckedVhdl,
-      coverage: uncheckedVhdl.length > 0 ? "partial" : "full",
+      skippedVhdl: skippedVhdlRel,
+      // 第八轮复审 E8-06 + 第九轮复审⑤:覆盖面要机器可判 —— 有未检查的 VHDL 时不能只报 PASS;
+      // checkedFiles 只数 **HDL 文件**,IP 时序卡是虚拟检查项,单列 ipCards。
+      checkedFiles: targets.map(([file]) => relative(root, file).split(sep).join("/")),
+      skippedFiles: skippedVhdlRel,
+      ipCards: report.filter((entry) => entry.role === "ip-card").map((entry) => entry.file),
+      coverage: verdict === "full" ? "full" : "partial",
       failures: failures.length,
       warnings: warnings.length
     }, null, 2));
@@ -619,22 +623,22 @@ function main() {
         console.log(`        ${isFailure(issue) ? "FAIL" : "warn"}  ${issue.line > 0 ? `第 ${issue.line} 行:` : ""}${issue.message}`);
       }
     }
-    if (uncheckedVhdl.length > 0) {
-      console.log(`注意:另有 ${uncheckedVhdl.length} 个 VHDL 未做机械检查(${uncheckedVhdl.slice(0, 5).join("、")}${uncheckedVhdl.length > 5 ? " …" : ""}) —— 本检查器只覆盖 .sv/.v,不要把上面的结论当成全覆盖`);
+    if (skippedVhdlRel.length > 0) {
+      console.log(`注意:另有 ${skippedVhdlRel.length} 个 VHDL 未做机械检查(${skippedVhdlRel.slice(0, 5).join("、")}${skippedVhdlRel.length > 5 ? " …" : ""}) —— 本检查器只覆盖 .sv/.v,不要把上面的结论当成全覆盖`);
     }
     // 第八轮复审 E8-06:有未检查的 VHDL 时**不能写 PASS** —— 那是"部分覆盖",机器调用会把 PASS
     // 当成"整个工程都过了"。按状态契约定成 PARTIAL(退 2),并写清覆盖了多少、漏了多少。
-    const partial = uncheckedVhdl.length > 0;
+    const partial = skippedVhdlRel.length > 0;
     if (failures.length > 0) {
-      console.log(`\nFAIL (${failures.length} 项阻塞，${warnings.length} 项警告)` + (partial ? `；另有 ${uncheckedVhdl.length} 个 VHDL 未检查` : ""));
+      console.log(`\nFAIL (${failures.length} 项阻塞，${warnings.length} 项警告)` + (partial ? `；另有 ${skippedVhdlRel.length} 个 VHDL 未检查` : ""));
     } else if (partial) {
-      console.log(`\nPARTIAL: ${report.length} 个文件已检查、${warnings.length} 项警告；另有 ${uncheckedVhdl.length} 个 VHDL **未检查**(本检查器只覆盖 .sv/.v) —— 这**不是**全覆盖通过`);
+      console.log(`\nPARTIAL: ${report.length} 个文件已检查、${warnings.length} 项警告；另有 ${skippedVhdlRel.length} 个 VHDL **未检查**(本检查器只覆盖 .sv/.v) —— 这**不是**全覆盖通过`);
     } else {
       console.log(`\nPASS: ${report.length} 个文件，${warnings.length} 项警告（不阻塞）`);
     }
   }
   if (failures.length > 0) return 1;
-  return uncheckedVhdl.length > 0 ? 2 : 0;
+  return skippedVhdlRel.length > 0 ? 2 : 0;
 }
 
 const invokedDirectly = process.argv[1] !== undefined

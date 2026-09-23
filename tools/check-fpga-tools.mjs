@@ -2383,6 +2383,24 @@ check(
   `JSON 里 coverage/skippedFiles 可机器区分(实际 coverage=${String(mixJson.coverage)})`
 );
 
+// 第九轮复审②:模块级也要同一套 —— 以前只统计 verif/ 下的 VHDL,`rtl/good.sv + rtl/broken.vhd` 还能 PASS。
+const mixModuleRoot = join(SANDBOX, `mixvhdl-module-${stamp}`);
+mkdirSync(join(mixModuleRoot, "rtl"), { recursive: true });
+mkdirSync(join(mixModuleRoot, "verif"), { recursive: true });
+writeFileSync(join(mixModuleRoot, "rtl", "good.sv"), readFileSync(categorizedTemplates.rtl, "utf8"));
+writeFileSync(join(mixModuleRoot, "rtl", "broken.vhd"), "-- VHDL\nentity broken is end entity;\n");
+const mixModuleRun = runStdout("module-rtl-check.mjs", [mixModuleRoot]);
+check(
+  mixModuleRun.code === 2 && /PARTIAL/u.test(mixModuleRun.output) && /1 个 VHDL/u.test(mixModuleRun.output),
+  `模块级混合 SV+VHDL 同样输出 PARTIAL 且退 2(rtl/ 下的 VHDL 也要数;实际 ${String(mixModuleRun.code)})`,
+  mixModuleRun.output.slice(-300)
+);
+const mixModuleJson = JSON.parse(runStdout("module-rtl-check.mjs", [mixModuleRoot, "--json"]).output);
+check(
+  mixModuleJson.coverage === "partial" && mixModuleJson.skippedFiles.length === 1 && mixModuleJson.checkedFiles.length === 1,
+  `模块级 --json 是干净可 parse 的 JSON,且 coverage/skippedFiles 可机器区分(实际 coverage=${String(mixModuleJson.coverage)})`
+);
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;
 

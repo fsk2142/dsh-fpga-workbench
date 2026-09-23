@@ -25,6 +25,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { evidenceFileInside } from "../lib/stamp.mjs";
+import { coverageVerdict, shortenList, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
 
 /**
  * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
@@ -249,8 +250,7 @@ export function collectHdl(dir, pattern = /\.(sv|v)$/iu) {
 /** 测试平台文件名:扩展名跟着设置里选的仿真语言走(`.sv` / `.v` / `.vhd`),按语言过滤。 */
 const TESTBENCH = /^tb_.*\.(sv|v)$/iu;
 
-/** VHDL 源文件(本检查器不覆盖,但必须说出来,不能静默当通过)。 */
-const VHDL = /\.(vhd|vhdl)$/iu;
+// VHDL 扩展名与覆盖判定统一在 ../lib/rtl-coverage.mjs(第九轮复审②:两个 checker 共用一份)。
 
 /**
  * 跑一个文件上的全部规则。
@@ -563,37 +563,47 @@ function main() {
     : [];
 
   const targets = [...collectHdl(rtlDir).map((file) => [file, false]), ...testbenches.map((file) => [file, true])];
+  // 第九轮复审②:未检查的 VHDL **两个范围都要数**(原来只数 verif/ → `rtl/good.sv + rtl/broken.vhd`
+  // 也能打印 PASS)。定性判据与工程级共用 tools/lib/rtl-coverage.mjs,避免两边再漂移。
+  const skippedVhdl = uncheckedVhdl([rtlDir, verifDir], collectHdl);
+  const verdict = coverageVerdict(targets.length, skippedVhdl);
   if (targets.length === 0) {
     // 只有 VHDL 时不能说"没有源码"(那会让人以为目录是空的);说清本检查器不覆盖 VHDL
-    const vhdl = [...collectHdl(rtlDir, VHDL), ...collectHdl(verifDir, VHDL)];
-    if (vhdl.length > 0) {
-      console.error(`本检查器只覆盖 SystemVerilog / Verilog;检测到 ${vhdl.length} 个 VHDL 文件(rtl/ 或 verif/),未做机械检查。`);
+    if (verdict === "none") {
+      console.error(`本检查器只覆盖 SystemVerilog / Verilog;检测到 ${skippedVhdl.length} 个 VHDL 文件(rtl/ 或 verif/),未做机械检查。`);
       console.error("VHDL 项目请把这一环节记为 NOT_APPLICABLE 并说明原因 —— 不要当成通过。");
       return 2;
     }
     console.error(`rtl/ 下没有 .v/.sv 源码:${rtlDir}`);
     return 2;
   }
+  // 那条"还有 VHDL 未检查"的提示**只在非 JSON 输出里打** —— 放这里会污染 `--json` 的 stdout,
+  // 消费方就没法直接 parse 了(第九轮复审⑤:JSON 必须可区分未检查文件,那就得是干净的 JSON)。
 
-  // 已经检查了 SV/Verilog,但 verif/ 里还有 VHDL 测试平台 → 如实点名未检查的部分(走 stdout:这不是错误)
-  const uncheckedTb = existsSync(verifDir) ? readdirSync(verifDir).filter((name) => VHDL.test(name)) : [];
-  if (uncheckedTb.length > 0) {
-    console.log(`注意:verif/ 下有 ${uncheckedTb.length} 个 VHDL 测试平台(${uncheckedTb.join("、")}),本检查器未检查。`);
-  }
-
+  // IP 时序卡:与文件项同形一起打印(见 ipCardEntries),但 JSON 里单列 —— 它不是 HDL 文件。
+  const ipCards = ipCardEntries(join(rtlDir, "ip"));
   const report = [
     ...targets.map(([file, isTb]) => ({
       file: relative(moduleRoot, file).split(sep).join("/"),
       issues: checkFile(file, isTb)
     })),
-    // IP 时序卡:与文件项同形一起打印(见 ipCardEntries)
-    ...ipCardEntries(join(rtlDir, "ip"))
+    ...ipCards
   ];
   const failures = report.flatMap((entry) => entry.issues.filter(isFailure));
   const warnings = report.flatMap((entry) => entry.issues.filter((issue) => !isFailure(issue)));
 
   if (asJson) {
-    console.log(JSON.stringify({ module: moduleRoot, files: report, failures: failures.length, warnings: warnings.length }, null, 2));
+    console.log(JSON.stringify({
+      module: moduleRoot,
+      files: report,
+      // 第九轮复审⑤:已检查文件数只数**HDL 文件**,IP 时序卡是虚拟项、单列出来。
+      checkedFiles: targets.map(([file]) => relative(moduleRoot, file).split(sep).join("/")),
+      ipCards: ipCards.map((entry) => entry.file),
+      skippedFiles: skippedVhdl.map((file) => relative(moduleRoot, file).split(sep).join("/")),
+      coverage: verdict === "full" ? "full" : "partial",
+      failures: failures.length,
+      warnings: warnings.length
+    }, null, 2));
   } else {
     for (const entry of report) {
       const bad = entry.issues.filter(isFailure).length;
@@ -602,16 +612,22 @@ function main() {
         console.log(`        ${isFailure(issue) ? "FAIL" : "warn"}  ${issue.line > 0 ? `第 ${issue.line} 行:` : ""}${issue.message}`);
       }
     }
-    console.log(
-      failures.length === 0
-        ? `\nPASS: ${report.length} 个文件,${warnings.length} 项警告(不阻塞)`
-        : `\nFAIL (${failures.length} 项阻塞,${warnings.length} 项警告)`
-    );
+    if (verdict === "partial") {
+      console.log(`注意:另有 ${skippedVhdl.length} 个 VHDL 未做机械检查(${shortenList(skippedVhdl)})—— 本检查器只覆盖 .sv/.v,不要把结论当成全覆盖`);
+    }
+    if (failures.length > 0) {
+      console.log(`\nFAIL (${failures.length} 项阻塞,${warnings.length} 项警告)` + (verdict === "partial" ? `;另有 ${skippedVhdl.length} 个 VHDL 未检查` : ""));
+    } else if (verdict === "partial") {
+      console.log(`\nPARTIAL: ${report.length} 个文件已检查、${warnings.length} 项警告;另有 ${skippedVhdl.length} 个 VHDL **未检查**(本检查器只覆盖 .sv/.v) —— 这**不是**全覆盖通过`);
+    } else {
+      console.log(`\nPASS: ${report.length} 个文件,${warnings.length} 项警告(不阻塞)`);
+    }
     if (warnings.length > 0 && failures.length === 0) {
       console.log("警告不阻塞门禁,但建议顺手清掉。");
     }
   }
-  return failures.length === 0 ? 0 : 1;
+  if (failures.length > 0) return 1;
+  return verdict === "partial" ? 2 : 0;
 }
 
 /** 直接跑本文件时才进 CLI;被 import 时只导出上面那些函数。 */

@@ -174,6 +174,42 @@ check(
   "用户分类缺失时仍返回内置模板，并在对应分类报告错误"
 );
 
+// DSH-N02:模块/工程的综合、约束**共享同一个用户库目录**(按用户要求不拆目录),所以约定用文件头标记
+// 区分层级:声明了的只在该层级的卡里出现;没声明的照旧两层都显示(兼容旧模板)。
+const levelRoot = join(TMP_ROOT, `tpl-level-${RUN_ID}`);
+mkdirSync(join(levelRoot, "synthesis"), { recursive: true });
+writeFileSync(join(levelRoot, "synthesis", "my_module_synth.tcl"), "# fpga-workbench-level: module\n");
+writeFileSync(join(levelRoot, "synthesis", "my_project_synth.tcl"), "# fpga-workbench-level: project\n");
+writeFileSync(join(levelRoot, "synthesis", "legacy_synth.tcl"), "# 老模板,没声明层级\n");
+const labelSet = (capabilityKey) => {
+  const scan = scanTemplates({ capability: capabilityKey, capabilities: CAPABILITIES, libraryRoot: levelRoot });
+  const library = scan.groups.flatMap((group) => group.items.filter((item) => item.source === "library"));
+  return {
+    labels: library.map((item) => `${String(item.label)}[${String(item.level)}]`).sort(),
+    hidden: scan.groups.reduce((sum, group) => sum + (group.hiddenByLevel ?? 0), 0)
+  };
+};
+const moduleSide = labelSet("module-gate");
+const projectSide = labelSet("project-main");
+check(
+  moduleSide.labels.some((entry) => entry.startsWith("my_module_synth.tcl")) &&
+    moduleSide.labels.some((entry) => entry.startsWith("legacy_synth.tcl")) &&
+    !moduleSide.labels.some((entry) => entry.startsWith("my_project_synth.tcl")) &&
+    moduleSide.hidden === 1,
+  `模块卡只看到「模块级 + 未声明」的用户模板(实际 ${JSON.stringify(moduleSide)})`
+);
+check(
+  projectSide.labels.some((entry) => entry.startsWith("my_project_synth.tcl")) &&
+    projectSide.labels.some((entry) => entry.startsWith("legacy_synth.tcl")) &&
+    !projectSide.labels.some((entry) => entry.startsWith("my_module_synth.tcl")) &&
+    projectSide.hidden === 1,
+  `工程卡只看到「工程级 + 未声明」的用户模板(实际 ${JSON.stringify(projectSide)})`
+);
+check(
+  moduleSide.labels.some((entry) => entry === "legacy_synth.tcl[undefined]"),
+  "没声明层级的旧模板保留 level=undefined(设置页据此标「未声明层级」)"
+);
+
 const builtinDefault = resolveTemplateSelection({ selection: "", category: "synthesis", tool: "vivado" });
 check(
   builtinDefault.state === "default" && builtinDefault.id === "builtin:synthesis/vivado-module-synthesis.tcl",

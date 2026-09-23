@@ -413,11 +413,10 @@ check(
 check(existsSync(join(presetDir, "tools", "setup-scaffold.mjs")), "自带 setup-scaffold.mjs 确实在包里");
 // 模式规则的**唯一真相源**是包根 README 里标记的那一段:骨架(建模块/工程时)从那里抽出来落成
 // `<根>/AGENTS.fpga.md`。标记没了或正文空了,落盘出来就是空的 —— 必须在这里拦住。
-const readmeText = readFileSync(join(ROOT, "README.md"), "utf8");
-const rulesFrom = readmeText.indexOf("<!-- fpga-mode-rules:start -->");
-const rulesTo = readmeText.indexOf("<!-- fpga-mode-rules:end -->");
-check(rulesFrom >= 0 && rulesTo > rulesFrom, "README 里有模式规则区块(骨架抽取的来源)");
-const rulesBody = rulesTo > rulesFrom ? readmeText.slice(rulesFrom, rulesTo) : "";
+// 规则正文现在独立成 preset 内的模板文件(不再是 README 兼职当运行时源)。
+const rulesSource = join(ROOT, "presets", "fpga-workbench", "workspace", "AGENTS.fpga.md");
+check(existsSync(rulesSource), `模式规则模板存在:${rulesSource}`);
+const rulesBody = existsSync(rulesSource) ? readFileSync(rulesSource, "utf8") : "";
 check(rulesBody.includes("FPGA 开发模式的工作区规则"), "规则区块里有正文(不是空壳)");
 check(rulesBody.split("\n").length >= 10, `规则区块够实(${rulesBody.split("\n").length} 行)`);
 

@@ -38,29 +38,25 @@ import { realEscape, writeFileRecoverable } from "./lib/stamp.mjs";
 export const INSTRUCTION_FILE = "AGENTS.fpga.md";
 
 /**
- * 规则正文的唯一来源:包根 README 里标记的那一段。
+ * 规则正文的唯一来源:**preset 内的模板文件** `workspace/AGENTS.fpga.md`。
  *
- * 为什么不另存一份模板文件:那段规则会随用户口径变,多一份就要跟着改、迟早对不上。
- * 放 README 里既能直接在仓库里读到,又能被这条命令抽出来落盘 —— **一处真相**。
- * 相对的路径从本文件算(`presets/fpga-workbench/tools/` 往上三层 = 包根),不依赖工作目录。
+ * 为什么单独一份、而不是继续从 README 里抽:README 是本仓库的文档,顺手当运行时模板源会让
+ * 「精简文档」和「改工作区规则」互相绑架(改 README 版式就可能抽空规则)。现在规则正文只有这一处,
+ * 建骨架时**原样复制**;相对路径从本文件算,不依赖工作目录。
  */
-const RULES_SOURCE = fileURLToPath(new URL("../../../README.md", import.meta.url));
-const RULES_START = "<!-- fpga-mode-rules:start -->";
-const RULES_END = "<!-- fpga-mode-rules:end -->";
+const RULES_SOURCE = fileURLToPath(new URL("../workspace/AGENTS.fpga.md", import.meta.url));
 
 /**
- * 从 README 抽出模式规则区块。
- * @returns 正文(不含标记行),末尾带一个换行。
- * @throws 读不到文件或找不到标记时抛出 —— 宁可让建骨架失败,也不要落一份空规则。
+ * 读模式规则正文(preset 内的模板文件,原样复制用)。
+ * @returns 正文,末尾带一个换行。
+ * @throws 文件读不到或正文为空时抛出 —— 宁可让建骨架失败,也不要落一份空规则。
  */
 export function readModeRules() {
-  const text = readFileSync(RULES_SOURCE, "utf8");
-  const from = text.indexOf(RULES_START);
-  const to = text.indexOf(RULES_END);
-  if (from < 0 || to < 0 || to < from) {
-    throw new Error(`README 里找不到模式规则区块(${RULES_START} … ${RULES_END}):${RULES_SOURCE}`);
+  const text = readFileSync(RULES_SOURCE, "utf8").trim();
+  if (text === "") {
+    throw new Error(`模式规则模板是空的,拒绝落一份空规则:${RULES_SOURCE}`);
   }
-  return `${text.slice(from + RULES_START.length, to).trim()}\n`;
+  return `${text}\n`;
 }
 
 /**
@@ -484,7 +480,7 @@ function main() {
     console.log(`${INSTRUCTION_FILE} 已存在,未覆盖(按项目改过的那份不会被我们覆盖;要重写用 --force)`);
   }
   if (plan.instruction !== undefined && created.includes(plan.instruction)) {
-    console.log(`${INSTRUCTION_FILE} 是本模式的工作区规则,按项目改这一份即可 —— 正文来源是包内 README 的规则区块。`);
+    console.log(`${INSTRUCTION_FILE} 是本模式的工作区规则,按项目改这一份即可 —— 正文来源是包内 workspace/AGENTS.fpga.md。`);
   }
   if (created.length === 0) console.log("骨架已完整,无需改动。");
   return 0;

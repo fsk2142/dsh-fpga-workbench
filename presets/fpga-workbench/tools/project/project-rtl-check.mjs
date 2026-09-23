@@ -25,7 +25,7 @@ import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { evidenceFileInside } from "../lib/stamp.mjs";
-import { coverageVerdict, stripStructuralOnly, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
+import { coverageVerdict, keepSimSupportOnly, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
 
 /**
  * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
@@ -597,8 +597,9 @@ function main() {
     ...targets.map(([file, isTb, role]) => ({
       file: relative(root, file).split(sep).join("/"),
       role,
-      // sim-support:只查通用规则(文件头 / Tab / 非英文 / 行尾 / 编译隔离),不套九小节与设计断言。
-      issues: role === "sim-support" ? stripStructuralOnly(checkFile(file, isTb)) : checkFile(file, isTb)
+      // sim-support:**白名单**留通用规则(文件头 / Tab / 非英文 / 行尾 / 编译隔离),
+      // 其余规则(九小节、设计断言、always_ff 形态、复位极性 …)一律不适用于仿真辅助代码。
+      issues: role === "sim-support" ? keepSimSupportOnly(checkFile(file, isTb)) : checkFile(file, isTb)
     })),
     // IP 时序卡:工程根 ip/ 下每个 IP 一张(与文件项同形一起打印)
     ...ipCardEntries(join(root, "ip"), root).map((entry) => ({ ...entry, role: "ip-card" }))

@@ -2427,11 +2427,52 @@ writeFileSync(
   join(simRoleRoot, "sim", "scoreboard.sv"),
   `${rtlTemplateHeader}\n\n\`resetall\n\`default_nettype none\n\nmodule scoreboard; endmodule\n\n\`default_nettype wire\n`
 );
+// 复审 Batch B 要的正向夹具:仿真辅助代码可以带 always_ff 与**自定义复位**,不该因此阻塞;
+// 负向夹具:缺文件头 / 缺编译隔离,仍然必须被报出来(白名单里保留了这几条通用规则)。
+writeFileSync(
+  join(simRoleRoot, "sim", "scoreboard_ff.sv"),
+  `${rtlTemplateHeader}
+
+\`resetall
+\`default_nettype none
+
+module scoreboard_ff (input logic clk, input logic rst_async, output logic done);
+  logic r;
+  always_ff @(posedge clk or posedge rst_async) begin
+    if (rst_async) r <= 1'b0;
+    else r <= ~r;
+  end
+  assign done = r;
+endmodule
+
+\`default_nettype wire
+`
+);
 const simRoleRun = runStdout("project-rtl-check.mjs", [simRoleRoot]);
 check(
   simRoleRun.code === 0 && !/九个小节块|设计断言/u.test(simRoleRun.output),
   `sim/ 下的仿真辅助代码不套 RTL 结构门禁(实际退出码 ${String(simRoleRun.code)})`,
   simRoleRun.output.slice(-300)
+);
+check(
+  !/scoreboard_ff\.sv\s+\(\d+ 项阻塞/u.test(simRoleRun.output),
+  "仿真辅助代码带 always_ff / 自定义复位也不阻塞(白名单只留通用规则)",
+  simRoleRun.output.slice(-300)
+);
+const simSupportNegRoot = join(SANDBOX, `simsupport-neg-${stamp}`);
+mkdirSync(join(simSupportNegRoot, "src", "rtl"), { recursive: true });
+mkdirSync(join(simSupportNegRoot, "sim"), { recursive: true });
+mkdirSync(join(simSupportNegRoot, "doc"), { recursive: true });
+writeFileSync(join(simSupportNegRoot, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+writeFileSync(join(simSupportNegRoot, "doc", "spec.md"), "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+writeFileSync(join(simSupportNegRoot, "src", "rtl", "good.sv"), readFileSync(categorizedTemplates.rtl, "utf8"));
+writeFileSync(join(simSupportNegRoot, "sim", "bad_helper.sv"), "module bad_helper; endmodule\n");
+const simSupportNeg = runStdout("project-rtl-check.mjs", [simSupportNegRoot]);
+check(
+  // 负向:白名单保留了"文件头"与编译隔离那几条 —— 实测它们都报在"文件头"这一类下(resetall / default_nettype)。
+  simSupportNeg.code === 1 && /文件头/u.test(simSupportNeg.output) && /resetall|default_nettype/u.test(simSupportNeg.output),
+  `sim-support 仍要查通用规则(缺文件头 / 缺 default_nettype)→ 退 1(实际 ${String(simSupportNeg.code)})`,
+  simSupportNeg.output.slice(-300)
 );
 const simRoleJson = JSON.parse(runStdout("project-rtl-check.mjs", [simRoleRoot, "--json"]).output);
 check(
@@ -2456,6 +2497,45 @@ check(
   /set VENDOR_LIBS/u.test(bundledRunOnly) && /-L \$lib/u.test(bundledRunOnly),
   "run.do:VENDOR_LIBS 旋钮逐个变成 vsim -L(E8-11)"
 );
+
+// 第九轮收口复审:compile → run 的一致性(改源码 / 删源码 / **新增源码** / 显式 ini 错)必须有
+// **行为**测试,不能只断言源码里有那几行字符串。模型仿真器在就真跑,不在就明确 SKIP + NOT_TESTED。
+const vsimPath = [
+  process.env.MODELSIM,
+  "C:\\modeltech64_2020.4\\win64\\vsim.exe",
+  "C:\\modeltech64_2020.4\\win32\\vsim.exe"
+].find((candidate) => typeof candidate === "string" && candidate !== "" && existsSync(candidate));
+if (vsimPath === undefined) {
+  console.log("  SKIP 仿真一致性行为矩阵:本机没找到 vsim.exe(环境变量 MODELSIM 或标准安装路径)—— 记 NOT_TESTED,不记 PASS");
+} else {
+  const simRoot = join(SANDBOX, `simmatrix-${stamp}`);
+  mkdirSync(join(simRoot, "rtl"), { recursive: true });
+  mkdirSync(join(simRoot, "verif"), { recursive: true });
+  writeFileSync(join(simRoot, "rtl", "dut.sv"), "module dut (input logic clk, output logic q); assign q = clk; endmodule\n");
+  // 第九轮收口复审 Batch C 的行为用例:`logic` 是 Verilog-2001 里合法的**标识符**,但在 SystemVerilog
+  // 里是关键字 —— 若 `.v` 被强制 `-sv` 编译,基线编译就会报错。带上它,基线编译退 0 就证明分流出对了。
+  writeFileSync(join(simRoot, "rtl", "legacy_v.v"), "module legacy_v; wire logic; assign logic = 1'b0; endmodule\n");
+  writeFileSync(join(simRoot, "verif", "tb_dut.sv"), "`timescale 1ns/1ps\nmodule tb_dut;\n  logic clk = 0;\n  initial begin #1; $display(\"ALL TESTS PASSED (err_cnt=0)\"); $finish; end\nendmodule\n");
+  copyFileSync(categorizedTemplates.compile, join(simRoot, "verif", "compile.do"));
+  copyFileSync(categorizedTemplates.run, join(simRoot, "verif", "run.do"));
+  const runDo = (statement, env = {}) => spawnSync(vsimPath, ["-c", "-do", `${statement}; quit -f`], {
+    cwd: join(simRoot, "verif"), env: { ...process.env, ...env }, encoding: "utf8"
+  });
+  const compiled = runDo("do compile.do");
+  check(compiled.status === 0, `仿真一致性夹具:基线编译退 0(实际 ${String(compiled.status)})`, String(compiled.stdout ?? "").slice(-300));
+  const cleanRun = runDo("do run.do");
+  check(cleanRun.status === 0, `无源码变化 → run 退 0(实际 ${String(cleanRun.status)})`, String(cleanRun.stdout ?? "").slice(-300));
+  writeFileSync(join(simRoot, "rtl", "dut.sv"), "module dut (input logic clk, output logic q); assign q = ~clk; endmodule\n// touched\n");
+  const modifiedRun = runDo("do run.do");
+  check(modifiedRun.status !== 0 && /changed after compile|does not match/u.test(String(modifiedRun.stdout ?? "")), `改源码 → run 拒绝(实际 ${String(modifiedRun.status)})`, String(modifiedRun.stdout ?? "").slice(-300));
+  runDo("do compile.do");
+  writeFileSync(join(simRoot, "rtl", "extra.sv"), "module extra; endmodule\n");
+  const addedRun = runDo("do run.do");
+  check(addedRun.status !== 0 && /\(added\)/u.test(String(addedRun.stdout ?? "")), `**新增源码** → run 拒绝并点名(实际 ${String(addedRun.status)})`, String(addedRun.stdout ?? "").slice(-300));
+  runDo("do compile.do");
+  const badIniRun = runDo("do run.do", { MODELSIM_INI: "C:\\nope\\missing.ini" });
+  check(badIniRun.status !== 0 && /modelsim.ini not found/u.test(String(badIniRun.stdout ?? "")), `run 侧显式 ini 不存在 → 拒绝 fallback(实际 ${String(badIniRun.status)})`, String(badIniRun.stdout ?? "").slice(-300));
+}
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;

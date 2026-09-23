@@ -15,6 +15,8 @@ set INI_OVERRIDE  {}
 # Precompiled XPM or a project's own vendor library. Empty = exactly the old behaviour.
 set VENDOR_LIBS   {}
 set RESULT_LOG    {sim.log}
+# E8(item A-3): the same HDL root compile.do used (project sim/ layout: {../src/rtl}).
+set RTL_DIR       {../rtl}
 
 onbreak { resume }
 onerror { quit -f -code 1 }
@@ -56,6 +58,45 @@ foreach line [split $stamp_text "\n"] {
   if {[file mtime $path] != $mtime || [file size $path] != $size} {
     lappend stale "$path (changed after compile)"
   }
+  lappend stamped $path
+}
+# E8(item A-3): the per-file check above cannot notice a NEWLY ADDED source (it only walks the
+# stamped list). Re-collect the current set and compare SETS first. Keep this collection rule
+# identical to compile.do's collect_hdl (linked dirs skipped, rtl/ip stubs excluded).
+proc collect_hdl {dir} {
+  set out {}
+  if {![file isdirectory $dir]} { return $out }
+  foreach ext {.sv .v .vhd .vhdl} {
+    foreach f [lsort [glob -nocomplain -directory $dir -type f *$ext]] { lappend out $f }
+  }
+  foreach sub [lsort [glob -nocomplain -directory $dir -type d *]] {
+    if {[file type $sub] eq "link"} { continue }
+    foreach f [collect_hdl $sub] { lappend out $f }
+  }
+  return $out
+}
+set verif_root_norm [string map {\\ /} $VERIF_ROOT]
+set ip_prefix [string map {\\ /} [file normalize [file join $VERIF_ROOT $RTL_DIR ip]]]/
+set current {}
+foreach f [collect_hdl [file normalize [file join $VERIF_ROOT $RTL_DIR]]] {
+  set f_norm [string map {\\ /} $f]
+  if {[string match "*_stub.*" [file tail $f]] && [string first $ip_prefix $f_norm] == 0} { continue }
+  lappend current $f
+}
+foreach pat $TB_PATTERN {
+  foreach f [lsort [glob -nocomplain -directory $VERIF_ROOT -type f $pat]] { lappend current $f }
+}
+set cur_sorted [lsort -unique $current]
+set stp_sorted [lsort -unique $stamped]
+if {$cur_sorted ne $stp_sorted} {
+  puts "\n\[ME\] ERROR: the source set changed since the last compile - re-run compile.do:"
+  foreach f $cur_sorted {
+    if {[lsearch -exact $stp_sorted $f] < 0} { puts "\[ME\]   + $f (added)" }
+  }
+  foreach f $stp_sorted {
+    if {[lsearch -exact $cur_sorted $f] < 0} { puts "\[ME\]   - $f (no longer collected)" }
+  }
+  quit -f -code 1
 }
 if {[llength $stale] > 0} {
   puts "\n\[ME\] ERROR: work/ does not match the current sources - re-run compile.do first:"
@@ -79,11 +120,21 @@ if {$TOP_OVERRIDE ne ""} {
   set TOP [file rootname [file tail [lindex $TB_FILE 0]]]
 }
 
+# E8(item A-1): same rule as compile.do - an EXPLICITLY given mapping file must exist.
+# Silently falling back here would let compile use A/modelsim.ini while run uses B/modelsim.ini.
 set INI $INI_OVERRIDE
+set INI_EXPLICIT [expr {$INI ne ""}]
 foreach var {MODELSIM_INI MODELSIM} {
   if {$INI eq "" && [info exists ::env($var)]} {
     set INI [string trim [set ::env($var)]]
+    set INI_EXPLICIT [expr {$INI ne ""}]
   }
+}
+if {$INI_EXPLICIT && ![file isfile $INI]} {
+  puts "\n\[ME\] ERROR: modelsim.ini not found: $INI"
+  puts "\[ME\] This was given explicitly (INI_OVERRIDE / MODELSIM_INI / MODELSIM); refusing"
+  puts "\[ME\] to fall back to the install default. Fix the path, or clear it to use the default."
+  quit -f -code 1
 }
 if {$INI eq "" || ![file isfile $INI]} {
   set MTI_ROOT [file dirname [file dirname [file normalize [info nameofexecutable]]]]

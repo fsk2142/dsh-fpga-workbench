@@ -118,14 +118,20 @@ foreach f [concat [lsort $rtl_src] [lsort $verif_src]] {
 }
 
 set vhdl_src {}
-set vlog_src {}
+set sv_src {}
+set v_src {}
 foreach f $kept {
   if {[string match "*.vhd" $f] || [string match "*.vhdl" $f]} {
     lappend vhdl_src $f
+  } elseif {[string match "*.sv" $f]} {
+    lappend sv_src $f
   } else {
-    lappend vlog_src $f
+    lappend v_src $f
   }
 }
+# .v is Verilog-2001: compiling it with -sv reinterprets identifiers under the SystemVerilog
+# compilation group (an identifier that happens to be an SV keyword changes meaning).
+set vlog_src [concat $sv_src $v_src]
 
 # Mapping priority: explicit knob -> selected environment mapping -> simulator install.
 # E8-09: an EXPLICITLY given mapping file must exist - refuse instead of silently falling back
@@ -151,6 +157,14 @@ if {$INI eq "" || ![file isfile $INI]} {
 set INI_FWD [string map {\\ /} $INI]
 puts "\[ME\] modelsim.ini: $INI_FWD"
 
+# E8(item A-2): one knob for vendor / precompiled libraries, applied to BOTH vlog calls and
+# (in run.do) vsim - leaving one side out can still fail with unresolved vendor references.
+set VENDOR_LIBS   {}
+set vendor_args {}
+foreach lib [split $VENDOR_LIBS " "] {
+  if {$lib ne ""} { lappend vendor_args -L $lib }
+}
+
 set define_args {}
 if {[info exists ::env(TB_DEFINES)]} {
   foreach d [split $::env(TB_DEFINES) " "] {
@@ -173,9 +187,18 @@ if {[llength $vhdl_src] > 0} {
     quit -f -code 1
   }
 }
-if {[llength $vlog_src] > 0} {
+if {[llength $sv_src] > 0} {
   if {[catch {
-    vlog -quiet -modelsimini $INI_FWD -sv {*}$define_args {*}$inc_args -work work {*}$vlog_src
+    vlog -quiet -modelsimini $INI_FWD -sv {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$sv_src
+  } message]} {
+    puts "\n\[ME\] ERROR: SystemVerilog compilation failed - refusing to use a stale library"
+    puts "\[ME\] $message"
+    quit -f -code 1
+  }
+}
+if {[llength $v_src] > 0} {
+  if {[catch {
+    vlog -quiet -modelsimini $INI_FWD {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$v_src
   } message]} {
     puts "\n\[ME\] ERROR: Verilog compilation failed - refusing to use a stale library"
     puts "\[ME\] $message"

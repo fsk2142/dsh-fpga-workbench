@@ -44,20 +44,24 @@ export function shortenList(files) {
 }
 
 /**
- * 只对**综合 RTL** 有意义的结构门禁(仿真辅助代码套不上,套了就是成片误报)。
- * 通用规则(文件头、Tab / 非英文 / 行尾、编译隔离)不在这里,它们对所有 HDL 一视同仁。
+ * **仿真辅助代码允许的规则**(白名单,第九轮收口复审 Batch B)。
+ *
+ * 之前是黑名单(只从结果里删掉"九个小节块 / 设计断言"),于是以后 checker **新增任何 RTL-only 规则**
+ * 都会自动落到 sim-support 上,again 制造误报 —— 白名单把边界钉死:不在表里的规则一律不适用于它们。
+ * 留在表里的都是通用、无争议的:文件头、编译隔离、Tab / 非英文 / 行尾(混用)。
  */
-const RTL_STRUCTURE_RULES = new Set(["九个小节块", "设计断言"]);
+const SIM_SUPPORT_RULES = new Set(["文件头", "编译隔离", "Tab 字符", "代码行非英文", "行尾混用"]);
 
 /**
  * 仿真辅助代码(sim/ 下的非 tb_*:package / interface / BFM / 记分板 / 驱动…)的规则裁剪。
  *
- * 第八轮复审 E8-05:这类文件以前按"普通 RTL"查,于是要求九个 RTL 小节 banner 和设计断言 ——
- * 合法的仿真辅助代码未必长那样,报出来就是噪声,而噪声会把人训练成"忽略检查结果"。
- * 裁剪的只是结构门禁;真正通用的格式与编译隔离规则仍然照查(第九轮复审② 同一条思路)。
+ * 第八轮复审 E8-05:这类文件以前按"普通 RTL"查,于是要求九个 RTL 小节 banner、设计断言、
+ * always_ff 形态、复位极性 …… 合法的仿真辅助代码未必长那样,报出来就是噪声。
+ * 第九轮收口复审 Batch B 把它定成**白名单**:只保留 {@link SIM_SUPPORT_RULES} 里的通用规则;
+ * 缺文件头、缺 `default_nettype(编译隔离)这类仍然照报 —— 那是所有 HDL 都该守的。
  * @param issues - checkFile() 的原始结果。
- * @returns 裁掉 RTL 结构门禁后的结果。
+ * @returns 只留通用规则后的结果。
  */
-export function stripStructuralOnly(issues) {
-  return issues.filter((issue) => !RTL_STRUCTURE_RULES.has(issue.rule));
+export function keepSimSupportOnly(issues) {
+  return issues.filter((issue) => SIM_SUPPORT_RULES.has(issue.rule));
 }

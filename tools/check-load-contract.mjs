@@ -456,7 +456,7 @@ const capabilityFixtures = [
     toolKey: "moduleGateTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
       templateSlot("moduleSynthesisTemplate", "synthesis", "综合脚本", "synthesis/vivado_module_synthesis.tcl"),
-      templateSlot("moduleConstraintsTemplate", "constraints", "约束模板", "constraints/vivado_xdc.xdc")
+      templateSlot("moduleConstraintsTemplate", "constraints", "约束模板", "constraints/vivado_module_xdc.xdc")
     ]
   },
   {
@@ -464,7 +464,7 @@ const capabilityFixtures = [
     toolKey: "projectMainTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
       templateSlot("projectRtlTemplate", "rtl", "RTL 模板", "rtl/systemverilog_module.sv"),
-      templateSlot("projectConstraintsTemplate", "constraints", "约束模板", "constraints/vivado_xdc.xdc"),
+      templateSlot("projectConstraintsTemplate", "project-constraints", "约束模板", "constraints/vivado_project_xdc.xdc"),
       templateSlot("projectSynthesisTemplate", "project-synthesis", "综合脚本", "synthesis/vivado_project_synthesis.tcl"),
       templateSlot("projectImplementationTemplate", "implementation", "实现脚本", "implementation/vivado_implementation.tcl"),
       templateSlot("projectProgrammingTemplate", "programming", "下载脚本", "programming/vivado_program.tcl")

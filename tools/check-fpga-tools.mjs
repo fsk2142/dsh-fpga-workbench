@@ -2364,7 +2364,7 @@ check(
 );
 check(
   /file type \$d\] eq "link"/u.test(bundledRunSynth),
-  "vivado_synthesis.tcl 的 collect_files 同样跳过链接目录(与 compile.do 同一条判据)"
+  "模块综合模板(vivado_module_synthesis.tcl)的 collect_files 同样跳过链接目录(与 compile.do 同一条判据)"
 );
 const mixRoot = join(SANDBOX, `mixvhdl-${stamp}`);
 mkdirSync(join(mixRoot, "src", "rtl"), { recursive: true });

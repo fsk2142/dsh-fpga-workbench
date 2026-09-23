@@ -1,7 +1,7 @@
 // 验证环节:按模板起文件(测试平台只替模块名；编译、运行与比对脚本原样复制)。
 //
 // 用法:
-//   node module-verif-new.mjs <模块根> <模块名> --template <测试平台模板路径>
+//   node module-verif-new.mjs <模块根> <模块名> [--template <测试平台模板路径>]
 //                     [--out <相对路径>] [--force] [--dry-run]
 //   node module-verif-new.mjs <模块根> --kind sim-compile [--template <编译脚本路径>]
 //   node module-verif-new.mjs <模块根> --kind sim-run [--template <运行脚本路径>]
@@ -21,6 +21,9 @@ const BUNDLED_SIM_COMPILE = fileURLToPath(new URL("../../templates/simulation/co
 const BUNDLED_SIM_RUN = fileURLToPath(new URL("../../templates/simulation/run/modelsim_run.do", import.meta.url));
 /** 自带的比对脚本模板(先归一化、只比值;行尾/大小写/0x 前缀都不算差异)。 */
 const BUNDLED_COMP = fileURLToPath(new URL("../../templates/verification/python_data_verification.py", import.meta.url));
+// 自带的测试平台模板。**四种 kind 一律支持默认值**(第八轮复审留下的那条:用法说明写着"不给 --template
+// 就用分类模板库里的内置",但 tb 那种以前其实要求显式给 —— 说的和做的两套)。
+const BUNDLED_TB = fileURLToPath(new URL("../../templates/simulation/testbench/systemverilog_testbench.sv", import.meta.url));
 
 /** 入口。 */
 function main() {
@@ -36,7 +39,7 @@ function main() {
   if (args.kind === "comp") {
     return stampFile({ ...args, template: args.template ?? BUNDLED_COMP });
   }
-  return stampFile({ ...args, kind: "tb" });
+  return stampFile({ ...args, kind: "tb", template: args.template ?? BUNDLED_TB });
 }
 
 /** 直接跑本文件时才走 CLI;被 import 时什么都不做。 */

@@ -27,6 +27,9 @@ const BUNDLED_RUN_SYNTH = fileURLToPath(new URL("../../templates/synthesis/vivad
 // `xc` 起头,后面可以是 `7a100t`(7 系列)也可以是 `ku040`/`zu7ev`/`vu9p`(UltraScale 那种两字母系列),
 // 所以字母允许 1~3 个:`xc7a100tfgg484-2` / `xcku040-ffva1156-2-e` 都是这个形状。
 // 与「器件 / device / part」这样的**字段行**配合使用,`xci` / `xdc` / 工具名 `xcelium` 这类词就挡在外面。
+/** 向上找工程锚点的层数上限(见 enclosingProjectSpec;防「远处无关工程的锚点被继承」)。 */
+const MAX_PROJECT_LOOKUP_LEVELS = 5;
+
 const PART_RE = /\bxc[a-z]{0,3}[0-9][0-9a-z]*(?:-[0-9a-z]+)*\b/giu;
 const DEVICE_LINE_RE = /器件|芯片|device|part/iu;
 /**
@@ -99,8 +102,12 @@ export function fieldsFromSpec(specPath) {
  *   `conflict` 为 `{ module, project, projectSpecPath }`(只在不同时为 `undefined` 之外的对象)。
  */
 function enclosingProjectSpec(root) {
+  // **向上找锚点有层数上限**(审计发现:原来一路走到盘根)—— 万一某个祖先目录里躺着一个无关工程的
+  // 锚点(例如曾把 `--kind project` 用在 `C:\Work` 这种大目录上),它下面**所有**模块都会继承那个
+  // 工程的器件。5 层足够覆盖 `<工程>/<模块>`、`<工程>/modules/<名>` 这类正常布局;再深就不是
+  // 「模块在工程里」,宁可让模块用自己的 spec(或如实报「器件没定」),也不去捡远处的器件。
   let cursor = resolve(root);
-  while (true) {
+  for (let up = 0; up <= MAX_PROJECT_LOOKUP_LEVELS; up += 1) {
     const anchor = join(cursor, ".fpga-workbench.json");
     if (existsSync(anchor)) {
       try {
@@ -108,13 +115,14 @@ function enclosingProjectSpec(root) {
           return join(cursor, "doc", "spec.md");
         }
       } catch {
-        // 读不懂的锚点不拿来猜工程；模块自己的 spec 仍可独立工作。
+        // 读不懂的锚点不拿来猜工程;模块自己的 spec 仍可独立工作。
       }
     }
     const parent = dirname(cursor);
     if (parent === cursor) return undefined;
     cursor = parent;
   }
+  return undefined;
 }
 
 export function readSpecFields(root) {

@@ -2313,6 +2313,42 @@ check(
   "check-patch-file.mjs 按 import.meta.url 相对定位补丁文件"
 );
 
+// 收口两条 P2(2026-09-23 整理):
+//   ① 向上找工程锚点要有层数上限 —— 否则远处一个无关工程的锚点会被继承,器件就取错了;
+//   ② `module-verif-new` 的 tb 也要能用内置模板(它的用法说明本来就写着"不给 --template 就用内置",
+//      但以前只有 --kind 那三种会默认,tb 要求显式给 —— 说的和做的两套)。
+const p2Root = join(SANDBOX, `p2-${stamp}`);
+const p2Deep = join(p2Root, "a", "b", "c", "d", "e", "uart_rx");
+const p2Near = join(p2Root, "a", "uart_rx");
+mkdirSync(join(p2Root, "doc"), { recursive: true });
+for (const mod of [p2Deep, p2Near]) {
+  mkdirSync(join(mod, "spec"), { recursive: true });
+  writeFileSync(join(mod, "spec", "spec.md"), "# 模块 spec\n\n- 器件见工程 spec(不重述)\n");
+}
+writeFileSync(join(p2Root, ".fpga-workbench.json"), '{"kind":"project","spec":"doc/spec.md"}\n');
+writeFileSync(join(p2Root, "doc", "spec.md"), "# 工程 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+const p2DeepRun = runStderr("module-synth-new.mjs", [p2Deep, "uart_rx", "--kind", "synth-script"]);
+check(
+  p2DeepRun.code === 2,
+  `工程锚点在 6 层之上 → **不继承**(层数上限;期望退 2,实际 ${String(p2DeepRun.code)})`,
+  p2DeepRun.output.slice(-200)
+);
+const p2NearRun = runStdout("module-synth-new.mjs", [p2Near, "uart_rx", "--kind", "synth-script"]);
+check(
+  p2NearRun.code === 0 && /器件 xc7a100tfgg484-2 取自工程 spec/u.test(p2NearRun.output),
+  `正常布局(1 层)照旧继承工程器件(实际 ${String(p2NearRun.code)})`,
+  p2NearRun.output.slice(-200)
+);
+const p2TbRoot = join(SANDBOX, `p2-tb-${stamp}`);
+mkdirSync(join(p2TbRoot, "spec"), { recursive: true });
+writeFileSync(join(p2TbRoot, "spec", "spec.md"), "# 模块 spec\n\n- 器件型号:xc7a100tfgg484-2\n");
+const p2Tb = runStdout("module-verif-new.mjs", [p2TbRoot, "UartRx"]);
+check(
+  p2Tb.code === 0 && existsSync(join(p2TbRoot, "verif", "tb_uart_rx.sv")),
+  `module-verif-new 不给 --template 也能起 tb(用内置模板;实际 ${String(p2Tb.code)})`,
+  p2Tb.output.slice(-200)
+);
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;
 

@@ -606,10 +606,21 @@ for (const [label, pattern] of [
   // 由 ModelSim 决定重编谁(FULL_REBUILD 时才不带 -incr)。
   ["Verilog/SV 全量交 vlog -incr", /vlog \{\*\}\$incr_args -quiet/u],
   ["FULL_REBUILD 时不带 -incr", /if \{!\$FULL_REBUILD\} \{ set incr_args \{-incr\} \}/u],
-  ["SV/V 的编译清单在全量/全空之间切换(不再只挑 changed)", /set sv_changed 0/u]
+  ["SV/V 的编译清单在全量/全空之间切换(不再只挑 changed)", /set sv_changed 0/u],
+  // 2026-09-24:+acc 分流 —— 批处理不带(实测 2.3~2.6× 快),只有 GUI load 带可见性。
+  ["批处理与 GUI 的 vopt 参数是两个旋钮", /set BATCH_VOPT_ARGS \{\}/u],
+  ["GUI load 保留 +acc 可见性", /set DEBUG_VOPT_ARGS \{\+acc=rn\}/u],
+  ["run 用 BATCH_*、load 用 DEBUG_*(各自拼 OPT_LEVEL)", /set VOPT_ALL \[string trim "\$BATCH_VOPT_ARGS \$OPT_LEVEL"\]/u],
+  // 2026-09-24:顺序依赖不加配置文件 —— 编译失败自动重试一次(失败那趟已把 package/entity 编进库)。
+  ["编译失败自动重试一次", /proc compile_step/u],
+  ["两次都失败才报错退 1", /failed twice - refusing to use a stale library/u]
 ]) {
   check(pattern.test(compileTemplate), label);
 }
+check(
+  (compileTemplate.match(/compile_step "/gu) ?? []).length === 3,
+  `三处编译(vcom / vlog -sv / vlog)都走 compile_step;实际 ${String((compileTemplate.match(/compile_step "/gu) ?? []).length)} 处`
+);
 {
   // load 必须在 `run -all` **之前** return:否则 GUI 会话会被 batch 的 run/quit 逻辑接管。
   // 锚点用**语句形态**(\nrun -all):load 分支的提示文字里也写着 "no run -all",不能拿它当锚点。
@@ -823,6 +834,11 @@ if (vsimProbe.status !== 0) {
       `load 模式:装载成功、不给仿真结论(实际 ${String(step.status)})`,
       step.output.slice(-300)
     );
+    // ⑧b +acc 分流(2026-09-24):GUI load 带可见性,批处理不带(实测 2.3~2.6× 快)。
+    check(
+      /vsim load \(GUI\): top=\S+ voptargs=\{\+acc=rn -O5\}/u.test(step.output),
+      `load 的 voptargs 带 +acc(波形可见性);实际 ${(step.output.split(/\r?\n/u).find((l) => /voptargs/u.test(l)) ?? "").trim()}`
+    );
 
     // ⑨ 编译配置身份(2026-09-24;审查报告 compile configuration fingerprint):改了任何编译配置都要
     //    让 run 拒绝 —— 否则"源码一字未动、直接 run"会静默跑在按旧配置编出来的库上(实测形态)。
@@ -837,6 +853,11 @@ if (vsimProbe.status !== 0) {
       step.status === 0 && /compile identity: matches the last compile/u.test(step.output),
       `配置身份:配置没变时 run 退 0(实际 ${String(step.status)})`,
       step.output.slice(-300)
+    );
+    // ⑧c 批处理那条路**不带** +acc(带的话就是 2.3~2.6× 的白等;加了这条以后谁把它改回去都会红)。
+    check(
+      /vsim: top=\S+ voptargs=\{-O5\}/u.test(step.output) && !/vsim: top=\S+ voptargs=\{[^}]*\+acc/u.test(step.output),
+      `批处理的 voptargs 不带 +acc;实际 ${(step.output.split(/\r?\n/u).find((l) => /voptargs/u.test(l)) ?? "").trim()}`
     );
     // ① TB_DEFINES 变了(环境变量)
     step = modeStep("run", { env: { TB_DEFINES: "SAFE_MODE" }, tag: "defines" });
@@ -927,6 +948,60 @@ if (vsimProbe.status !== 0) {
         m.status === 0 && /MACRO_W=8/u.test(m.output),
         `改 .sv 里的宏 → 包含方跟着重编(全量交 vlog -incr):实测 MACRO_W=8(实际 ${String(m.status)})`,
         m.output.slice(-400)
+      );
+    }
+
+    // ⑪ 顺序依赖(2026-09-24;复核报告 compile_order.txt 那一项):collector 按完整路径 lsort,
+    //    所以 `import` 方可能排在 package 前面 —— 不加配置文件,靠"失败自动重试一次"在**一条
+    //    compile 命令**里消化(失败那趟已把 package 编进 work/)。旧逻辑会在这里退 1。
+    {
+      const ordRoot = join(simRoot, "order");
+      const ordVerif = join(ordRoot, "verif");
+      mkdirSync(join(ordRoot, "rtl"), { recursive: true });
+      mkdirSync(ordVerif, { recursive: true });
+      // aaa_dut.sv 的路径排在 cfg_pkg.sv 前面 → 第一趟 vlog 一定找不到 package
+      writeFileSync(
+        join(ordRoot, "rtl", "aaa_dut.sv"),
+        'module aaa_dut;\n    import cfg_pkg::*;\n    initial $display("PKG_W=%0d", DATA_W);\nendmodule\n'
+      );
+      writeFileSync(join(ordRoot, "rtl", "cfg_pkg.sv"), "package cfg_pkg;\n    parameter int DATA_W = 32;\nendpackage\n");
+      writeFileSync(
+        join(ordVerif, "tb_aaa_dut.sv"),
+        '`timescale 1ns/1ps\nmodule tb_aaa_dut;\n    aaa_dut u_dut();\n    initial begin\n        $display("ALL TESTS PASSED (err_cnt=0)");\n        $finish;\n    end\nendmodule\n'
+      );
+      const ordDo = join(ordVerif, "run.do");
+      writeFileSync(ordDo, bundledRunOnly);
+      const ordStep = (mode, tag) => modeStep(mode, { cwd: ordVerif, doFile: ordDo, tag: `order-${tag}` });
+      const ordCompile = ordStep("compile", "c1");
+      check(
+        ordCompile.status === 0 && /retrying once/u.test(ordCompile.output) &&
+          /succeeded on the second attempt/u.test(ordCompile.output),
+        `顺序夹具:反序包依赖在**一条 compile 命令**里成功(自动重试一次);实际 exit ${String(ordCompile.status)}`,
+        ordCompile.output.slice(-400)
+      );
+      const ordRun = ordStep("run", "r1");
+      check(
+        ordRun.status === 0 && /PKG_W=32/u.test(ordRun.output),
+        `顺序夹具:接着 run 也过(实际 ${String(ordRun.status)})`,
+        ordRun.output.slice(-300)
+      );
+    }
+
+    // ⑫ 反过来:真语法错**不能**被"重试一次"变成通过(这是重试机制唯一的风险点)。
+    {
+      const badRoot = join(simRoot, "badsyntax");
+      const badVerif = join(badRoot, "verif");
+      mkdirSync(join(badRoot, "rtl"), { recursive: true });
+      mkdirSync(badVerif, { recursive: true });
+      writeFileSync(join(badRoot, "rtl", "broken.sv"), "module broken;\n    logic [3:0] x = 4'b0000\nendmodule\n");
+      writeFileSync(join(badVerif, "tb_broken.sv"), tbSource("tb_broken"));
+      const badDo = join(badVerif, "run.do");
+      writeFileSync(badDo, bundledRunOnly);
+      const broken = modeStep("compile", { cwd: badVerif, doFile: badDo, tag: "badsyntax" });
+      check(
+        broken.status === 1 && /failed twice/u.test(broken.output),
+        `真语法错:重试不会把它变成通过 → compile 退 1 并说 failed twice(实际 ${String(broken.status)})`,
+        broken.output.slice(-300)
       );
     }
   }

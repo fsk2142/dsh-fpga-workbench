@@ -20,11 +20,24 @@
 #   同 mtime 但长度变化的文件它也能看出来);**一个文件都没变时整段跳过 vlog**,零成本。
 #   VHDL 一变就全量重编 vcom:VHDL 的 package/entity 依赖在 Tcl 侧同样推不准,少编一个依赖可能拿到
 #   **过期的库**(不报错的错),宁可多编。想强制全量重编(不用 -incr):把 FULL_REBUILD 设成 1。
+#   编译**顺序**:collector 按完整路径 lsort,所以"package 一定排在 consumer 前面"**不是保证**
+#   (`aaa_dut.sv` 会排在 `cfg_pkg.sv` 前面)。不为这个再加一份配置文件(如 compile_order.txt):
+#   编译失败时**自动重试一次** —— 失败那趟已经把 package/entity 编进 work/ 了,实测原命令重跑即
+#   0 error;两次都失败才报错退 1(真语法错不会因为重试而被判通过)。
 # 加速二:编译与 vopt 默认走 -O5。本机 ModelSim 2020.4 的 -help 实测:vlog/vcom/vopt 的
 #   -O4 是默认("-O4 Enable most optimizations"),-O5 是"-O5 Enable additional compiler
 #   optimizations";modelsim.ini 的 VoptFlow = 1(优化流程本来就开)。想退回工具默认就把
-#   OPT_LEVEL 改成 {},完全不优化改成 {-O0}。+acc=rn 是波形可见性需要的;只求速度可以把
-#   VOPT_ARGS 收窄(可见性随之变差)。速度提升幅度取决于设计与测试平台,本模板不宣称倍数。
+#   OPT_LEVEL 改成 {},完全不优化改成 {-O0}。
+# 加速二之二:**批处理不带 `+acc`,只有 GUI `load` 带**(2026-09-24 实测,同一份 work/、同一份脚本、
+#   只改这个旋钮;夹具 = 64 个叶子模块 / 20 万拍,本机 ModelSim 2020.4):
+#     批处理 voptargs={-O5}           → 1547 ms(热态;首趟含 vopt 1845 ms)
+#     voptargs={+acc=rn -O5}          → 4005 ms(热态;首趟 4276 ms) —— **2.3~2.6×**
+#   为什么这样分得开:批处理的判据读的是 `sim.log` **文本**(成功标记与 `** Error` 行),自带 TB 写的
+#   也**不是**波形而是 $fwrite 数据文件;内部信号可见性只有"人工看波形"才需要,而那件事走 `load`。
+#   安全性也实测过:故意失败的断言夹具在**两种**配置下 run 都退 1(去掉 +acc 不会让 $error/断言被
+#   优化掉,判据不受影响)。代价:批处理那次跑的模型**没有内部可见性** —— 想事后用 `wlf2vcd` 从
+#   批处理的 wlf 出文本波形就不行了,改走 `load`,或临时把 BATCH_VOPT_ARGS 设回 {+acc=rn}。
+#   速度收益随设计规模与仿真时长放大;本模板不宣称固定倍数(上表是夹具实测值)。
 # 加速三:**头文件(.svh/.vh)进新鲜度集合,但不参与编译**。宏/include 在 vlog 那一步就已经展开,
 #   头文件改了却不重编包含它的模块,work/ 就成了"对不上源码的旧库"且**不报错**;而旧版采集器只认
 #   .sv/.v/.vhd/.vhdl,头文件根本不进 stamp → run 会把旧 work 判成 current。现在头文件记进 stamp,
@@ -43,7 +56,9 @@
 #                 project sim/ layout: {../src/rtl} (auto-switched when the first is missing)
 #   FULL_REBUILD  1 = ignore the stamp and compile everything
 #   OPT_LEVEL     compile + vopt optimization level. default {-O5}; {} = tool default (-O4)
-#   VOPT_ARGS     extra arguments handed to vopt (default {+acc=rn})
+#   BATCH_VOPT_ARGS  extra vopt args for the batch `run` (default {}: no visibility - the gate reads
+#                    sim.log text; measured 2.3~2.6x faster than +acc=rn on this machine)
+#   DEBUG_VOPT_ARGS  extra vopt args for the GUI `load` (default {+acc=rn}: keep signals visible)
 #   TB_PATTERN    which files count as a testbench (F5-03: tb_notes.txt is not a TB)
 #   TOP_OVERRIDE  testbench module to run when more than one TB matches
 #   INI_OVERRIDE  force a library mapping file (else MODELSIM_INI env, else install default)
@@ -54,7 +69,8 @@
 set RTL_DIR        {../rtl}
 set FULL_REBUILD   0
 set OPT_LEVEL      {-O5}
-set VOPT_ARGS      {+acc=rn}
+set BATCH_VOPT_ARGS {}
+set DEBUG_VOPT_ARGS {+acc=rn}
 set TB_PATTERN     {tb_*.sv tb_*.v tb_*.vhd tb_*.vhdl}
 set TOP_OVERRIDE   {}
 set INI_OVERRIDE   {}
@@ -244,6 +260,26 @@ foreach lib [split $VENDOR_LIBS " "] {
 
 set STAMP_PATH [file join work ".fpga-compile-stamp"]
 
+# 编译一条命令(**失败就再试一次**;命令用 list 构造,所以路径带空格也不会串位):
+#   顺序依赖最常见的形态是"先缺后补" —— collector 按完整路径 lsort 排序,`import` 了某个 package 的
+#   文件可能排在 package 前面,第一趟 vlog 报 `Could not find the package (...)`;而那一趟**已经先把
+#   package 编进 work/ 了**,所以同一条命令再来一次就是 0 error(2026-09-24 实测 ModelSim 2020.4:
+#   反序 2 errors → 原命令重跑 0 errors → 库可用)。这里自动重试一次,把这类问题在**一条命令**里
+#   消化掉 —— 显式 compile_order 文件因此暂时不必加(真出现 A→B→A 交叉依赖,重试也过不了再说)。
+#   真·语法错会**两次都失败**,最终报第二趟的完整错误并退 1(不会因为重试而被判通过)。
+proc compile_step {what cmd} {
+  if {![catch {uplevel 1 $cmd} message]} { return }
+  puts "\n\[ME\] $what: first attempt failed - retrying once (package/entity order cascade?)"
+  puts "\[ME\]   [lindex [split $message "\n"] 0]"
+  if {![catch {uplevel 1 $cmd} message]} {
+    puts "\[ME\] $what: succeeded on the second attempt"
+    return
+  }
+  puts "\n\[ME\] ERROR: $what failed twice - refusing to use a stale library"
+  puts "\[ME\] $message"
+  quit -f -code 1
+}
+
 # ── compile configuration identity(编译配置身份)─────────────────────────────── #
 # 编译结果不只取决于源码:**用哪个仿真器 / 哪个 modelsim.ini(以及它有没有被改) / TB_DEFINES /
 # EXTRA_INCDIRS / VENDOR_LIBS / OPT_LEVEL** 任何一个变了,work/ 就不再是"当前配置"的产物。
@@ -395,29 +431,16 @@ if {$MODE eq "compile"} {
   # .v is Verilog-2001: compiling it with -sv reinterprets identifiers under the SystemVerilog
   # compilation group (an identifier that happens to be an SV keyword changes meaning).
   if {$n_vhdl > 0} {
-    if {[catch { vcom -quiet {*}$OPT_LEVEL -2008 -modelsimini $INI_FWD -work work {*}$vhdl_compile } message]} {
-      puts "\n\[ME\] ERROR: VHDL compilation failed - refusing to use a stale library"
-      puts "\[ME\] $message"
-      quit -f -code 1
-    }
+    compile_step "VHDL compilation" \
+      [list vcom -quiet {*}$OPT_LEVEL -2008 -modelsimini $INI_FWD -work work {*}$vhdl_compile]
   }
   if {$n_sv > 0} {
-    if {[catch {
-      vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD -sv {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$sv_compile
-    } message]} {
-      puts "\n\[ME\] ERROR: SystemVerilog compilation failed - refusing to use a stale library"
-      puts "\[ME\] $message"
-      quit -f -code 1
-    }
+    compile_step "SystemVerilog compilation" \
+      [list vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD -sv {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$sv_compile]
   }
   if {$n_v > 0} {
-    if {[catch {
-      vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$v_compile
-    } message]} {
-      puts "\n\[ME\] ERROR: Verilog compilation failed - refusing to use a stale library"
-      puts "\[ME\] $message"
-      quit -f -code 1
-    }
+    compile_step "Verilog compilation" \
+      [list vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$v_compile]
   }
 
   # E8-07: record **all** compile inputs (not only the ones just recompiled) so the run mode can tie
@@ -545,13 +568,15 @@ if {$TOP_OVERRIDE ne ""} {
   set TOP [file rootname [file tail [lindex $TB_FILE 0]]]
 }
 
-# 加速:vopt 参数 = VOPT_ARGS + OPT_LEVEL(默认 "+acc=rn -O5")。作为**一个**参数交给 -voptargs。
-set VOPT_ALL [string trim "$VOPT_ARGS $OPT_LEVEL"]
+# vopt 参数 = 该模式自己的旋钮 + OPT_LEVEL,作为**一个**参数交给 -voptargs。
+# 批处理用 BATCH_VOPT_ARGS(默认空:快),GUI load 用 DEBUG_VOPT_ARGS(默认 {+acc=rn}:看得见信号)。
+set VOPT_ALL [string trim "$BATCH_VOPT_ARGS $OPT_LEVEL"]
 
 # ── load:同一个新鲜度门,只把设计装进 GUI 会话;绝不 run -all、绝不退出 ──────────────
 # 用法是 `vsim -do "do run.do load"`(**不要** -c):父会话是 GUI,这里的 `vsim` 就是"装载设计"这条
 # 命令,所以波形/库映射/顶层与 run 模式完全同源。校验没过就退 1,不开一个不可信的 GUI。
 if {$MODE eq "load"} {
+  set VOPT_ALL [string trim "$DEBUG_VOPT_ARGS $OPT_LEVEL"]
   puts "\[ME\] vsim load (GUI): top=$TOP voptargs={$VOPT_ALL}"
   if {[catch {
     vsim -modelsimini $INI_FWD -lib work {*}$vendor_args -voptargs=$VOPT_ALL $TOP

@@ -352,6 +352,7 @@ const bitstreamTemplate = executableTcl(categorizedTemplates.bitstream);
 // 工程综合是**另一份**文件(module 版在模块根跑、自己建工程);下面复用策略的断言钉在工程版上。
 const projectSynthesisTemplate = executableTcl(categorizedTemplates["project-synthesis"]);
 const programmingTemplate = executableTcl(categorizedTemplates.programming);
+const linterTemplate = executableTcl(categorizedTemplates.linter);
 // 编译与运行合并成一份之后(用户口径 2026-09-23),"只做一件事"改成**按模式分界**的结构断言:
 //   · 编译命令(vcom -quiet / vlog -quiet)全部落在 compile 段内;
 //   · vsim 只出现在 run 段里(用 `vsim -c -modelsimini` 这个只在 run 段出现的形态定位,
@@ -399,6 +400,33 @@ check(
     !/\bsynth_design\b|\bplace_design\b|\broute_design\b|\bwrite_bitstream\b/u.test(programmingTemplate),
   "Vivado 下载模板只使用已有 bitstream"
 );
+// 2026-09-24(复核报告第 3 项):linter 用 -lint 跑 Vivado RTL Linter,并把结果写成报告。
+// 实测两条硬事实:① `-lint` 与 `-rtl` **互斥**,必须分两次调用;② 报告里的规则会有 -help 清单
+// 之外的(实测 ASSIGN-10),所以规则清单不能写死、要从报告里抽。
+check(
+  /\bsynth_design\s+-lint\b/u.test(linterTemplate) && /-file\s+\$LINT_RPT/u.test(linterTemplate) &&
+    /\bsynth_design\s+-rtl\b/u.test(linterTemplate) &&
+    !/synth_design[^\n]*-rtl[^\n]*-lint|synth_design[^\n]*-lint[^\n]*-rtl/u.test(linterTemplate) &&
+    /lint report not found/u.test(linterTemplate) &&
+    /\^\\\|\\s\*\(\[A-Z\]\+-\[0-9\]\+\)/u.test(linterTemplate),
+  "linter 模板分两步跑(-lint 与 -rtl 互斥)、报告必须落地、规则从报告里抽(不写死清单)"
+);
+// 2026-09-24 真机抓到的真 bug:linter 用的是 ModelSim 语法 `quit -f -code N`,Vivado 的 quit 只接受
+// 一个可选返回码 → 实测 `wrong # args: should be "quit ?returnCode?"`,**连成功路径都退不出 0**
+// (该退 2 的参数错也退成 1)。五份 Vivado Tcl 一律用 `exit N`。
+for (const [label, source] of [
+  ["module synth", synthesisTemplate],
+  ["project synth", projectSynthesisTemplate],
+  ["implementation", implementationTemplate],
+  ["bitstream", bitstreamTemplate],
+  ["programming", programmingTemplate],
+  ["linter", linterTemplate]
+]) {
+  check(
+    !/quit\s+-f\s+-code/u.test(source),
+    `${label}:用 Vivado 的 exit N 退出,不写 ModelSim 的 quit -f -code(2025.2 实测报 wrong # args 并退 1)`
+  );
+}
 check(
   [compileTemplate, runTemplate, synthesisTemplate, implementationTemplate, bitstreamTemplate, programmingTemplate]
     .every((source) => /\berror\b/iu.test(source)),
@@ -573,7 +601,12 @@ for (const [label, pattern] of [
   ["配置身份:ini 路径 + mtime + size", /lappend items "ini_mtime=\[file mtime \$::INI\]"/u],
   ["配置身份:defines / incdirs / vendor_libs / opt", /lappend items "defines=/u],
   ["身份写进 stamp", /\{ puts \$stamp_fh "# cfg \$item" \}/u],
-  ["run 模式逐项比对配置身份", /compile configuration changed after the last compile/u]
+  ["run 模式逐项比对配置身份", /compile configuration changed after the last compile/u],
+  // 2026-09-24(复核报告第 2 项):Verilog/SystemVerilog 把**完整 source set** 交给 vlog -incr,
+  // 由 ModelSim 决定重编谁(FULL_REBUILD 时才不带 -incr)。
+  ["Verilog/SV 全量交 vlog -incr", /vlog \{\*\}\$incr_args -quiet/u],
+  ["FULL_REBUILD 时不带 -incr", /if \{!\$FULL_REBUILD\} \{ set incr_args \{-incr\} \}/u],
+  ["SV/V 的编译清单在全量/全空之间切换(不再只挑 changed)", /set sv_changed 0/u]
 ]) {
   check(pattern.test(compileTemplate), label);
 }
@@ -750,12 +783,12 @@ if (vsimProbe.status !== 0) {
     const hdrDo = join(hdrVerif, "run.do");
     writeFileSync(hdrDo, bundledRunOnly);
     const modeStep = (mode, options = {}) => {
-      const { env = {}, tag = mode, doFile = hdrDo } = options;
-      const log = join(hdrVerif, `ME-${tag}-hdr.log`);
+      const { env = {}, tag = mode, doFile = hdrDo, cwd = hdrVerif } = options;
+      const log = join(cwd, `ME-${tag}-hdr.log`);
       const fd = openSync(log, "w");
       const status = spawnSync("vsim", ["-c", "-do", `do ${doFile.replace(/\\/gu, "/")} ${mode}; quit -f`], {
         stdio: ["ignore", fd, "ignore"],
-        cwd: hdrVerif,
+        cwd,
         env: { ...process.env, ...env }
       }).status;
       closeSync(fd);
@@ -853,6 +886,47 @@ if (vsimProbe.status !== 0) {
         oldStep === 1 && /carries no configuration identity/u.test(oldOut),
         `配置身份:旧版 stamp(没有 # cfg 行)不会被当成配置一致 → run 退 1 并说明(实际 ${String(oldStep)})`,
         oldOut.slice(-300)
+      );
+    }
+
+    // ⑩ 宏写在 **.sv** 里(不是 .svh):这才是"只编 changed 文件"真会出错的场景 ——
+    //    `include 了 defs.sv 的 foo.sv 不会被重编,宏展开还是旧值,**而且不报错**;
+    //    .svh/.vh 的 freshness 也管不到它(扩展名不是头文件)。现在 SV/V 全量交给 vlog -incr,
+    //    由 ModelSim 连带重编包含方 —— 这里用**行为**验:改宏之后 elab 出来的宽度必须跟着变。
+    {
+      const macroRoot = join(simRoot, "macro");
+      const macroVerif = join(macroRoot, "verif");
+      mkdirSync(join(macroRoot, "rtl"), { recursive: true });
+      mkdirSync(macroVerif, { recursive: true });
+      const defsSv = join(macroVerif, "defs.sv");
+      writeFileSync(defsSv, "`define TOP_W 4\n");
+      writeFileSync(
+        join(macroRoot, "rtl", "foo.sv"),
+        '`include "defs.sv"\nmodule foo;\n    initial $display("MACRO_W=%0d", `TOP_W);\nendmodule\n'
+      );
+      writeFileSync(
+        join(macroVerif, "tb_foo.sv"),
+        '`timescale 1ns/1ps\nmodule tb_foo;\n    foo u_foo();\n    initial begin\n        $display("ALL TESTS PASSED (err_cnt=0)");\n        $finish;\n    end\nendmodule\n'
+      );
+      const macroDo = join(macroVerif, "run.do");
+      writeFileSync(macroDo, bundledRunOnly);
+      const macroStep = (mode, tag) => modeStep(mode, { cwd: macroVerif, doFile: macroDo, tag: `macro-${tag}` });
+      let m = macroStep("compile", "c1");
+      check(m.status === 0, `宏夹具:首次 compile 退 0(实际 ${String(m.status)})`, m.output.slice(-300));
+      m = macroStep("run", "r1");
+      check(
+        m.status === 0 && /MACRO_W=4/u.test(m.output),
+        `宏夹具:先跑出旧宽度 MACRO_W=4(实际 ${String(m.status)})`,
+        m.output.slice(-300)
+      );
+      writeFileSync(defsSv, "`define TOP_W 8\n"); // 长度也变,不依赖 mtime 精度
+      m = macroStep("compile", "c2");
+      check(m.status === 0, `宏夹具:改宏之后 compile 退 0(实际 ${String(m.status)})`, m.output.slice(-300));
+      m = macroStep("run", "r2");
+      check(
+        m.status === 0 && /MACRO_W=8/u.test(m.output),
+        `改 .sv 里的宏 → 包含方跟着重编(全量交 vlog -incr):实测 MACRO_W=8(实际 ${String(m.status)})`,
+        m.output.slice(-400)
       );
     }
   }

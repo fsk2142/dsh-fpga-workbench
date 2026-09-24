@@ -304,6 +304,25 @@ pnpm 安装 `file:` 依赖时按 `files` 打包,白名单外的东西**不会被
 留一行。`tools/check-preset-root.mjs` 断言这一行的解析,`tools/check-preset-sync.mjs`
 断言它没跟官方 `standard` 漂移。
 
+## 机器级设置放哪:Vivado_init.tcl / modelsim.ini
+
+**同一个策略不要在每份工程脚本里各写一遍** —— 除了"两处真相",有些设置写在脚本里**根本传不到**:
+
+- **Vivado**:`<Vivado>/scripts/Vivado_init.tcl`(安装级)或 `~/.Xilinx/Vivado/Vivado_init.tcl`
+  (用户级,升级 Vivado 不会被覆盖)在**每个** Vivado 进程启动时被 source —— **包括 `launch_runs`
+  另起的 run 进程**。所以 `set_param general.maxThreads <N>` 放这里一次就够(AMD 文档:Windows
+  默认只有 **2**、Linux 8;本机被 init 设成 16,而 run 进程日志里那句
+  `Multithreading enabled for synth_design using a maximum of 7 processes` 就是它生效的证据)。
+  反例:在 launcher 脚本里 `set_param`,run 进程读不到,日志里也看不出是谁设的。
+  自定义板卡文件同理:把仓库根加进 `set_param board.repoPaths` 一次即可。
+- **ModelSim / Questa**:默认值放安装目录那份 `modelsim.ini`(或它映射到的文件)。改了它是**安全**的:
+  仿真的**编译身份**里记着 ini 的路径 + mtime + size,一变就会要求重编(见
+  `templates/simulation/run/modelsim_run.do` 的 `config_identity`)。
+- **不能放这里的**:任何 `set_property`(工程 / step / run 属性,例如综合策略、
+  `AUTO_INCREMENTAL_CHECKPOINT`、bitstream 的 `-bin_file`)—— init 里没有工程上下文,要么直接报错
+  要么静默无效;任何改 QoR 的算法参数;以及 `set_msg_config` 屏蔽消息 —— 那会把判据要读的
+  CRITICAL WARNING 一起盖掉,门禁就瞎了。
+
 ## 自检
 
 **唯一入口是 `npm test`** —— 它按固定顺序跑源码级与环境级检查,并且**看退出码**,不是看输出里的

@@ -13,11 +13,13 @@
 # 复核漏掉 → 明明没变也要求重编)。一份文件 + 一个 collect_sources 就没有这个漂移面。
 # 边界照旧:compile 只发现+编译、绝不启动仿真;run 只跑既有 work/、绝不编译。
 #
-# 加速一:编译**只编变动的文件**(增量,默认)。stamp 里记着上次编译的文件 → mtime/size,
-#   没变的不重编 —— 大工程省下的主要是这块时间。VHDL 一变就全量重编 vcom:
-#   VHDL 的 package/entity 依赖在 Tcl 侧推不准,少编一个依赖可能拿到**过期的库**(不报错的错),
-#   宁可多编;Verilog/SystemVerilog 只编变动的 —— 端口变了会在 elaboration 阶段响亮报错。
-#   想强制全量重编:把 FULL_REBUILD 设成 1。
+# 加速一:编译走 **ModelSim 自己的增量**(`vlog -incr`,默认)。stamp 仍在本地记着上次编译的输入与
+#   配置,负责回答"这个 work/ 还算不算当前源码/配置的产物";而"哪些 design unit 真需要重编"交给
+#   仿真器 —— 谁 include 了哪个宏、谁 import 了哪个 package,在 Tcl 侧推不准。所以 Verilog/
+#   SystemVerilog 是**把完整 source set 交给 vlog -incr**(实测:改了 package 参数会连带重编 import 方;
+#   同 mtime 但长度变化的文件它也能看出来);**一个文件都没变时整段跳过 vlog**,零成本。
+#   VHDL 一变就全量重编 vcom:VHDL 的 package/entity 依赖在 Tcl 侧同样推不准,少编一个依赖可能拿到
+#   **过期的库**(不报错的错),宁可多编。想强制全量重编(不用 -incr):把 FULL_REBUILD 设成 1。
 # 加速二:编译与 vopt 默认走 -O5。本机 ModelSim 2020.4 的 -help 实测:vlog/vcom/vopt 的
 #   -O4 是默认("-O4 Enable most optimizations"),-O5 是"-O5 Enable additional compiler
 #   optimizations";modelsim.ini 的 VoptFlow = 1(优化流程本来就开)。想退回工具默认就把
@@ -349,25 +351,41 @@ if {$MODE eq "compile"} {
     puts "\[ME\] (which file includes which header cannot be inferred here; VHDL is untouched)"
   }
 
-  if {$FULL_REBUILD || $fresh_work || $hdr_changed} {
+  # Verilog/SystemVerilog:**把完整 source set 交给 vlog -incr**(见文件头"加速一")。
+  # 只有"这份 type 里一个文件都没变、没有头文件变更、不是新库、不是 FULL_REBUILD"时才整段跳过。
+  set sv_changed 0
+  foreach f $sv_src { if {[lsearch -exact $changed $f] >= 0} { set sv_changed 1; break } }
+  set v_changed 0
+  foreach f $v_src { if {[lsearch -exact $changed $f] >= 0} { set v_changed 1; break } }
+
+  if {$FULL_REBUILD || $fresh_work || $hdr_changed || $sv_changed} {
     set sv_compile $sv_src
-    set v_compile  $v_src
   } else {
     set sv_compile {}
-    set v_compile  {}
-    foreach f $sv_src { if {[lsearch -exact $changed $f] >= 0} { lappend sv_compile $f } }
-    foreach f $v_src  { if {[lsearch -exact $changed $f] >= 0} { lappend v_compile  $f } }
+  }
+  if {$FULL_REBUILD || $fresh_work || $hdr_changed || $v_changed} {
+    set v_compile $v_src
+  } else {
+    set v_compile {}
   }
 
   set n_vhdl [llength $vhdl_compile]
   set n_sv   [llength $sv_compile]
   set n_v    [llength $v_compile]
   set opt_note [expr {$OPT_LEVEL eq "" ? "(tool default -O4)" : $OPT_LEVEL}]
+  # FULL_REBUILD 时不带 -incr:那个旋钮的承诺就是"忽略 stamp、全部重编"。
+  set incr_args {}
+  if {!$FULL_REBUILD} { set incr_args {-incr} }
   if {$n_vhdl + $n_sv + $n_v == 0} {
     puts "\n\[ME\] Nothing changed since the last compile ([llength $kept] source(s) up to date)."
     puts "\[ME\] work/ is already current; set FULL_REBUILD 1 to force a full rebuild."
   } else {
-    puts "\n\[ME\] Compiling [expr {$n_vhdl + $n_sv + $n_v}] of [llength $kept] file(s) $opt_note:"
+    if {[llength $incr_args] > 0} {
+      puts "\n\[ME\] vlog -incr: handing [expr {$n_sv + $n_v}] Verilog/SystemVerilog file(s) to ModelSim $opt_note"
+      puts "\[ME\]   (it decides which design units need recompiling; unchanged units are skipped)"
+    } else {
+      puts "\n\[ME\] FULL_REBUILD: compiling [expr {$n_vhdl + $n_sv + $n_v}] of [llength $kept] file(s) $opt_note:"
+    }
     foreach f [concat $vhdl_compile $sv_compile $v_compile] { puts "\[ME\]   $f" }
     if {$vhdl_changed && !$FULL_REBUILD && [llength $vhdl_src] > $n_vhdl} {
       puts "\[ME\] (VHDL changed: recompiling all [llength $vhdl_src] VHDL file(s) - VHDL deps cannot be inferred here)"
@@ -385,7 +403,7 @@ if {$MODE eq "compile"} {
   }
   if {$n_sv > 0} {
     if {[catch {
-      vlog -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD -sv {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$sv_compile
+      vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD -sv {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$sv_compile
     } message]} {
       puts "\n\[ME\] ERROR: SystemVerilog compilation failed - refusing to use a stale library"
       puts "\[ME\] $message"
@@ -394,7 +412,7 @@ if {$MODE eq "compile"} {
   }
   if {$n_v > 0} {
     if {[catch {
-      vlog -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$v_compile
+      vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$v_compile
     } message]} {
       puts "\n\[ME\] ERROR: Verilog compilation failed - refusing to use a stale library"
       puts "\[ME\] $message"

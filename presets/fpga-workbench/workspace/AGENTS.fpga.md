@@ -33,3 +33,10 @@
 10. **长任务的结论与证据落到文件里**:模块级写模块自己的环节目录,工程级统一写工程根的 `doc/`;会话会被
     压缩,文件不会。结果文件保留 `结论:` 那一行;判定词(`PASS`/`FAIL`/`BLOCKED`/`UNVERIFIED`/
     `NOT_APPLICABLE`)的含意见验证技能 `fpga-module-verif` 的那张状态表(唯一权威)。
+11. **机器级设置不写进工程脚本**:Vivado 的 `general.maxThreads`(以及自定义板卡的
+    `board.repoPaths`)放机器级 `<Vivado>/scripts/Vivado_init.tcl` 或用户级
+    `~/.Xilinx/Vivado/Vivado_init.tcl`,它在每个 Vivado 进程(含 `launch_runs` 另起的 run 进程)
+    启动时生效;ModelSim / Questa 的默认值放 `modelsim.ini`(改了会自动要求重编,编译身份里记着它)。
+    `launch_runs -jobs` 管的是并行 run,不是单个 run 的算法线程 —— 这两件事都别在工程 Tcl 里再设一遍:
+    launcher 脚本里设的 `set_param` 传不到 run 进程,只会让人误以为生效了。
+

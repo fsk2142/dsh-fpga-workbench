@@ -567,7 +567,13 @@ for (const [label, pattern] of [
   ["run 模式的集合比对把头文件也算进去", /\[lindex \$cur_parts 4\]/u],
   ["头文件一变 → 全量重编 Verilog/SystemVerilog(依赖推不准)", /set hdr_changed 0/u],
   ["load 是第三个正式模式(不再是「不给模式=GUI」那条路)", /\$MODE ne "compile" && \$MODE ne "run" && \$MODE ne "load"/u],
-  ["用法行给出三个模式", /usage: do run\.do compile\|run\|load/u]
+  ["用法行给出三个模式", /usage: do run\.do compile\|run\|load/u],
+  // 2026-09-24(审查报告:compile configuration fingerprint):编译配置也进 stamp,run 时逐项比对。
+  ["配置身份:仿真器路径", /lappend items "exe=\[info nameofexecutable\]"/u],
+  ["配置身份:ini 路径 + mtime + size", /lappend items "ini_mtime=\[file mtime \$::INI\]"/u],
+  ["配置身份:defines / incdirs / vendor_libs / opt", /lappend items "defines=/u],
+  ["身份写进 stamp", /\{ puts \$stamp_fh "# cfg \$item" \}/u],
+  ["run 模式逐项比对配置身份", /compile configuration changed after the last compile/u]
 ]) {
   check(pattern.test(compileTemplate), label);
 }
@@ -743,12 +749,14 @@ if (vsimProbe.status !== 0) {
     writeFileSync(join(hdrVerif, "tb_foo.sv"), tbSource("tb_foo"));
     const hdrDo = join(hdrVerif, "run.do");
     writeFileSync(hdrDo, bundledRunOnly);
-    const modeStep = (mode) => {
-      const log = join(hdrVerif, `ME-${mode}-hdr.log`);
+    const modeStep = (mode, options = {}) => {
+      const { env = {}, tag = mode, doFile = hdrDo } = options;
+      const log = join(hdrVerif, `ME-${tag}-hdr.log`);
       const fd = openSync(log, "w");
-      const status = spawnSync("vsim", ["-c", "-do", `do ${hdrDo.replace(/\\/gu, "/")} ${mode}; quit -f`], {
+      const status = spawnSync("vsim", ["-c", "-do", `do ${doFile.replace(/\\/gu, "/")} ${mode}; quit -f`], {
         stdio: ["ignore", fd, "ignore"],
-        cwd: hdrVerif
+        cwd: hdrVerif,
+        env: { ...process.env, ...env }
       }).status;
       closeSync(fd);
       return { status, output: existsSync(log) ? readFileSync(log, "utf8") : "" };
@@ -782,6 +790,71 @@ if (vsimProbe.status !== 0) {
       `load 模式:装载成功、不给仿真结论(实际 ${String(step.status)})`,
       step.output.slice(-300)
     );
+
+    // ⑨ 编译配置身份(2026-09-24;审查报告 compile configuration fingerprint):改了任何编译配置都要
+    //    让 run 拒绝 —— 否则"源码一字未动、直接 run"会静默跑在按旧配置编出来的库上(实测形态)。
+    step = modeStep("compile");
+    check(
+      step.status === 0 && /compile identity:/u.test(step.output) && /exe=/u.test(step.output) && /ini_size=/u.test(step.output),
+      `配置身份:compile 把身份写进 stamp 并打印(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    step = modeStep("run");
+    check(
+      step.status === 0 && /compile identity: matches the last compile/u.test(step.output),
+      `配置身份:配置没变时 run 退 0(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    // ① TB_DEFINES 变了(环境变量)
+    step = modeStep("run", { env: { TB_DEFINES: "SAFE_MODE" }, tag: "defines" });
+    check(
+      step.status === 1 && /compile configuration changed after the last compile/u.test(step.output) &&
+        /defines:/u.test(step.output) && /SAFE_MODE/u.test(step.output),
+      `配置身份:改 TB_DEFINES → run 拒绝并点名 defines(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    // ② EXTRA_INCDIRS 变了(脚本旋钮)
+    const incdirDo = join(hdrVerif, "run-incdir.do");
+    writeFileSync(incdirDo, bundledRunOnly.replace(/set EXTRA_INCDIRS\s+\{\}/u, "set EXTRA_INCDIRS  {../rtl}"));
+    check(readFileSync(incdirDo, "utf8") !== bundledRunOnly, "夹具:旋钮 EXTRA_INCDIRS 真被填上了(没填上的话下面那条测成另一回事)");
+    step = modeStep("run", { tag: "incdir", doFile: incdirDo });
+    check(
+      step.status === 1 && /incdirs:/u.test(step.output) && /\.\.\/rtl/u.test(step.output),
+      `配置身份:改 EXTRA_INCDIRS → run 拒绝并点名 incdirs(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    // ③ 换了另一份 modelsim.ini(路径不同就算换配置;这里只要求那份文件存在,内容不参与编译)
+    const otherIni = join(hdrVerif, "mini.ini");
+    writeFileSync(otherIni, "[Library]\n");
+    step = modeStep("run", { env: { MODELSIM_INI: otherIni }, tag: "ini" });
+    check(
+      step.status === 1 && /ini:/u.test(step.output) && /mini\.ini/u.test(step.output),
+      `配置身份:换 modelsim.ini → run 拒绝并点名 ini(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    // ④ 旧版 stamp(没有任何 # cfg 行)不能被当成"配置一致":证明不了配置就要求重编
+    {
+      const oldVerif = join(hdrRoot, "verif-old");
+      mkdirSync(join(oldVerif, "work"), { recursive: true });
+      writeFileSync(join(oldVerif, "tb_foo.sv"), tbSource("tb_foo"));
+      writeFileSync(join(oldVerif, "work", ".fpga-compile-stamp"), "# compiled 2020-01-01T00:00:00\n");
+      const oldDo = join(oldVerif, "run.do");
+      writeFileSync(oldDo, bundledRunOnly);
+      const oldLog = join(oldVerif, "ME-oldstamp.log");
+      const oldFd = openSync(oldLog, "w");
+      const oldStep = spawnSync("vsim", ["-c", "-do", `do ${oldDo.replace(/\\/gu, "/")} run; quit -f`], {
+        stdio: ["ignore", oldFd, "ignore"],
+        cwd: oldVerif,
+        env: { ...process.env }
+      }).status;
+      closeSync(oldFd);
+      const oldOut = existsSync(oldLog) ? readFileSync(oldLog, "utf8") : "";
+      check(
+        oldStep === 1 && /carries no configuration identity/u.test(oldOut),
+        `配置身份:旧版 stamp(没有 # cfg 行)不会被当成配置一致 → run 退 1 并说明(实际 ${String(oldStep)})`,
+        oldOut.slice(-300)
+      );
+    }
   }
 }
 

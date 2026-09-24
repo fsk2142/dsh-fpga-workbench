@@ -28,6 +28,10 @@
 #   .sv/.v/.vhd/.vhdl,头文件根本不进 stamp → run 会把旧 work 判成 current。现在头文件记进 stamp,
 #   且**头文件一变就全量重编 Verilog/SystemVerilog**(与 VHDL 同一条理由:依赖推不准,宁可多编;
 #   只改头文件不涉及 vcom,所以 VHDL 不会因此被全量重编)。
+# 编译身份(compile configuration identity):stamp 里除了每个输入的 mtime/size,还记**配置**
+#   —— 仿真器 / modelsim.ini(路径 + mtime + size)/ TB_DEFINES / EXTRA_INCDIRS / VENDOR_LIBS /
+#   OPT_LEVEL。run 模式重算比对,任何一项变了就退 1 要求重编:否则"改了 defines 直接 run"会静默
+#   跑在按旧配置编出来的库上(实测形态:不报错,结果却是旧配置的)。
 #
 # Console text stays in English because older ModelSim releases write the local
 # code page to transcripts and Chinese gate messages become unreadable.
@@ -238,6 +242,46 @@ foreach lib [split $VENDOR_LIBS " "] {
 
 set STAMP_PATH [file join work ".fpga-compile-stamp"]
 
+# ── compile configuration identity(编译配置身份)─────────────────────────────── #
+# 编译结果不只取决于源码:**用哪个仿真器 / 哪个 modelsim.ini(以及它有没有被改) / TB_DEFINES /
+# EXTRA_INCDIRS / VENDOR_LIBS / OPT_LEVEL** 任何一个变了,work/ 就不再是"当前配置"的产物。
+# 实测踩过的形态:把 TB_DEFINES 从 A 改成 B 直接 run —— 源码一个字节没动,work/ 被判 current,
+# 跑的是按 A 编出来的库,而且**不报错**。所以这些也进 stamp,run 模式重算比对(比的不是 mtime,
+# 是值本身);不一致就退 1 要求重编,绝不静默用旧库。
+# 仿真器身份用 `[info nameofexecutable]`:实测 ModelSim 2020.4 给的是 <安装>/win64/vish.exe ——
+# 换安装目录 / 换 Questa / 升级版本都会变,而库的兼容性正是跟着它走的。
+proc config_identity {} {
+  set items {}
+  lappend items "exe=[info nameofexecutable]"
+  lappend items "ini=$::INI_FWD"
+  if {[file isfile $::INI]} {
+    lappend items "ini_mtime=[file mtime $::INI]"
+    lappend items "ini_size=[file size $::INI]"
+  } else {
+    lappend items "ini_mtime=-"
+    lappend items "ini_size=-"
+  }
+  lappend items "opt=$::OPT_LEVEL"
+  lappend items "defines=[expr {[info exists ::env(TB_DEFINES)] ? $::env(TB_DEFINES) : {}}]"
+  lappend items "incdirs=$::EXTRA_INCDIRS"
+  lappend items "vendor_libs=$::VENDOR_LIBS"
+  return $items
+}
+
+# 把 "key=value" 列表变成 dict,好按 key 逐项比对(缺项 / 多项都要能报出来)。
+proc config_pairs {items} {
+  set out [dict create]
+  foreach item $items {
+    set at [string first "=" $item]
+    if {$at < 0} {
+      dict set out $item ""
+    } else {
+      dict set out [string range $item 0 [expr {$at - 1}]] [string range $item [expr {$at + 1}] end]
+    }
+  }
+  return $out
+}
+
 # ── compile:发现 + **增量**编译,绝不启动仿真 ──────────────────────────────────
 if {$MODE eq "compile"} {
   set parts [collect_sources $RTL_ROOT $VERIF_ROOT]
@@ -363,10 +407,15 @@ if {$MODE eq "compile"} {
   # same-size edit could slip through - that is the documented DSH-10 trade.
   set stamp_fh [open $STAMP_PATH w]
   puts $stamp_fh "# compiled [clock format [clock seconds] -format {%Y-%m-%dT%H:%M:%S}]"
+  # 配置身份(见 config_identity):run 模式会逐项比对,不一致就要求重编。
+  set cfg [config_identity]
+  foreach item $cfg { puts $stamp_fh "# cfg $item" }
   # kept = 编译单元;headers = 只参与新鲜度的 include/宏输入(见文件头"加速三")
   foreach f [concat $kept $headers] { puts $stamp_fh "$f\t[file mtime $f]\t[file size $f]" }
   close $stamp_fh
   puts "\[ME\] compile stamp: $STAMP_PATH ([llength $kept] source(s) + [llength $headers] header(s))"
+  puts "\[ME\] compile identity:"
+  foreach item $cfg { puts "\[ME\]   $item" }
 
   puts "\n\[ME\] COMPILE PASSED: local work/ is ready"
   quit -f -code 0
@@ -390,9 +439,16 @@ set stamp_text [read $stamp_fh]
 close $stamp_fh
 set stale {}
 set stamped {}
+set stamped_cfg {}
 foreach line [split $stamp_text "\n"] {
   set line [string trim $line]
-  if {$line eq "" || [string match "#*" $line]} continue
+  if {$line eq ""} continue
+  # 配置身份行先收走(# cfg <key>=<value>);其余 # 开头的注释直接跳过。
+  if {[string match "# cfg *" $line]} {
+    lappend stamped_cfg [string range $line 6 end]
+    continue
+  }
+  if {[string match "#*" $line]} continue
   lassign [split $line "\t"] path mtime size
   if {![file isfile $path]} {
     lappend stale "$path (gone)"
@@ -403,6 +459,34 @@ foreach line [split $stamp_text "\n"] {
   }
   lappend stamped $path
 }
+# ── 配置身份比对(见 config_identity):值变了就等于换了编译配置,work/ 不再是当前配置的产物 ──
+# 旧版模板写的 stamp 里没有这些行:证明不了配置 → 也算不一致(退 1 要求重编),不静默放行。
+if {[llength $stamped_cfg] == 0} {
+  puts "\n\[ME\] ERROR: this compile stamp carries no configuration identity (written by an older template)."
+  puts "\[ME\] re-run the compile mode: vsim -c -do \"do run.do compile; quit -f\""
+  quit -f -code 1
+}
+set old_cfg [config_pairs $stamped_cfg]
+set now_cfg [config_pairs [config_identity]]
+set cfg_diff {}
+foreach key [lsort [dict keys $old_cfg]] {
+  if {![dict exists $now_cfg $key]} {
+    lappend cfg_diff "$key: was '[dict get $old_cfg $key]' -> now <absent>"
+  } elseif {[dict get $old_cfg $key] ne [dict get $now_cfg $key]} {
+    lappend cfg_diff "$key: was '[dict get $old_cfg $key]' -> now '[dict get $now_cfg $key]'"
+  }
+}
+foreach key [lsort [dict keys $now_cfg]] {
+  if {![dict exists $old_cfg $key]} { lappend cfg_diff "$key: was <absent> -> now '[dict get $now_cfg $key]'" }
+}
+if {[llength $cfg_diff] > 0} {
+  puts "\n\[ME\] ERROR: compile configuration changed after the last compile:"
+  foreach item $cfg_diff { puts "\[ME\]   $item" }
+  puts "\[ME\] the library in work/ was built with a different configuration; refusing to run it."
+  puts "\[ME\] re-run: vsim -c -do \"do run.do compile; quit -f\""
+  quit -f -code 1
+}
+puts "\[ME\] compile identity: matches the last compile ([llength $stamped_cfg] item(s))"
 # E8(item A-3): the per-file check cannot notice a NEWLY ADDED source (it only walks the stamped
 # list). Re-collect with the SAME shared collector and compare SETS first. 头文件也在集合里 ——
 # 新加一个 .svh 同样必须重编,不能被当成"源码没变"。

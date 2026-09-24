@@ -20,11 +20,15 @@
 # 例:125 MHz → -period 8.000;200 MHz → -period 5.000;50 MHz → -period 20.000
 
 # ---- 2) 由主时钟派生的时钟(用 PLL/MMCM 输出时打开对应一条) ---------------- #
-# create_generated_clocks -name -divide_by / derive_pll_clocks 之类的写法按 Vivado 版本选;
-# 常用组合:create_clock 打主时钟 + create_generated_clock 描述 PLL 输出。
+# create_generated_clock -name -divide_by / derive_pll_clocks 之类的写法按 Vivado 版本选;
+# 常用组合:create_clock 打主时钟 + create_generated_clock 描述 PLL 输出(命令名是单数)。
 
-# ---- 3) 异步复位/异步输入:告诉工具不用做时序检查 -------------------------- #
-# set_false_path -from [get_ports rst_n]
+# ---- 3) 异步复位 / CDC:先看结构,再只给该断的路径写例外 -------------------- #
+# 异步输入**不等于**"不用做时序检查"。先确认复位同步器 / CDC 结构(打拍、握手、异步 FIFO),
+# 再只给确实跨域的那几条路径写例外;笼统地 false 掉整个 rst_n 会把真问题一起关掉(工具全绿、时序是错的)。
+# 确认结构后再按目标写,例如:
+# set_false_path -from [get_ports rst_n]        ;# 仅在已确认复位同步器/无时序意图时使用
+# set_max_delay -datapath_only -from [get_ports rst_n] -to [get_pins <第一级同步器/D>]
 
 # ---- 4) 输入/输出延时(以原理图上的外部器件时序为准) ---------------------- #
 # set_input_delay  -clock clk -max 3.000 [get_ports {din[*]}]

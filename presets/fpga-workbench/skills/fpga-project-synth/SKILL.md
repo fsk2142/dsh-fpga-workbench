@@ -32,6 +32,11 @@ launch_runs synth_1 -jobs <N>
 wait_on_run synth_1
 ```
 
+**先看 run 是不是已经新鲜**:`get_property STATUS/PROGRESS/NEEDS_REFRESH [get_runs synth_1]` —— 已经
+`Complete!` 且 `NEEDS_REFRESH=0` 说明源码没动,**直接 `open_run synth_1` 出报告就行,不必重跑**
+(分类模板 `synthesis/vivado_project_synthesis.tcl` 的 `RESET_POLICY=auto` 就是这么做的;
+要拿一次干净结果再 `RESET_POLICY always` 或手工 `reset_run synth_1`)。
+
 1. 跑综合,确认 `synth_1` 状态是 Complete(或如实记失败原因)
 2. 看综合日志:IP 有没有起来、有没有多驱动/推断失败/严重 warning
 3. 收**资源占用**与综合后**时序摘要**(这里只是**先看一眼**,门禁仍归 `fpga-project-timing`)

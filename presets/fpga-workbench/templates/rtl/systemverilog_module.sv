@@ -105,11 +105,13 @@ endfunction
 //    Task Module                                                                   //
 //==================================================================================//
 // TODO: replace with module-specific tasks (if needed)
+// Synthesis rules for this section: zero-time, synthesizable helpers only.
+// No #delay, @(event), wait, force/release, file I/O or interface stimulus -
+// those are testbench behaviour and belong in verif/, not in design RTL.
 task automatic do_one_beat (
     input       logic   [PIXEL_W-1:0]                               beat
     );
-    // TODO: replace with module-specific procedural body
-    // (example: clock/reset wait, drive interface, etc.)
+    // TODO: replace with module-specific procedural body (combinational / zero-time only)
 endtask
 
 //==================================================================================//
@@ -131,6 +133,11 @@ endtask
 //    Assertions                                                                    //
 //==================================================================================//
 // --- reset actually clears the FSM (example; replace with module-specific assertions) ---
+// Guarded with `ifndef SYNTHESIS: Vivado synthesis ignores concurrent assertions anyway (it reports
+// "ignoring concurrent assertion"), and only the simulator should evaluate them. Synthesis tools
+// define SYNTHESIS; simulators do not, so the assertion stays live in simulation.
+// (Purpose/Trigger/Failure 必须紧贴断言写 —— 检查器只往上收**连续**的 // 注释块。)
+`ifndef SYNTHESIS
 // Purpose : assert that an asserted rst really clears the state register next cycle
 //           (a tautology like `rst |-> rst` would pass no matter how the logic is wired).
 // Trigger : every posedge clk with rst asserted.
@@ -138,6 +145,7 @@ endtask
 // TODO: replace with module-specific design assertions (FIFO no overflow / FSM one-hot / handshake).
 assert property (@( posedge clk ) rst |=> state_r == ST_IDLE)
     else $error("reset did not clear the FSM state");
+`endif
 
 // --- example: FIFO no-overflow (illustrative; remove if not applicable) ---
 // Purpose : flag if write pointer catches read pointer while full.

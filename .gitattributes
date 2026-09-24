@@ -9,5 +9,8 @@ lib/** linguist-generated=false
 
 # 自带模板是"格式规范"本身:换行符被 git 改写就等于悄悄改了规范。
 # 源文件是 LF(取自 FPGAWorkFlowKit 的模块模板),这里钉住,别让 core.autocrlf 翻成 CRLF。
+# .tcl / .do 同理(2026-09-24 补齐):否则一 checkout 就整篇换行符变化,模板"规范"被悄悄改掉。
 *.sv text eol=lf
 *.xdc text eol=lf
+*.tcl text eol=lf
+*.do text eol=lf

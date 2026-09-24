@@ -4,6 +4,7 @@
 # Usage (run from the module verif/ directory, or a project's root sim/):
 #   vsim -c -do "do run.do compile; quit -f"
 #   vsim -c -do "do run.do run;     quit -f"
+#   vsim    -do "do run.do load"      # GUI session: same freshness gate, then load only
 # The mode argument is required: guessing it would silently do the wrong thing.
 #
 # 为什么合成一份(用户口径 2026-09-23):原来 compile/run 两份模板有 41 行逐字重复
@@ -22,6 +23,11 @@
 #   optimizations";modelsim.ini 的 VoptFlow = 1(优化流程本来就开)。想退回工具默认就把
 #   OPT_LEVEL 改成 {},完全不优化改成 {-O0}。+acc=rn 是波形可见性需要的;只求速度可以把
 #   VOPT_ARGS 收窄(可见性随之变差)。速度提升幅度取决于设计与测试平台,本模板不宣称倍数。
+# 加速三:**头文件(.svh/.vh)进新鲜度集合,但不参与编译**。宏/include 在 vlog 那一步就已经展开,
+#   头文件改了却不重编包含它的模块,work/ 就成了"对不上源码的旧库"且**不报错**;而旧版采集器只认
+#   .sv/.v/.vhd/.vhdl,头文件根本不进 stamp → run 会把旧 work 判成 current。现在头文件记进 stamp,
+#   且**头文件一变就全量重编 Verilog/SystemVerilog**(与 VHDL 同一条理由:依赖推不准,宁可多编;
+#   只改头文件不涉及 vcom,所以 VHDL 不会因此被全量重编)。
 #
 # Console text stays in English because older ModelSim releases write the local
 # code page to transcripts and Chinese gate messages become unreadable.
@@ -54,14 +60,15 @@ set RESULT_LOG     {sim.log}
 if {![info exists 1]} {
   puts "\n\[ME\] ERROR: missing mode argument."
   # 不写 [info script]:在 `do file.do` 环境下它取到的是 vsim 自己,不是脚本名(实测)。
-  puts "\[ME\] usage: do run.do compile|run"
+  puts "\[ME\] usage: do run.do compile|run|load"
   puts "\[ME\]   compile - discover and compile sources into local work/ (never simulates)"
   puts "\[ME\]   run     - run the existing work/ library (never compiles)"
+  puts "\[ME\]   load    - freshness-check and load work/ for a GUI session (never runs, never quits)"
   quit -f -code 2
 }
 set MODE [string tolower $1]
-if {$MODE ne "compile" && $MODE ne "run"} {
-  puts "\n\[ME\] ERROR: unknown mode '$1' (expected compile or run)"
+if {$MODE ne "compile" && $MODE ne "run" && $MODE ne "load"} {
+  puts "\n\[ME\] ERROR: unknown mode '$1' (expected compile, run or load)"
   quit -f -code 2
 }
 
@@ -86,10 +93,10 @@ if {[file type $RTL_ROOT] eq "link"} {
 set ::SKIPPED_STUBS {}
 set ::IP_PREFIX "[string map {\\ /} [file normalize [file join $RTL_ROOT "ip"]]]/"
 
-proc collect_hdl {dir} {
+proc collect_hdl {dir {exts {.sv .v .vhd .vhdl}}} {
   set result {}
   if {![file isdirectory $dir]} { return $result }
-  foreach ext {.sv .v .vhd .vhdl} {
+  foreach ext $exts {
     foreach f [lsort [glob -nocomplain -directory $dir -type f *$ext]] {
       if {[string match "*_stub.*" [file tail $f]]
           && [string first $::IP_PREFIX [string map {\\ /} $f]] == 0} {
@@ -106,7 +113,7 @@ proc collect_hdl {dir} {
       puts "\[ME\] SKIP linked dir (not followed): $sub"
       continue
     }
-    foreach f [collect_hdl $sub] { lappend result $f }
+    foreach f [collect_hdl $sub $exts] { lappend result $f }
   }
   return $result
 }
@@ -135,7 +142,8 @@ proc collect_tb {root pattern} {
 
 # **两个模式共用同一套采集规则**(这就是合并的收益):rtl/ + verif/ 的 HDL,同名文件只有内容
 # 完全一致才允许去重,内容不同直接拒绝 —— 采集清单与新鲜度复核不可能再对不上。
-# 返回 {kept vhdl sv v} 四元组。
+# 返回 {kept vhdl sv v headers} 五元组:**headers 只进新鲜度集合,不交给 vlog**
+# (.svh/.vh 是 include/宏的输入,单独编译它们没有意义;变了就全量重编,见文件头"加速三")。
 proc collect_sources {rtl_root verif_root} {
   set rtl_src   [collect_hdl $rtl_root]
   set verif_src [collect_hdl $verif_root]
@@ -172,7 +180,12 @@ proc collect_sources {rtl_root verif_root} {
       lappend v_src $f
     }
   }
-  return [list $kept $vhdl_src $sv_src $v_src]
+  # 头文件:只收进新鲜度集合(不比对内容、不进 vlog)。同名不同内容的两份头文件不在这里判重 ——
+  # `include 到底拿到哪一份由 +incdir+ 搜索顺序决定,那本来就不是本模板能替用户拍板的事。
+  set headers [lsort -unique [concat \
+    [collect_hdl $rtl_root {.svh .vh}] \
+    [collect_hdl $verif_root {.svh .vh}]]]
+  return [list $kept $vhdl_src $sv_src $v_src $headers]
 }
 
 # 读上一次的编译 stamp:返回 path -> {mtime size}。没有/读不了就当空,于是全部算"变动"。
@@ -232,6 +245,7 @@ if {$MODE eq "compile"} {
   set vhdl_src [lindex $parts 1]
   set sv_src [lindex $parts 2]
   set v_src [lindex $parts 3]
+  set headers [lindex $parts 4]
 
   if {[llength $kept] == 0} {
     puts "\n\[ME\] ERROR: no HDL source found under rtl/"
@@ -261,9 +275,10 @@ if {$MODE eq "compile"} {
   }
 
   # 增量判定:与上次 stamp 比 (mtime, size)。work/ 不在 → stamp 读不到 → 全都算变动。
+  # 头文件也算在内:它们虽然不编译,但决定"work/ 还算不算当前源码的库"。
   set previous [read_stamp $STAMP_PATH]
   set changed {}
-  foreach f $kept {
+  foreach f [concat $kept $headers] {
     if {![dict exists $previous $f]} { lappend changed $f; continue }
     set prev [dict get $previous $f]
     if {[lindex $prev 0] != [file mtime $f] || [lindex $prev 1] != [file size $f]} { lappend changed $f }
@@ -271,17 +286,29 @@ if {$MODE eq "compile"} {
   # VHDL 一变 → 全量重编 vcom(依赖推不准,宁可多编,不能拿过期的库)。
   set vhdl_changed 0
   foreach f $vhdl_src { if {[lsearch -exact $changed $f] >= 0} { set vhdl_changed 1; break } }
+  # 头文件(.svh/.vh)一变 → 全量重编 Verilog/SystemVerilog:谁 include 了它,在 Tcl 侧推不出来。
+  set hdr_changed 0
+  foreach f $headers { if {[lsearch -exact $changed $f] >= 0} { set hdr_changed 1; break } }
 
   set fresh_work 0
   if {![file isdirectory work]} { vlib work; set fresh_work 1 }
-  if {$FULL_REBUILD || $fresh_work} {
+
+  # VHDL:只有 VHDL 变了 / FULL_REBUILD / 新库才全量;头文件与 vcom 无关,不牵连它。
+  if {$FULL_REBUILD || $fresh_work || $vhdl_changed} {
+    set vhdl_compile $vhdl_src
+  } else {
+    set vhdl_compile {}
+  }
+  if {$FULL_REBUILD} { puts "\[ME\] FULL_REBUILD=1: compiling every source" }
+  if {$hdr_changed && !$FULL_REBUILD} {
+    puts "\[ME\] header (.svh/.vh) changed: recompiling every Verilog/SystemVerilog source"
+    puts "\[ME\] (which file includes which header cannot be inferred here; VHDL is untouched)"
+  }
+
+  if {$FULL_REBUILD || $fresh_work || $hdr_changed} {
     set sv_compile $sv_src
     set v_compile  $v_src
-    set vhdl_compile $vhdl_src
-    if {$FULL_REBUILD} { puts "\[ME\] FULL_REBUILD=1: compiling every source" }
   } else {
-    set vhdl_compile $vhdl_src
-    if {!$vhdl_changed} { set vhdl_compile {} }
     set sv_compile {}
     set v_compile  {}
     foreach f $sv_src { if {[lsearch -exact $changed $f] >= 0} { lappend sv_compile $f } }
@@ -336,9 +363,10 @@ if {$MODE eq "compile"} {
   # same-size edit could slip through - that is the documented DSH-10 trade.
   set stamp_fh [open $STAMP_PATH w]
   puts $stamp_fh "# compiled [clock format [clock seconds] -format {%Y-%m-%dT%H:%M:%S}]"
-  foreach f $kept { puts $stamp_fh "$f\t[file mtime $f]\t[file size $f]" }
+  # kept = 编译单元;headers = 只参与新鲜度的 include/宏输入(见文件头"加速三")
+  foreach f [concat $kept $headers] { puts $stamp_fh "$f\t[file mtime $f]\t[file size $f]" }
   close $stamp_fh
-  puts "\[ME\] compile stamp: $STAMP_PATH"
+  puts "\[ME\] compile stamp: $STAMP_PATH ([llength $kept] source(s) + [llength $headers] header(s))"
 
   puts "\n\[ME\] COMPILE PASSED: local work/ is ready"
   quit -f -code 0
@@ -376,8 +404,10 @@ foreach line [split $stamp_text "\n"] {
   lappend stamped $path
 }
 # E8(item A-3): the per-file check cannot notice a NEWLY ADDED source (it only walks the stamped
-# list). Re-collect with the SAME shared collector and compare SETS first.
-set cur_sorted [lsort -unique [lindex [collect_sources $RTL_ROOT $VERIF_ROOT] 0]]
+# list). Re-collect with the SAME shared collector and compare SETS first. 头文件也在集合里 ——
+# 新加一个 .svh 同样必须重编,不能被当成"源码没变"。
+set cur_parts [collect_sources $RTL_ROOT $VERIF_ROOT]
+set cur_sorted [lsort -unique [concat [lindex $cur_parts 0] [lindex $cur_parts 4]]]
 set stp_sorted [lsort -unique $stamped]
 if {$cur_sorted ne $stp_sorted} {
   puts "\n\[ME\] ERROR: the source set changed since the last compile - re-run the compile mode:"
@@ -415,6 +445,22 @@ if {$TOP_OVERRIDE ne ""} {
 
 # 加速:vopt 参数 = VOPT_ARGS + OPT_LEVEL(默认 "+acc=rn -O5")。作为**一个**参数交给 -voptargs。
 set VOPT_ALL [string trim "$VOPT_ARGS $OPT_LEVEL"]
+
+# ── load:同一个新鲜度门,只把设计装进 GUI 会话;绝不 run -all、绝不退出 ──────────────
+# 用法是 `vsim -do "do run.do load"`(**不要** -c):父会话是 GUI,这里的 `vsim` 就是"装载设计"这条
+# 命令,所以波形/库映射/顶层与 run 模式完全同源。校验没过就退 1,不开一个不可信的 GUI。
+if {$MODE eq "load"} {
+  puts "\[ME\] vsim load (GUI): top=$TOP voptargs={$VOPT_ALL}"
+  if {[catch {
+    vsim -modelsimini $INI_FWD -lib work {*}$vendor_args -voptargs=$VOPT_ALL $TOP
+  } message]} {
+    puts "\n\[ME\] ERROR: vsim failed to load the design: $message"
+    quit -f -code 1
+  }
+  puts "\n\[ME\] DESIGN LOADED: $TOP (no run -all, no quit - drive the simulation from the GUI)"
+  return
+}
+
 puts "\[ME\] vsim: top=$TOP voptargs={$VOPT_ALL}"
 if {[catch {
   vsim -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG -voptargs=$VOPT_ALL $TOP

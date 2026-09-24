@@ -4,6 +4,8 @@
 # 跑法(**必须在模块根下跑**,`rtl/` 与 `synth/` 就在当前目录):
 #   & "<综合器路径>" -mode batch -source synth/run_synth.tcl \
 #       -log synth/run_synth.log -journal synth/run_synth.jou
+# 想把主日志换个位置/名字:改下面的 `MAIN_LOG` 旋钮,或给 launcher 加 `-tclargs <日志路径>`
+# (与工程综合同口径)。**别指望脚本去读 `-log` 参数** —— 实测 `$argv` 里没有它(见下面第 4 层)。
 #
 # **`-mode batch` 必须加**:不加会拉起图形界面、停在那儿等人点,无人值守跑不下去。
 #
@@ -257,14 +259,19 @@ if {![regexp {^[0-9]+$} $crit_n]} {
 # 而主日志里躺着一条 filemgmt 20-742(can not be validated);只报消息计数会漏掉它。
 # 这些**不一定致命**(多数是建工程阶段的提示),所以这里**逐条列出来 + 计数**,不直接判死;
 # 按 skill 的判据,出现的任何 CRITICAL WARNING 都要在人/AI 的结论里逐条说明来源。
-# (路径从 `-log` 参数取;取不到就退回 `synth/run_synth.log` —— 本脚本约定在模块根下跑。)
-set mainlog ""
-foreach {flag value} $argv {
-  if {$flag eq "-log"} { set mainlog $value }
+#
+# 主日志路径三条来源(与工程综合 `vivado_project_synthesis.tcl` 同口径):
+#   ① 旋钮 MAIN_LOG(想固定就改下面那一行)  ② `-tclargs` 的第一个参数(像 .log 路径就用)
+#   ③ 本脚本的约定路径 `synth/run_synth.log`(脚本本来就约定在模块根下跑)。
+# **不要**再从普通 `$argv` 里找 `-log`(2026-09-24 实测:`vivado -mode batch -source x.tcl -log y.log`
+# 时 `$argv` 是**空**的 —— `-log` 是 launcher 参数,不进 Tcl 的 argv,那段解析是死代码)。
+set MAIN_LOG ""
+if {$MAIN_LOG eq "" && [llength $argv] > 0} {
+  set first [lindex $argv 0]
+  if {[string match "*.log" $first] || [file isfile $first]} { set MAIN_LOG $first }
 }
-if {$mainlog eq "" || ![file exists $mainlog]} {
-  set mainlog [file join [pwd] "synth" "run_synth.log"]
-}
+if {$MAIN_LOG eq ""} { set MAIN_LOG [file join [pwd] "synth" "run_synth.log"] }
+set mainlog $MAIN_LOG
 set main_crits {}
 set MAIN_LOG_SEEN 0
 if {[file exists $mainlog]} {

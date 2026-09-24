@@ -29,13 +29,30 @@ description: 在 FPGA 工程做布局布线与出 bitstream 时用:synth 之后�
 
 ## 本环节要跑的命令
 
-GUI 亦可,但**批处理才留下可复现命令原文**:
+GUI 亦可,但**批处理才留下可复现命令原文**。两段各管一件事(分类模板
+`implementation/vivado_implementation.tcl` 与 `bitstream/vivado_bitstream.tcl` 就是这两段):
 
 ```tcl
+# ① 实现:跑到 route_design 为止(不写 bitstream),并跑 DRC
 open_project prj/<工程>
+launch_runs impl_1 -to_step route_design -jobs <N>
+wait_on_run impl_1
+open_run impl_1
+report_drc -file doc/impl_drc.rpt          ;# DRC 门:Error 级必须先处理
+report_route_status -file doc/impl_route_status.rpt
+report_utilization -file doc/impl_utilization.rpt
+report_timing_summary -file doc/impl_timing.rpt
+
+# ② 出 bitstream:从**同一份已完成的 impl_1 继续**,不重新 place/route
 launch_runs impl_1 -to_step write_bitstream -jobs <N>
 wait_on_run impl_1
 ```
+
+- 实现阶段**不** `write_bitstream`(那是②的事):职责分开,才能单独重跑其中一段。
+- ② 之前确认 `impl_1` 是 `Complete!` 且 `NEEDS_REFRESH=0`;**源码在实现之后又改过就别继续出 bit**
+  —— 那要么拿旧布局布线交差,要么让 Vivado 偷偷重跑一遍实现,两条都不行(回①重跑)。
+- `impl_1` 上可以开 `set_property AUTO_INCREMENTAL_CHECKPOINT 1 [get_runs impl_1]`:小改 RTL 时复用
+  上一轮 place/route(Vivado 自己判断值不值得)。**正式出图建议关掉**(设 0)拿一次干净结果。
 
 确认 `write_bitstream Complete` 后取:
 
@@ -59,8 +76,8 @@ bit/<顶层>.ltx
 
 ## 判据
 
-- **PASS**:impl + bitstream 跑完,DRC 无必须处理的 Critical 问题,bit 已拷入 `bit/`。
-  模板日志的 `IMPLEMENTATION_OUTPUT_GENERATED` 只说明工具跑完出了文件,**不是**工程 PASS
+- **PASS**:impl 跑到 route、**DRC 无 Error 级项**、bitstream 出完,bit 已拷入 `bit/`。
+  模板日志的 `IMPLEMENTATION_ROUTED` / `BITSTREAM_OUTPUT_GENERATED` 只说明工具跑完出了东西,**不是**工程 PASS;
   资源与时序摘要拿得到
 - **FAIL**:实现 error;DRC 有必须处理项;布线失败或拥塞严重
 - **BLOCKED**:工程打不开 / 器件不对 / 约束或 IP 不齐跑不下去

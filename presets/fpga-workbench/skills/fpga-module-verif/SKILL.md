@@ -166,9 +166,16 @@ try {
 
 ## 第三步:看波形(用户要看时)
 
-批处理只留日志与数据文件,人工排查需要波形窗口。**用已经确认过的 `verif/run.do` 起 GUI(同一个文件,不给模式就是交互装载)**
-(XSim 用 `xelab` 起好的那个 snapshot 起 GUI)—— 库映射、源码集合与顶层都由那份脚本决定,
-另起一次手工加载必然少编东西。**不要在 `verif/` 里直接开 GUI 加载设计**:TB 在时刻 0 会以
+批处理只留日志与数据文件,人工排查需要波形窗口。**用已经确认过的 `verif/run.do` 的第三个模式起 GUI**:
+
+```powershell
+& "<仿真器路径>" -do "do run.do load"     # 注意:**不要** -c(要的就是 GUI 会话)
+```
+
+`load` 走的是**同一个新鲜度门 + 同一份库映射 + 同一个顶层**(`run` 模式怎么算的就怎么算),只是装载完
+**不 `run -all`、也不退出** —— 波形、`add wave`、`run 100ns`、`restart` 都由你在窗口里驱动;
+校验没过(work/ 过期、多 TB 没给 TOP)它会退 1,不会给你开一个不可信的 GUI。
+(XSim 用 `xelab` 起好的那个 snapshot 起 GUI。)**不要在 `verif/` 里直接开 GUI 加载设计**:TB 在时刻 0 会以
 写方式打开它的 dump 文件,光是加载设计就会把那几个文件清零。
 
 - 需要**文本形态**波形(写进报告或供模型读取)用工具自带的 `wlf2vcd`:
@@ -330,7 +337,7 @@ FAIL);② `verif/*.md` / `synth/*.md` 里引用的路径是否都在(缺了 → 
 | 起仿真脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run --template "<仿真脚本模板路径>"`(编译与运行同一份,只起一次) | 第二步 |
 | 起比对脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp` | 第四步 |
 | 跑出来 | 按选中的仿真器:ModelSim / QuestaSim 依次执行 `do run.do compile`、`do run.do run`(在 `verif/` 下),选了 XSim 就是 `xvlog`/`xelab`/`xsim` 三步 | 第二步 |
-| 看波形 | 用已经确认过的 `verif/run.do` 起 GUI(XSim 用它的 snapshot),不另起一套加载 | 第三步 |
+| 看波形 | 用已经确认过的 `verif/run.do` 起 GUI:`& "<仿真器路径>" -do "do run.do load"`(不加 `-c`;XSim 用它的 snapshot),不另起一套加载 | 第三步 |
 | **核证据路径** | `node "<自带命令目录>\module\module-report-check.mjs" <模块根>` | 产物(写 `PASS` 之前) |
 
 比对脚本按 spec 约定的格式自己写或复用参考模型,不是一条固定命令 —— 判法见第四步。

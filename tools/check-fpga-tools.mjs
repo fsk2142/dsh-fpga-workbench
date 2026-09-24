@@ -193,6 +193,23 @@ check(templateRtl.length === 0, "自带 RTL 模板过检查器", templateRtl.map
 const templateTb = blocking(join(TEMPLATES, "simulation", "testbench", "systemverilog_testbench.sv"), true);
 check(templateTb.length === 0, "自带测试平台模板过检查器", templateTb.map((i) => i.message).join("; "));
 
+// 2026-09-24(审查报告 T-03/T-13):并发断言必须只在仿真里活,Vivado 合成对它是"忽略"
+// (真机 2025.2 实测:`WARNING: [Synth 8-2898] ignoring concurrent assertion`,rc=0)。包 `ifndef
+// SYNTHESIS` 后合成不再报这条警告,ModelSim 不定义 SYNTHESIS → 仿真里断言照旧生效。
+{
+  const rtlSource = readFileSync(join(TEMPLATES, "rtl", "systemverilog_module.sv"), "utf8");
+  check(
+    /^`ifndef SYNTHESIS[\s\S]{0,600}?assert property[\s\S]{0,200}?`endif/mu.test(rtlSource),
+    "RTL 模板的并发断言包在 `ifndef SYNTHESIS 里(仿真照旧生效,合成不再吃那条 ignore 警告)"
+  );
+  check(
+    /zero-time, synthesizable helpers only/u.test(rtlSource) &&
+      /No #delay, @\(event\), wait, force\/release, file I\/O or interface stimulus/u.test(rtlSource) &&
+      !/example: clock\/reset wait, drive interface/u.test(rtlSource),
+    "RTL 模板的 Task 段只允许零时间可综合辅助(不再怂恿往里写时钟/复位等待与接口激励)"
+  );
+}
+
 // 分类模板是唯一来源；旧的六份平铺模板不得继续存在，否则技能/工具迟早又会走回旧入口。
 const retiredFlatTemplates = ["rtl.sv", "tb.sv", "constraints.xdc", "comp.py", "run_synth.tcl", "run.do"];
 check(
@@ -300,6 +317,19 @@ for (const [key, file] of [
     `${key} 内置 XDC 保留了**注释示例**,让人知道该写成什么样`
   );
 }
+// 2026-09-24(审查报告 T-15/T-16):注释里的命令名与语义都要经得起 AI 照抄。
+{
+  const projectXdc = readFileSync(categorizedTemplates["project-constraints"], "utf8");
+  check(
+    !/create_generated_clocks/u.test(projectXdc) && /create_generated_clock\b/u.test(projectXdc),
+    "工程 XDC 注释用的是真命令名 create_generated_clock(单数;复数那条命令不存在)"
+  );
+  check(
+    /异步输入\*\*不等于\*\*[\s\S]{0,20}不用做时序检查/u.test(projectXdc) &&
+      /先确认复位同步器/u.test(projectXdc),
+    "工程 XDC 不再把「异步复位/异步输入」笼统说成不用做时序检查(要先确认同步器/CDC 结构)"
+  );
+}
 check(
   Object.values(categorizedTemplates).every((path) => existsSync(path)),
   "内置模板都存在(模块与工程的综合/约束各一份;编译与运行合并后同一份路径只算一份)",
@@ -318,6 +348,9 @@ const compileTemplate = executableTcl(categorizedTemplates.compile);
 const runTemplate = executableTcl(categorizedTemplates.run);
 const synthesisTemplate = executableTcl(categorizedTemplates.synthesis);
 const implementationTemplate = executableTcl(categorizedTemplates.implementation);
+const bitstreamTemplate = executableTcl(categorizedTemplates.bitstream);
+// 工程综合是**另一份**文件(module 版在模块根跑、自己建工程);下面复用策略的断言钉在工程版上。
+const projectSynthesisTemplate = executableTcl(categorizedTemplates["project-synthesis"]);
 const programmingTemplate = executableTcl(categorizedTemplates.programming);
 // 编译与运行合并成一份之后(用户口径 2026-09-23),"只做一件事"改成**按模式分界**的结构断言:
 //   · 编译命令(vcom -quiet / vlog -quiet)全部落在 compile 段内;
@@ -340,10 +373,26 @@ check(
     !/\bplace_design\b|\broute_design\b|\bwrite_bitstream\b|launch_runs\s+impl_1/u.test(synthesisTemplate),
   "Vivado 综合模板在综合后停止"
 );
+// 2026-09-24(审查报告 T-04/T-05/T-06/T-07):工程三件套各管一段 —— 综合可复用已有 run、
+// 实现跑到 route + 真跑 DRC(不写 bitstream)、bitstream 只做 step continuation(不重跑实现)。
 check(
-  /\bopen_checkpoint\b/u.test(implementationTemplate) && /\bplace_design\b/u.test(implementationTemplate) &&
-    /\broute_design\b/u.test(implementationTemplate) && !/\bsynth_design\b|\bprogram_hw_devices\b/u.test(implementationTemplate),
-  "Vivado 实现模板读取已有综合结果，不调用综合或下载"
+  /RESET_POLICY/u.test(projectSynthesisTemplate) && /NEEDS_REFRESH/u.test(projectSynthesisTemplate) &&
+    /set REUSED 0/u.test(projectSynthesisTemplate) &&
+    !/set RESET_RUN/u.test(projectSynthesisTemplate),
+  "工程综合按 RESET_POLICY=auto 复用新鲜 run(不再每次 reset_run 重跑)"
+);
+check(
+  /\bopen_project\b/u.test(implementationTemplate) && /-to_step\s+route_design/u.test(implementationTemplate) &&
+    /\breport_drc\b/u.test(implementationTemplate) && /\bget_drc_violations\b/u.test(implementationTemplate) &&
+    // 禁的是**调用**(行首语句),不是提示文字:`puts "... write_bitstream escalates ..."` 这种说明必须留着。
+    !/^\s*(?:synth_design|program_hw_devices|write_bitstream|open_checkpoint)\b/mu.test(implementationTemplate),
+  "Vivado 实现模板走 Project Mode 到 route_design + DRC 门,不写 bitstream、不读 DCP、不下载"
+);
+check(
+  /\bopen_project\b/u.test(bitstreamTemplate) && /-to_step\s+write_bitstream/u.test(bitstreamTemplate) &&
+    /NEEDS_REFRESH/u.test(bitstreamTemplate) &&
+    !/^\s*(?:synth_design|place_design|route_design)\b/mu.test(bitstreamTemplate),
+  "Vivado bitstream 模板只做 step continuation(不重新 place/route,也不综合)"
 );
 check(
   /\bprogram_hw_devices\b/u.test(programmingTemplate) &&
@@ -351,7 +400,7 @@ check(
   "Vivado 下载模板只使用已有 bitstream"
 );
 check(
-  [compileTemplate, runTemplate, synthesisTemplate, implementationTemplate, programmingTemplate]
+  [compileTemplate, runTemplate, synthesisTemplate, implementationTemplate, bitstreamTemplate, programmingTemplate]
     .every((source) => /\berror\b/iu.test(source)),
   "分类脚本缺少必需事实时都会明确失败"
 );
@@ -510,6 +559,33 @@ const bundledRunOnly = bundledRunDoExists ? readFileSync(bundledRunDoPath, "utf8
 for (const marker of ["*_stub.*", "onfinish stop", "quit -f -code 1", "ALL TESTS PASSED"]) {
   check(bundledRunDo.includes(marker), `合并模板里有「${marker}」`);
 }
+// 2026-09-24(审查报告 T-02 / T-09):两处契约改动,断言钉在**可执行**文本上(注释里也会出现
+// .svh/.vh 和 load 这些词,拿注释喂饱断言等于没测)。
+for (const [label, pattern] of [
+  ["头文件(.svh/.vh)进采集:只进新鲜度集合,不参与编译", /collect_hdl \$rtl_root \{\.svh \.vh\}/u],
+  ["头文件写进 compile stamp(不再只记 .sv/.v/.vhd/.vhdl)", /foreach f \[concat \$kept \$headers\]/u],
+  ["run 模式的集合比对把头文件也算进去", /\[lindex \$cur_parts 4\]/u],
+  ["头文件一变 → 全量重编 Verilog/SystemVerilog(依赖推不准)", /set hdr_changed 0/u],
+  ["load 是第三个正式模式(不再是「不给模式=GUI」那条路)", /\$MODE ne "compile" && \$MODE ne "run" && \$MODE ne "load"/u],
+  ["用法行给出三个模式", /usage: do run\.do compile\|run\|load/u]
+]) {
+  check(pattern.test(compileTemplate), label);
+}
+{
+  // load 必须在 `run -all` **之前** return:否则 GUI 会话会被 batch 的 run/quit 逻辑接管。
+  // 锚点用**语句形态**(\nrun -all):load 分支的提示文字里也写着 "no run -all",不能拿它当锚点。
+  const loadAt = compileTemplate.indexOf('if {$MODE eq "load"}');
+  const loadReturnAt = loadAt < 0 ? -1 : compileTemplate.indexOf("return", loadAt);
+  const runAllAt = compileTemplate.indexOf("\nrun -all");
+  check(
+    loadAt > 0 && loadReturnAt > loadAt && runAllAt > loadReturnAt,
+    `load 模式只装载:在该分支内 return,永远走不到 run -all(load@${String(loadAt)} return@${String(loadReturnAt)} run-all@${String(runAllAt)})`
+  );
+  check(
+    compileTemplate.includes("vsim -modelsimini $INI_FWD") && !/MODE eq "load"[\s\S]{0,400}?vsim -c /u.test(compileTemplate),
+    "load 的 vsim 调用不带 -c(父会话才是 GUI;带 -c 会变成新的批处理会话)"
+  );
+}
 
 // ── run.do 的"不替你猜":多 TB 不给 TOP → 拒绝;同名文件内容不同 → 拒绝 ────────────────
 //
@@ -651,6 +727,62 @@ if (vsimProbe.status !== 0) {
       && dupError.details.some((line) => line.includes("verif/foo.sv")),
     `同名不同内容那条在错误里把两个路径都列出来了(实际续行 ${dupError.details.length} 条)`
   );
+
+  // ⑦ 头文件(.svh)进新鲜度(2026-09-24;审查报告 T-02):宏在 vlog 那一步就展开了,头文件改了却
+  //    不重编包含它的模块 → work/ 成了"对不上源码的旧库"且**不报错**。旧采集器只认
+  //    .sv/.v/.vhd/.vhdl,头文件根本不进 stamp → run 会把过期 work/ 判成 current。
+  //    夹具把头文件放 verif/(= vlog 的当前目录),这样 ```include 不需要 +incdir+ 也能找到。
+  {
+    const hdrRoot = join(simRoot, "hdr");
+    const hdrVerif = join(hdrRoot, "verif");
+    mkdirSync(join(hdrRoot, "rtl"), { recursive: true });
+    mkdirSync(hdrVerif, { recursive: true });
+    const hdrFile = join(hdrVerif, "defs.svh");
+    writeFileSync(join(hdrRoot, "rtl", "foo.sv"), '`include "defs.svh"\nmodule foo; localparam int W = `DEF_W; endmodule\n');
+    writeFileSync(hdrFile, "`define DEF_W 8\n");
+    writeFileSync(join(hdrVerif, "tb_foo.sv"), tbSource("tb_foo"));
+    const hdrDo = join(hdrVerif, "run.do");
+    writeFileSync(hdrDo, bundledRunOnly);
+    const modeStep = (mode) => {
+      const log = join(hdrVerif, `ME-${mode}-hdr.log`);
+      const fd = openSync(log, "w");
+      const status = spawnSync("vsim", ["-c", "-do", `do ${hdrDo.replace(/\\/gu, "/")} ${mode}; quit -f`], {
+        stdio: ["ignore", fd, "ignore"],
+        cwd: hdrVerif
+      }).status;
+      closeSync(fd);
+      return { status, output: existsSync(log) ? readFileSync(log, "utf8") : "" };
+    };
+    let step = modeStep("compile");
+    check(step.status === 0, `头文件夹具:首次 compile 退 0(实际 ${String(step.status)})`, step.output.slice(-200));
+    step = modeStep("run");
+    check(step.status === 0, `头文件夹具:什么都没改 run 退 0(实际 ${String(step.status)})`, step.output.slice(-200));
+    // 内容与长度一起变 → 不依赖 mtime 精度
+    writeFileSync(hdrFile, "`define DEF_W 16\n");
+    step = modeStep("run");
+    check(
+      step.status === 1 && /changed after compile/u.test(step.output) && /defs\.svh/u.test(step.output),
+      `改了 .svh → run 拒绝并点名该头文件(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    step = modeStep("compile");
+    check(
+      step.status === 0 && /header \(\.svh\/\.vh\) changed/u.test(step.output),
+      `改了 .svh → compile 全量重编 Verilog/SystemVerilog(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    step = modeStep("run");
+    check(step.status === 0, `重编之后 run 退 0(实际 ${String(step.status)})`, step.output.slice(-200));
+
+    // ⑧ load(2026-09-24;审查报告 T-09):装载后**不** run -all、**不**自己退出。
+    //    批处理里跑=我们在 -do 里自己补 `quit -f`;GUI 里跑就没有这一句(技能里写的就是它)。
+    step = modeStep("load");
+    check(
+      step.status === 0 && /DESIGN LOADED/u.test(step.output) && !/SIMULATION PASSED/u.test(step.output),
+      `load 模式:装载成功、不给仿真结论(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+  }
 }
 
 // 用户自己的模板(没有任何占位符)→ 必须与模板逐字节一致
@@ -1181,13 +1313,18 @@ const bundledXdcClock = readFileSync(categorizedTemplates.constraints, "utf8");
 // 实测真综合跑出的主日志里躺着一条 filemgmt 20-742,而它判了 PASS(那些行不进 runme.log,
 // 消息计数也没算它)。现在多一层:扫**主日志**、逐条列出来 + 计数(不直接判死 —— 那类多数是良性)。
 // 断言锚在**代码形状**上(注释里出现关键词不算),并且必须是真在扫主日志那份文件。
+// 2026-09-24(T-17):主日志路径不再从 `$argv` 里找 `-log`(实测 `-source` 模式下 `$argv` 为空,
+// 那段解析是死代码),改成与工程综合同口径:旋钮 MAIN_LOG → `-tclargs` 第一个参数 → 约定路径。
 check(
   /set main_crits \{\}/u.test(bundledRunSynth) &&
     /lappend main_crits \$line/u.test(bundledRunSynth) &&
     /main log has \[llength \$main_crits\] CRITICAL WARNING/u.test(bundledRunSynth) &&
-    /foreach \{flag value\} \$argv/u.test(bundledRunSynth) &&
-    /string match "#\*" \$line/u.test(bundledRunSynth),
-  "run_synth.tcl 收尾判定会扫**主日志**里的 CRITICAL WARNING 并逐条列出(它们不进 runme.log)"
+    /string match "#\*" \$line/u.test(bundledRunSynth) &&
+    /set MAIN_LOG ""/u.test(bundledRunSynth) &&
+    /\[llength \$argv\] > 0/u.test(bundledRunSynth) &&
+    /run_synth\.log/u.test(bundledRunSynth) &&
+    !/foreach \{flag value\} \$argv/u.test(bundledRunSynth),
+  "run_synth.tcl 收尾判定会扫**主日志**里的 CRITICAL WARNING 并逐条列出(它们不进 runme.log);主日志路径走旋钮 / -tclargs / 约定路径"
 );
 check(
   /proc xci_part/u.test(bundledRunSynth) &&

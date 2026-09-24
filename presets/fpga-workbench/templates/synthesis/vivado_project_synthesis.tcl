@@ -34,7 +34,10 @@ set PROJECT_ROOT [file normalize [pwd]]
 # 4) TOP           顶层名:留空 = 用工程里已设的 top;非空则要求二者一致。
 # 5) STUB_DIR      RTL 黑盒 stub 所在目录(相对工程根):留空 = 不写 stub。
 # 6) REPORT_DIR    报告目录(相对工程根):**工程报告平铺进 `doc/`**(与工程约定一致)。
-# 7) JOBS          并行任务数。8) RESET_RUN  跑之前先 reset_run(保证不是拿旧结果交差)。
+# 7) JOBS          并行任务数。8) RESET_POLICY  跑之前怎么处理 run 的已有状态:
+#    auto   —— 已经 Complete! 且 NEEDS_REFRESH 为假 → **复用**(出报告,不重跑;Project Mode
+#              本来就在管 run state,没必要每次自己 reset);
+#    always —— 先 reset_run 再跑(正式复验 / 想拿一次干净结果时用)。
 set PRJ_DIR      "prj"
 set PROJECT_FILE ""
 set RUN          "synth_1"
@@ -42,7 +45,7 @@ set TOP          ""
 set STUB_DIR     ""
 set REPORT_DIR   "doc"
 set JOBS         4
-set RESET_RUN    1
+set RESET_POLICY "auto"
 
 # ---- 派生路径(不用改) ------------------------------------------------------ #
 set PRJ_ROOT [file normalize [file join $PROJECT_ROOT $PRJ_DIR]]
@@ -159,11 +162,36 @@ if {$STUB_DIR ne ""} {
   puts "\[run_prj_synth\] stub: [string map {\\ /} [file join $STUB_ROOT "${TOP}_stub.v"]]"
 }
 
-# ---- 跑综合(先 reset,免得拿旧结果交差) ---------------------------------- #
-step "launch_runs $RUN" {
-  if {$RESET_RUN} { reset_run $RUN }
-  launch_runs $RUN -jobs $JOBS
-  wait_on_run $RUN
+# ---- 跑综合:auto 下先看 run 状态,能复用就不重跑(Project Mode 自己管 run state)- #
+# 为什么不再默认每次 reset_run(2026-09-24;审查报告 T-07):reset 之后**一定**重新综合一遍,
+# 源码/约束/IP 都没动也一样 —— 反复迭代时每次白等;而"可靠"不等于"每次重跑"。
+# 证明不了新鲜(NEEDS_REFRESH 读不到、状态不是 Complete!)就重跑,所以复用不会拿旧结果交差。
+set REUSED 0
+if {$RESET_POLICY eq "auto"} {
+  set status  [get_property STATUS   [get_runs $RUN]]
+  set prog    [get_property PROGRESS [get_runs $RUN]]
+  set refresh 1
+  catch { set refresh [get_property NEEDS_REFRESH [get_runs $RUN]] }
+  set fresh 0
+  if {[catch { set fresh [expr {!$refresh}] }]} { set fresh 0 }
+  if {$fresh && $prog eq "100%" && [string match "*Complete!*" $status]} {
+    set REUSED 1
+    puts "\[run_prj_synth\] RESET_POLICY=auto: '$RUN' is Complete! and NEEDS_REFRESH=false -> reusing it (set RESET_POLICY always to rebuild)"
+  } else {
+    puts "\[run_prj_synth\] RESET_POLICY=auto: '$RUN' is stale (status='$status' progress='$prog' needs_refresh='$refresh') -> reset + relaunch"
+  }
+} elseif {$RESET_POLICY ne "always"} {
+  fail "RESET_POLICY must be auto or always (got '$RESET_POLICY')"
+}
+
+if {!$REUSED} {
+  step "launch_runs $RUN" {
+    if {$RESET_POLICY eq "always" || [get_property STATUS [get_runs $RUN]] ne "Not started"} {
+      reset_run $RUN
+    }
+    launch_runs $RUN -jobs $JOBS
+    wait_on_run $RUN
+  }
 }
 
 # ---- 收尾判定:四层,缺一层就会漏 ------------------------------------------ #

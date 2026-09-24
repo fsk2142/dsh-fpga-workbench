@@ -123,8 +123,8 @@ const scannedModuleRtl = scanTemplates({
 });
 const scannedRtlGroup = scannedModuleRtl.groups.find((group) => group.key === "rtl");
 check(
-  TEMPLATE_CATEGORIES.length === 13,
-  `模板库固定十三类(模块九 + 工程级 linter / bitstream / 综合 / 约束;模块与工程的综合、约束各有一份内置,实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`
+  TEMPLATE_CATEGORIES.length === 12,
+  `模板库固定十二类(编译与运行合并为一类;模块与工程的综合、约束各有一份内置,实际 ${String(TEMPLATE_CATEGORIES.length)} 类)`
 );
 check(
   BUILTIN_TEMPLATES.some((item) => item.id === "builtin:rtl/systemverilog-module.sv") &&
@@ -1668,7 +1668,7 @@ const capabilityTemplateText = describeEnv(prepared, () => true);
 check(
   capabilityTemplateText.includes("模板·RTL 模板") &&
     capabilityTemplateText.includes("rtl\\systemverilog_module.sv") &&
-    capabilityTemplateText.includes("simulation\\modelsim_run.do"),
+    capabilityTemplateText.includes("simulation\\run\\modelsim_run.do"),
   "提示在对应能力卡下列出分类模板决定"
 );
 check(

@@ -139,8 +139,8 @@ if (host !== undefined && toolchain !== undefined && templateLibrary !== undefin
     check(hostSource.includes("path: TEMPLATE_PATH"), "已装副本实际注册分类模板接口");
     check(
       templateLibrary.TEMPLATE_CATEGORIES?.map((category) => category.key).join(",") ===
-        "rtl,constraints,project-constraints,verification,testbench,sim-compile,sim-run,synthesis,project-synthesis,implementation,programming,linter,bitstream",
-      "已装副本包含十三个固定模板分类(模块与工程的综合/约束各一份内置)"
+        "rtl,constraints,project-constraints,verification,testbench,sim-run,synthesis,project-synthesis,implementation,programming,linter,bitstream",
+      "已装副本包含十二个固定模板分类(仿真编译与运行合并为一类;模块与工程的综合/约束各一份内置)"
     );
     const scan = templateLibrary.scanTemplates({
       capability: "module-rtl",

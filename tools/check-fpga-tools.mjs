@@ -227,8 +227,8 @@ for (const [label, file] of [
 // DSH-N01:E8-04 只挡了**递归子目录**的链接;collector 的**根目录自己**是 symlink/Junction 时,整段
 // 采集会跑到工程外(结论就不再只覆盖工程内文件)。五个采集入口都必须显式拒绝根链接。
 for (const [label, file] of [
-  ["ModelSim compile", join(TEMPLATES, "simulation", "modelsim_run.do")],
-  ["ModelSim run", join(TEMPLATES, "simulation", "modelsim_run.do")],
+  ["ModelSim compile", join(TEMPLATES, "simulation", "run", "modelsim_run.do")],
+  ["ModelSim run", join(TEMPLATES, "simulation", "run", "modelsim_run.do")],
   ["模块综合", join(TEMPLATES, "synthesis", "vivado_module_synthesis.tcl")],
   ["RTL linter", join(TEMPLATES, "linter", "vivado_rtl_lint.tcl")],
   ["工程综合", join(TEMPLATES, "synthesis", "vivado_project_synthesis.tcl")]
@@ -269,8 +269,8 @@ const categorizedTemplates = {
   constraints: join(TEMPLATES, "constraints", "vivado_module_xdc.xdc"),
   verification: join(TEMPLATES, "verification", "python_data_verification.py"),
   testbench: join(TEMPLATES, "simulation", "testbench", "systemverilog_testbench.sv"),
-  compile: join(TEMPLATES, "simulation", "modelsim_run.do"),
-  run: join(TEMPLATES, "simulation", "modelsim_run.do"),
+  compile: join(TEMPLATES, "simulation", "run", "modelsim_run.do"),
+  run: join(TEMPLATES, "simulation", "run", "modelsim_run.do"),
   synthesis: join(TEMPLATES, "synthesis", "vivado_module_synthesis.tcl"),
   "project-constraints": join(TEMPLATES, "constraints", "vivado_project_xdc.xdc"),
 
@@ -302,7 +302,7 @@ for (const [key, file] of [
 }
 check(
   Object.values(categorizedTemplates).every((path) => existsSync(path)),
-  "十三份内置模板都存在(模块九 + 工程级 linter / bitstream / 工程综合 / 工程约束)",
+  "内置模板都存在(模块与工程的综合/约束各一份;编译与运行合并后同一份路径只算一份)",
   Object.entries(categorizedTemplates).filter(([, path]) => !existsSync(path)).map(([key]) => key).join("、")
 );
 const categorizedRtlIssues = blocking(categorizedTemplates.rtl, false);
@@ -495,7 +495,8 @@ check(
   "自带 TB 模板写明 $fatal 不改 vsim 退出码(不是'必须非零退出'那种说法)"
 );
 
-// ModelSim / QuestaSim 分成 compile.do 与 run.do；两份合起来保留旧模板已经验证过的全部护栏。
+// 仿真编译与运行是**同一份**(用户口径 2026-09-24:设置页也只剩一个槽位);这里保留 compile/run 两个键
+// 只为断言"两个 kind 指向同一份文件",不再有两份脚本。
 const bundledCompileDoPath = categorizedTemplates.compile;
 const bundledCompileDo = readFileSync(bundledCompileDoPath, "utf8");
 const bundledRunDoPath = categorizedTemplates.run;
@@ -1037,7 +1038,7 @@ check(
     && existsSync(join(newFileRoot, "verif", "tb_uart_rx.sv")),
   "verif-new 把测试平台落在 verif/tb_<snake>.sv"
 );
-// 两份仿真脚本都从分类模板库起；只给模块根，不需要模块名。
+// 两个 kind(sim-compile / sim-run)起的是**同一份**仿真脚本;只给模块根,不需要模块名。
 check(
   run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-compile"]) === 0
     && existsSync(join(newFileRoot, "verif", "run.do")),
@@ -2464,7 +2465,7 @@ check(
     !/string match "\*ALL TESTS PASSED\*"/u.test(bundledRunOnly),
   "run.do 的成功判定是**精确整行**(不是子串匹配 —— 否则\"no ALL TESTS PASSED\"这种否定句会假 PASS)"
 );
-const compileTemplateText = readFileSync(join(TEMPLATES, "simulation", "modelsim_run.do"), "utf8");
+const compileTemplateText = readFileSync(join(TEMPLATES, "simulation", "run", "modelsim_run.do"), "utf8");
 check(
   /file type \$sub\] eq "link"/u.test(compileTemplateText),
   "合并模板递归收集时**跳过链接目录**(不收工程外 HDL;跳过即断环)"

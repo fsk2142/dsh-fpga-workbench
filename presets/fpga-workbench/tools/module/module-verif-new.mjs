@@ -17,9 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parseStampArgs, stampFile } from "../lib/stamp.mjs";
 
-const BUNDLED_SIM = fileURLToPath(new URL("../../templates/simulation/modelsim_run.do", import.meta.url));
-const BUNDLED_SIM_COMPILE = BUNDLED_SIM;
-const BUNDLED_SIM_RUN = BUNDLED_SIM;
+const BUNDLED_SIM = fileURLToPath(new URL("../../templates/simulation/run/modelsim_run.do", import.meta.url));
 /** 自带的比对脚本模板(先归一化、只比值;行尾/大小写/0x 前缀都不算差异)。 */
 const BUNDLED_COMP = fileURLToPath(new URL("../../templates/verification/python_data_verification.py", import.meta.url));
 // 自带的测试平台模板。**四种 kind 一律支持默认值**(第八轮复审留下的那条:用法说明写着"不给 --template
@@ -31,11 +29,9 @@ function main() {
   const args = parseStampArgs(process.argv.slice(2));
   // kind 说的是"起哪种模板"(tb / sim-compile / sim-run / comp),
   // 不是环节名:defaultDestination 按它推落点,所以测试平台这里是 "tb",不是 "verif"。
-  if (args.kind === "sim-compile") {
-    return stampFile({ ...args, template: args.template ?? BUNDLED_SIM_COMPILE });
-  }
-  if (args.kind === "sim-run") {
-    return stampFile({ ...args, template: args.template ?? BUNDLED_SIM_RUN });
+  // sim-compile 与 sim-run 用**同一份**仿真脚本(起第二次会被"已存在、不覆盖"挡下,这是预期的)。
+  if (args.kind === "sim-compile" || args.kind === "sim-run") {
+    return stampFile({ ...args, template: args.template ?? BUNDLED_SIM });
   }
   if (args.kind === "comp") {
     return stampFile({ ...args, template: args.template ?? BUNDLED_COMP });

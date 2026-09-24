@@ -94,8 +94,8 @@ presets/fpga-workbench/
     preset.yml                选择器里显示的名字与描述
     agent.cordis.yml          这个模式的组装:人设 + 工具行 + 模式半侧 + 自带技能目录
     skills/                   只在本模式可见的技能(随预设复制走)
-    templates/                分类模板(逻辑分类 13 个;模块与工程的综合/约束各一份,
-                              **用户模板库目录不按层级拆**):RTL、约束、Testbench、仿真编译/运行、验证、
+    templates/                分类模板(逻辑分类 12 个;模块与工程的综合/约束各一份,
+                              **用户模板库目录不按层级拆**):RTL、约束、Testbench、仿真脚本(编译与运行同一份)、验证、
                               综合、实现、下载、Lint、Bitstream、工程综合、工程约束；不再保留旧的平面模板副本
     tools/                    自带命令,**按级别分目录**:module/ 只放模块级、project/ 只放工程级、
                               顶层是两级共用(setup-scaffold.mjs)、lib/ 是内部模块(不是命令)
@@ -148,12 +148,12 @@ tools/                        分层自检 + install/sync-installed + 依赖安�
 RTL 的文件头、九个小节块、端口对齐这些**格式**都是各自的习惯,写死在技能里换个人就废了。
 所以:
 
-- 插件自带默认模板(`presets/fpga-workbench/templates/`),逻辑分类 13 个(模块九 + 工程级 Linter / Bitstream /
+- 插件自带默认模板(`presets/fpga-workbench/templates/`),逻辑分类 12 个(模块九 + 工程级 Linter / Bitstream /
   工程综合 / 工程约束),覆盖 RTL、约束、Testbench、
-  仿真编译、仿真运行、验证、综合、实现、下载,以及工程级的 Lint 与 Bitstream。默认模板带工具兼容信息,例如 Vivado 脚本不会被
+  仿真脚本(编译与运行同一份)、验证、综合、实现、下载,以及工程级的 Lint 与 Bitstream。默认模板带工具兼容信息,例如 Vivado 脚本不会被
   当成 Quartus 的默认值。
 - 设置里只登记一个可选的**模板库根目录**。目录树固定如下,没有额外的 `fpga/` 分级；
-  Testbench 是仿真输入文件,compile/run 是执行脚本,用途不同,因此分别存放:
+  Testbench 是仿真输入文件,`simulation/run/` 下那份仿真脚本是执行脚本(编译与运行同一份),用途不同,因此分开存放:
 
   ```text
   <模板库>/
@@ -162,7 +162,6 @@ RTL 的文件头、九个小节块、端口对齐这些**格式**都是各自的
   ├─ verification/
   ├─ simulation/
   │  ├─ testbench/
-  │  ├─ compile/
   │  └─ run/
   ├─ synthesis/
   ├─ implementation/

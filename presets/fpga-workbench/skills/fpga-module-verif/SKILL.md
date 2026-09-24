@@ -68,11 +68,11 @@ ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里
 编译与运行使用**同一份**模板 `verif/run.do`,按模式调用:`do run.do compile` 只收集并编译,`do run.do run` 只加载已编译的
 `work/`、运行并判定。这样可反复改激励/换顶层而不把两个职责混成一份不可复核的大脚本。
 
-**别手抄脚本**:用分类模板各起一份(它们把踩过的坑固化了,起完按当前模块改旋钮):
+**别手抄脚本**:从设置里选中的那份**仿真脚本**模板起一份(编译与运行本来就是同一份脚本,起第二次会被
+「已存在、不覆盖」挡下 —— 不要起两次),起完按当前模块改旋钮:
 
 ```powershell
-node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-compile
-node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run
+node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run --template "<仿真脚本模板路径>"
 cd <模块根>/verif
 # 编译与运行**两步**都带上设置里的库映射(F5-06):路径见会话「库映射文件」
 # 例:$env:MODELSIM_INI = "C:\...\modelsim.ini"  —— 用完在同一 try/finally 里恢复
@@ -327,8 +327,7 @@ FAIL);② `verif/*.md` / `synth/*.md` 里引用的路径是否都在(缺了 → 
 | 干什么 | 命令 | 在哪一节 |
 |---|---|---|
 | 起测试平台 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> --template "<测试平台模板路径>"` | 第一步 |
-| 起仿真编译脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-compile` | 第二步 |
-| 起仿真运行脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run` | 第二步 |
+| 起仿真脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run --template "<仿真脚本模板路径>"`(编译与运行同一份,只起一次) | 第二步 |
 | 起比对脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp` | 第四步 |
 | 跑出来 | 按选中的仿真器:ModelSim / QuestaSim 依次执行 `do run.do compile`、`do run.do run`(在 `verif/` 下),选了 XSim 就是 `xvlog`/`xelab`/`xsim` 三步 | 第二步 |
 | 看波形 | 用已经确认过的 `verif/run.do` 起 GUI(XSim 用它的 snapshot),不另起一套加载 | 第三步 |

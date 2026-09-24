@@ -338,7 +338,6 @@ const hostValues = {
   moduleRtlTemplate: "",
   moduleSimulationTool: "auto",
   moduleTestbenchTemplate: "",
-  moduleSimulationCompileTemplate: "",
   moduleSimulationRunTemplate: "",
   moduleVerificationTool: "auto",
   moduleVerificationTemplate: "",
@@ -353,7 +352,6 @@ const hostValues = {
   projectProgrammingTemplate: "",
   projectSimulationTool: "auto",
   projectTestbenchTemplate: "",
-  projectSimulationCompileTemplate: "",
   projectSimulationRunTemplate: "",
   projectVerificationTool: "auto",
   projectVerificationTemplate: "",
@@ -442,8 +440,7 @@ const capabilityFixtures = [
     toolKey: "moduleSimulationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
       templateSlot("moduleTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog_testbench.sv"),
-      templateSlot("moduleSimulationCompileTemplate", "sim-compile", "仿真编译脚本", "simulation/compile/modelsim_compile.do"),
-      templateSlot("moduleSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim_run.do")
+      templateSlot("moduleSimulationRunTemplate", "sim-run", "仿真脚本", "simulation/run/modelsim_run.do")
     ]
   },
   {
@@ -471,12 +468,11 @@ const capabilityFixtures = [
     ]
   },
   {
-    key: "project-simulation", section: "project", label: "系统仿真工具", hint: "用于系统级测试平台与运行；编译与运行模板分开。",
+    key: "project-simulation", section: "project", label: "系统仿真工具", hint: "用于系统级测试平台与运行；编译与运行是同一份脚本。",
     toolKey: "projectSimulationTool", selection: "auto", state: "auto", present: true, toolOptions: autoToolOptions,
     templates: [
       templateSlot("projectTestbenchTemplate", "testbench", "Testbench 模板", "simulation/testbench/systemverilog_testbench.sv"),
-      templateSlot("projectSimulationCompileTemplate", "sim-compile", "仿真编译脚本", "simulation/compile/modelsim_compile.do"),
-      templateSlot("projectSimulationRunTemplate", "sim-run", "仿真运行脚本", "simulation/run/modelsim_run.do")
+      templateSlot("projectSimulationRunTemplate", "sim-run", "仿真脚本", "simulation/run/modelsim_run.do")
     ]
   },
   {
@@ -1053,7 +1049,7 @@ try {
   tree = captured();
   card = findByProp(tree, (props) => props.key === "capability-module-rtl");
   const cardText = JSON.stringify(card ?? {});
-  check(cardText.includes("vendor/custom.sv") && !cardText.includes("仿真编译脚本"), "展开卡只显示当前能力需要的模板分类");
+  check(cardText.includes("vendor/custom.sv") && !cardText.includes("仿真脚本"), "展开卡只显示当前能力需要的模板分类");
   findButton(card, "收起").props.onClick();
   fake.reset();
   tree = captured();

@@ -18,7 +18,7 @@
 
 module <ModuleName> # (
     // TODO: module parameter description
-                parameter                                           PIXEL_W =   8
+                parameter int unsigned                              PIXEL_W =   8
     ) (
     // TODO: add clock and reset
     input       wire                                                clk,

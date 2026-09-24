@@ -128,7 +128,7 @@ check(
 );
 check(
   BUILTIN_TEMPLATES.some((item) => item.id === "builtin:rtl/systemverilog-module.sv") &&
-    BUILTIN_TEMPLATES.some((item) => item.id === "builtin:simulation/compile/modelsim-compile.do") &&
+    BUILTIN_TEMPLATES.some((item) => item.id === "builtin:simulation/modelsim-run.do") &&
     BUILTIN_TEMPLATES.some((item) => item.id === "builtin:programming/vivado-program.tcl"),
   "内置模板使用稳定的分类 id"
 );
@@ -1668,7 +1668,7 @@ const capabilityTemplateText = describeEnv(prepared, () => true);
 check(
   capabilityTemplateText.includes("模板·RTL 模板") &&
     capabilityTemplateText.includes("rtl\\systemverilog_module.sv") &&
-    capabilityTemplateText.includes("simulation\\compile\\modelsim_compile.do"),
+    capabilityTemplateText.includes("simulation\\modelsim_run.do"),
   "提示在对应能力卡下列出分类模板决定"
 );
 check(

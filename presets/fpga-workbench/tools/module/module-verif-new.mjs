@@ -3,13 +3,13 @@
 // 用法:
 //   node module-verif-new.mjs <模块根> <模块名> [--template <测试平台模板路径>]
 //                     [--out <相对路径>] [--force] [--dry-run]
-//   node module-verif-new.mjs <模块根> --kind sim-compile [--template <编译脚本路径>]
-//   node module-verif-new.mjs <模块根> --kind sim-run [--template <运行脚本路径>]
+//   node module-verif-new.mjs <模块根> --kind sim-compile [--template <仿真脚本路径>]
+//   node module-verif-new.mjs <模块根> --kind sim-run [--template <仿真脚本路径>]
 //                     [--out <相对路径>] [--force] [--dry-run]
 //   node module-verif-new.mjs <模块根> --kind comp [--template <比对脚本路径>]
 //                     [--out <相对路径>] [--force] [--dry-run]
 // 默认落到 `verif/tb_<snake>.sv`(`<snake>` 是模块名的下划线形式;扩展名跟着模板走)。
-// 两份仿真脚本分别固定落 `verif/compile.do` 与 `verif/run.do`;比对脚本固定落 `verif/comp.py`。
+// 编译与运行**同一份**仿真脚本(模板 modelsim_run.do),固定落 `verif/run.do`(按模式调用);比对脚本固定落 `verif/comp.py`。
 // 不给 `--template` 时使用分类模板库中的对应内置模板。
 // 模板路径看会话开头「本机 FPGA 工具链」的模板一节。
 // 退出码:0 成功 / 1 目标已存在且未加 --force / 2 参数或环境不对
@@ -17,8 +17,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parseStampArgs, stampFile } from "../lib/stamp.mjs";
 
-const BUNDLED_SIM_COMPILE = fileURLToPath(new URL("../../templates/simulation/compile/modelsim_compile.do", import.meta.url));
-const BUNDLED_SIM_RUN = fileURLToPath(new URL("../../templates/simulation/run/modelsim_run.do", import.meta.url));
+const BUNDLED_SIM = fileURLToPath(new URL("../../templates/simulation/modelsim_run.do", import.meta.url));
+const BUNDLED_SIM_COMPILE = BUNDLED_SIM;
+const BUNDLED_SIM_RUN = BUNDLED_SIM;
 /** 自带的比对脚本模板(先归一化、只比值;行尾/大小写/0x 前缀都不算差异)。 */
 const BUNDLED_COMP = fileURLToPath(new URL("../../templates/verification/python_data_verification.py", import.meta.url));
 // 自带的测试平台模板。**四种 kind 一律支持默认值**(第八轮复审留下的那条:用法说明写着"不给 --template

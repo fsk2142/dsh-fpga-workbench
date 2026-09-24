@@ -227,8 +227,8 @@ for (const [label, file] of [
 // DSH-N01:E8-04 只挡了**递归子目录**的链接;collector 的**根目录自己**是 symlink/Junction 时,整段
 // 采集会跑到工程外(结论就不再只覆盖工程内文件)。五个采集入口都必须显式拒绝根链接。
 for (const [label, file] of [
-  ["ModelSim compile", join(TEMPLATES, "simulation", "compile", "modelsim_compile.do")],
-  ["ModelSim run", join(TEMPLATES, "simulation", "run", "modelsim_run.do")],
+  ["ModelSim compile", join(TEMPLATES, "simulation", "modelsim_run.do")],
+  ["ModelSim run", join(TEMPLATES, "simulation", "modelsim_run.do")],
   ["模块综合", join(TEMPLATES, "synthesis", "vivado_module_synthesis.tcl")],
   ["RTL linter", join(TEMPLATES, "linter", "vivado_rtl_lint.tcl")],
   ["工程综合", join(TEMPLATES, "synthesis", "vivado_project_synthesis.tcl")]
@@ -269,8 +269,8 @@ const categorizedTemplates = {
   constraints: join(TEMPLATES, "constraints", "vivado_module_xdc.xdc"),
   verification: join(TEMPLATES, "verification", "python_data_verification.py"),
   testbench: join(TEMPLATES, "simulation", "testbench", "systemverilog_testbench.sv"),
-  compile: join(TEMPLATES, "simulation", "compile", "modelsim_compile.do"),
-  run: join(TEMPLATES, "simulation", "run", "modelsim_run.do"),
+  compile: join(TEMPLATES, "simulation", "modelsim_run.do"),
+  run: join(TEMPLATES, "simulation", "modelsim_run.do"),
   synthesis: join(TEMPLATES, "synthesis", "vivado_module_synthesis.tcl"),
   "project-constraints": join(TEMPLATES, "constraints", "vivado_project_xdc.xdc"),
 
@@ -319,8 +319,22 @@ const runTemplate = executableTcl(categorizedTemplates.run);
 const synthesisTemplate = executableTcl(categorizedTemplates.synthesis);
 const implementationTemplate = executableTcl(categorizedTemplates.implementation);
 const programmingTemplate = executableTcl(categorizedTemplates.programming);
-check(/\bvlog\b/u.test(compileTemplate) && !/\bvsim\b|\brun\s+-all\b/u.test(compileTemplate), "ModelSim 编译模板只编译，不启动仿真");
-check(/\bvsim\b/u.test(runTemplate) && /\brun\s+-all\b/u.test(runTemplate) && !/\bvlog\b|\bvcom\b/u.test(runTemplate), "ModelSim 运行模板只加载与运行，不重新编译");
+// 编译与运行合并成一份之后(用户口径 2026-09-23),"只做一件事"改成**按模式分界**的结构断言:
+//   · 编译命令(vcom -quiet / vlog -quiet)全部落在 compile 段内;
+//   · vsim 只出现在 run 段里(用 `vsim -c -modelsimini` 这个只在 run 段出现的形态定位,
+//     免得把头部用法注释里的 vsim 也算进来)。
+const modeCompileAt = compileTemplate.indexOf('if {$MODE eq "compile"}');
+const modeRunAt = compileTemplate.indexOf("local work/ library is missing");
+const firstCompileCmdAt = (() => {
+  const a = compileTemplate.indexOf("vcom -quiet");
+  const b = compileTemplate.indexOf("vlog -quiet");
+  return a < 0 ? b : b < 0 ? a : Math.min(a, b);
+})();
+check(
+  modeCompileAt > 0 && modeRunAt > modeCompileAt && firstCompileCmdAt > modeCompileAt &&
+    compileTemplate.indexOf("vsim -c -modelsimini") > modeRunAt,
+  "合并模板:编译命令都在 compile 段、vsim 只在 run 段(按模式分界,不再各自一份文件)"
+);
 check(
   (/\bsynth_design\b/u.test(synthesisTemplate) || /launch_runs\s+synth_1/u.test(synthesisTemplate)) &&
     !/\bplace_design\b|\broute_design\b|\bwrite_bitstream\b|launch_runs\s+impl_1/u.test(synthesisTemplate),
@@ -487,10 +501,13 @@ const bundledCompileDo = readFileSync(bundledCompileDoPath, "utf8");
 const bundledRunDoPath = categorizedTemplates.run;
 const bundledRunDoExists = existsSync(bundledRunDoPath);
 const bundledRunOnly = bundledRunDoExists ? readFileSync(bundledRunDoPath, "utf8") : "";
-const bundledRunDo = `${bundledCompileDo}\n${bundledRunOnly}`;
-check(bundledRunDoExists && existsSync(bundledCompileDoPath), "自带 compile.do 与 run.do 分类模板都存在");
+  const bundledRunDo = bundledRunOnly;
+  check(
+    bundledRunDoExists && existsSync(bundledCompileDoPath) && bundledCompileDoPath === bundledRunDoPath,
+    "编译与运行分类模板是**同一份**文件,且都存在"
+  );
 for (const marker of ["*_stub.*", "onfinish stop", "quit -f -code 1", "ALL TESTS PASSED"]) {
-  check(bundledRunDo.includes(marker), `自带 run.do 模板里有「${marker}」`);
+  check(bundledRunDo.includes(marker), `合并模板里有「${marker}」`);
 }
 
 // ── run.do 的"不替你猜":多 TB 不给 TOP → 拒绝;同名文件内容不同 → 拒绝 ────────────────
@@ -561,7 +578,7 @@ const simRun = (name, files, doPath = bundledRunDoPath) => {
   const compileLog = join(verif, "ME-compile-stdout.log");
   const compileFd = openSync(compileLog, "w");
   // 交给 ModelSim 的路径一律转正斜杠:反斜杠里的 `\t`/`\n` 会被 Tcl 当转义吃掉(实测)
-  const compileStatus = spawnSync("vsim", ["-c", "-do", `do ${bundledCompileDoPath.replace(/\\/gu, "/")}`], {
+  const compileStatus = spawnSync("vsim", ["-c", "-do", `do ${bundledCompileDoPath.replace(/\\/gu, "/")} compile`], {
     stdio: ["ignore", compileFd, "ignore"],
     cwd: verif
   }).status;
@@ -570,7 +587,7 @@ const simRun = (name, files, doPath = bundledRunDoPath) => {
   if (compileStatus !== 0) return { status: compileStatus, output: compileOutput };
   const runLog = join(verif, "ME-run-stdout.log");
   const runFd = openSync(runLog, "w");
-  const status = spawnSync("vsim", ["-c", "-do", `do ${doPath.replace(/\\/gu, "/")}`], {
+  const status = spawnSync("vsim", ["-c", "-do", `do ${doPath.replace(/\\/gu, "/")} run`], {
     stdio: ["ignore", runFd, "ignore"],
     cwd: verif
   }).status;
@@ -605,7 +622,7 @@ if (vsimProbe.status !== 0) {
     `多 TB 那条报出了命中数,并在错误里把两个候选逐条列出、指向 TOP_OVERRIDE(实际续行 ${manyError.details.length} 条)`
   );
   // ④ 多个 TB + 显式 TOP_OVERRIDE → 0(填了就等于指定了本次跑哪个)
-  const topPatched = bundledRunOnly.replace("set TOP_OVERRIDE  {}", "set TOP_OVERRIDE  {tb_b}");
+  const topPatched = bundledRunOnly.replace(/set TOP_OVERRIDE\s+\{\}/u, "set TOP_OVERRIDE  {tb_b}");
   check(topPatched !== bundledRunOnly, "夹具:旋钮 TOP_OVERRIDE 真被填上了(没填上的话下面那条会测成另一回事)");
   mkdirSync(simRoot, { recursive: true });
   const topDo = join(simRoot, "many-with-top.do");
@@ -651,8 +668,8 @@ check(
 check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("verif", "tb_uart_rx.vhd"), "扩展名跟着模板走");
 // run.do 反过来:名字是**固定**的(跑法里 `do run.do` 写死了它),不跟模板扩展名走、也不替模块名
 check(
-  defaultDestination("sim-compile", undefined, "C:/t/compile.do") === join("verif", "compile.do"),
-  "仿真编译脚本落到 verif/compile.do"
+  defaultDestination("sim-compile", undefined, "C:/t/compile.do") === join("verif", "run.do"),
+  "仿真编译脚本落到 verif/run.do"
 );
 check(
   defaultDestination("sim-run", undefined, "C:/t/run.do") === join("verif", "run.do"),
@@ -1023,21 +1040,20 @@ check(
 // 两份仿真脚本都从分类模板库起；只给模块根，不需要模块名。
 check(
   run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-compile"]) === 0
-    && existsSync(join(newFileRoot, "verif", "compile.do")),
-  "verif-new --kind sim-compile 起出 verif/compile.do"
-);
-check(
-  readFileSync(join(newFileRoot, "verif", "compile.do"), "utf8") === bundledCompileDo,
-  "起出来的 compile.do 与分类模板逐字节一致"
-);
-check(
-  run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-run"]) === 0
     && existsSync(join(newFileRoot, "verif", "run.do")),
-  "verif-new --kind sim-run 起出 verif/run.do"
+  "verif-new --kind sim-compile 起出 verif/run.do(合并后的落点名)"
+);
+check(
+  readFileSync(join(newFileRoot, "verif", "run.do"), "utf8") === bundledCompileDo,
+  "起出来的 run.do 与合并模板逐字节一致(sim-compile 侧)"
+);
+check(
+    run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-run"]) === 1,
+    "sim-run 与 sim-compile 落同一个 verif/run.do:第二次起会拒绝覆盖(退 1)"
 );
 check(
   readFileSync(join(newFileRoot, "verif", "run.do"), "utf8") === bundledRunOnly,
-  "起出来的 run.do 与分类运行模板逐字节一致"
+  "起出来的 run.do 与合并模板逐字节一致(同一份)"
 );
 check(
   run("module-verif-new.mjs", [newFileRoot, "--kind", "sim-run"]) === 1,
@@ -2448,14 +2464,14 @@ check(
     !/string match "\*ALL TESTS PASSED\*"/u.test(bundledRunOnly),
   "run.do 的成功判定是**精确整行**(不是子串匹配 —— 否则\"no ALL TESTS PASSED\"这种否定句会假 PASS)"
 );
-const compileTemplateText = readFileSync(join(TEMPLATES, "simulation", "compile", "modelsim_compile.do"), "utf8");
+const compileTemplateText = readFileSync(join(TEMPLATES, "simulation", "modelsim_run.do"), "utf8");
 check(
   /file type \$sub\] eq "link"/u.test(compileTemplateText),
-  "compile.do 递归收集时**跳过链接目录**(不收工程外 HDL;跳过即断环)"
+  "合并模板递归收集时**跳过链接目录**(不收工程外 HDL;跳过即断环)"
 );
 check(
   /file type \$d\] eq "link"/u.test(bundledRunSynth),
-  "模块综合模板(vivado_module_synthesis.tcl)的 collect_files 同样跳过链接目录(与 compile.do 同一条判据)"
+  "模块综合模板(vivado_module_synthesis.tcl)的 collect_files 同样跳过链接目录(与仿真模板同一条判据)"
 );
 const mixRoot = join(SANDBOX, `mixvhdl-${stamp}`);
 mkdirSync(join(mixRoot, "src", "rtl"), { recursive: true });
@@ -2597,15 +2613,15 @@ check(
 // 第八轮 E8-07 / E8-09 / E8-11:两份仿真模板的代码形状(真机行为另有实测证据,见提交说明)。
 check(
   /\.fpga-compile-stamp/u.test(compileTemplateText) && /file mtime \$f\]/u.test(compileTemplateText),
-  "compile.do 编译成功后写 work/.fpga-compile-stamp(记录每个输入的 mtime + size)"
+  "编译成功后写 work/.fpga-compile-stamp(记录每个输入的 mtime + size)"
 );
 check(
   /no compile stamp in work\//u.test(bundledRunOnly) && /changed after compile/u.test(bundledRunOnly),
-  "run.do 校验该标记,源码改过就拒绝运行(E8-07)"
+  "run 模式校验该标记,源码改过就拒绝运行(E8-07)"
 );
 check(
   /INI_EXPLICIT/u.test(compileTemplateText) && /modelsim\.ini not found/u.test(compileTemplateText),
-  "compile.do:显式指定的 modelsim.ini 不存在就报错,不静默退回安装默认(E8-09)"
+  "编译段:显式指定的 modelsim.ini 不存在就报错,不静默退回安装默认(E8-09)"
 );
 check(
   /set VENDOR_LIBS/u.test(bundledRunOnly) && /-L \$lib/u.test(bundledRunOnly),
@@ -2630,24 +2646,24 @@ if (vsimPath === undefined) {
   // 里是关键字 —— 若 `.v` 被强制 `-sv` 编译,基线编译就会报错。带上它,基线编译退 0 就证明分流出对了。
   writeFileSync(join(simRoot, "rtl", "legacy_v.v"), "module legacy_v; wire logic; assign logic = 1'b0; endmodule\n");
   writeFileSync(join(simRoot, "verif", "tb_dut.sv"), "`timescale 1ns/1ps\nmodule tb_dut;\n  logic clk = 0;\n  initial begin #1; $display(\"ALL TESTS PASSED (err_cnt=0)\"); $finish; end\nendmodule\n");
-  copyFileSync(categorizedTemplates.compile, join(simRoot, "verif", "compile.do"));
+  copyFileSync(categorizedTemplates.compile, join(simRoot, "verif", "run.do"));
   copyFileSync(categorizedTemplates.run, join(simRoot, "verif", "run.do"));
   const runDo = (statement, env = {}) => spawnSync(vsimPath, ["-c", "-do", `${statement}; quit -f`], {
     cwd: join(simRoot, "verif"), env: { ...process.env, ...env }, encoding: "utf8"
   });
-  const compiled = runDo("do compile.do");
+  const compiled = runDo("do run.do compile");
   check(compiled.status === 0, `仿真一致性夹具:基线编译退 0(实际 ${String(compiled.status)})`, String(compiled.stdout ?? "").slice(-300));
-  const cleanRun = runDo("do run.do");
+  const cleanRun = runDo("do run.do run");
   check(cleanRun.status === 0, `无源码变化 → run 退 0(实际 ${String(cleanRun.status)})`, String(cleanRun.stdout ?? "").slice(-300));
   writeFileSync(join(simRoot, "rtl", "dut.sv"), "module dut (input logic clk, output logic q); assign q = ~clk; endmodule\n// touched\n");
-  const modifiedRun = runDo("do run.do");
+  const modifiedRun = runDo("do run.do run");
   check(modifiedRun.status !== 0 && /changed after compile|does not match/u.test(String(modifiedRun.stdout ?? "")), `改源码 → run 拒绝(实际 ${String(modifiedRun.status)})`, String(modifiedRun.stdout ?? "").slice(-300));
-  runDo("do compile.do");
+  runDo("do run.do compile");
   writeFileSync(join(simRoot, "rtl", "extra.sv"), "module extra; endmodule\n");
-  const addedRun = runDo("do run.do");
+  const addedRun = runDo("do run.do run");
   check(addedRun.status !== 0 && /\(added\)/u.test(String(addedRun.stdout ?? "")), `**新增源码** → run 拒绝并点名(实际 ${String(addedRun.status)})`, String(addedRun.stdout ?? "").slice(-300));
-  runDo("do compile.do");
-  const badIniRun = runDo("do run.do", { MODELSIM_INI: "C:\\nope\\missing.ini" });
+  runDo("do run.do compile");
+  const badIniRun = runDo("do run.do run", { MODELSIM_INI: "C:\\nope\\missing.ini" });
   check(badIniRun.status !== 0 && /modelsim.ini not found/u.test(String(badIniRun.stdout ?? "")), `run 侧显式 ini 不存在 → 拒绝 fallback(实际 ${String(badIniRun.status)})`, String(badIniRun.stdout ?? "").slice(-300));
 }
 

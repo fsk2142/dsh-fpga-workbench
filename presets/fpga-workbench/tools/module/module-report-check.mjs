@@ -96,7 +96,7 @@ export function evidenceTokens(text) {
     let raw = match[1].trim();
     if (!EVIDENCE_PREFIX.test(raw)) continue;
     if (raw.includes("<") || raw.includes("*") || /\s/u.test(raw)) continue;
-    // Windows 反斜杠写法(`verif\run.do`)也算引用 —— 统一成 `/` 再核(第五轮 2.6:只认正斜杠时,
+    // Windows 反斜杠写法(`verif/run.do`)也算引用 —— 统一成 `/` 再核(第五轮 2.6:只认正斜杠时,
     // 手写报告里的反斜杠路径整条抽不出来,存在性检查等于没跑)
     raw = raw.replace(/\\/gu, "/").replace(LINE_SUFFIX, "");
     if (raw === "" || seen.has(raw)) continue;

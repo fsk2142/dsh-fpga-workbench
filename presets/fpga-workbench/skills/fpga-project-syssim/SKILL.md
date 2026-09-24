@@ -61,7 +61,7 @@ description: 在需要验证 FPGA 工程的模块接口、背压、跨时钟或�
 跑法用设置里选中的那个仿真器走。命令写进脚本,在 **`sim/`** 下一次调用,全程命令行;
 调用姿势以会话开头的**已就绪**清单为准,不在本技能里重新探测工具:
 
-- **ModelSim / QuestaSim**:先 `sim/compile.do`(`vlib` / `vlog`),再 `sim/run.do`(`vsim -c` / `run -all` / `quit -f`);两份脚本**按设置里选中的「仿真编译/运行」模板抄改**(路径见会话提示;工程级没有 `*-new` 起文件命令,不要对工程根跑 `module-verif-new`)。从工程 `sim/` 跑时把编译脚本 `RTL_DIR` 改成 `{../src/rtl}`(模块布局是 `{../rtl}`);编译与运行**两步**都带上设置里的 ini(`$env:MODELSIM_INI` 或 `INI_OVERRIDE`)。`quit` 与成败 gate 写进 `.do`
+- **ModelSim / QuestaSim**:同一份 `sim/run.do` 先跑 compile 模式(`vlib` / `vlog`)、再跑 run 模式(`vsim -c` / `run -all` / `quit -f`);两份脚本**按设置里选中的「仿真编译/运行」模板抄改**(路径见会话提示;工程级没有 `*-new` 起文件命令,不要对工程根跑 `module-verif-new`)。从工程 `sim/` 跑时把编译脚本 `RTL_DIR` 改成 `{../src/rtl}`(模块布局是 `{../rtl}`);编译与运行**两步**都带上设置里的 ini(`$env:MODELSIM_INI` 或 `INI_OVERRIDE`)。`quit` 与成败 gate 写进 `.do`
 - **Vivado XSim**:`xvlog` / `xelab` / `xsim` 三步;**不要跑 `.do`**(那是 ModelSim 方言)
 
 看波形用**已经确认过的那份脚本**起 GUI;不要在 `sim/` 里裸开 GUI 加载设计(dump 会被清零)。

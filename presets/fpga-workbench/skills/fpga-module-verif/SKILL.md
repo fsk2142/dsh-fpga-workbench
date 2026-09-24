@@ -65,7 +65,7 @@ ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里
 
 **ModelSim / QuestaSim(默认)**
 
-编译与运行使用两份独立模板:`verif/compile.do` 只收集并编译，`verif/run.do` 只加载已编译的
+编译与运行使用**同一份**模板 `verif/run.do`,按模式调用:`do run.do compile` 只收集并编译,`do run.do run` 只加载已编译的
 `work/`、运行并判定。这样可反复改激励/换顶层而不把两个职责混成一份不可复核的大脚本。
 
 **别手抄脚本**:用分类模板各起一份(它们把踩过的坑固化了,起完按当前模块改旋钮):
@@ -76,19 +76,19 @@ node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-r
 cd <模块根>/verif
 # 编译与运行**两步**都带上设置里的库映射(F5-06):路径见会话「库映射文件」
 # 例:$env:MODELSIM_INI = "C:\...\modelsim.ini"  —— 用完在同一 try/finally 里恢复
-& "<仿真器路径>" -c -do compile.do
-& "<仿真器路径>" -c -do run.do
+& "<仿真器路径>" -c -do "do run.do compile; quit -f"
+& "<仿真器路径>" -c -do "do run.do run; quit -f"
 ```
 
 模板里这几段**别删**(删了就退回"看着跑完了、其实没跑"的形态):
 
-- `compile.do` 收集时**跳过 `rtl/ip/` 下的 `*_stub.*`**:IP 自带的黑盒 stub 与真模型**同名**,放它进编译会
+- compile 模式收集时**跳过 `rtl/ip/` 下的 `*_stub.*`**:IP 自带的黑盒 stub 与真模型**同名**,放它进编译会
   **静默覆盖真模型**(vlog 只给 Warning),整轮仿真跑在空模块上还打印成功标记;跳过了要打印出来。
-- `compile.do` 对 VHDL/Verilog 分派并用 `catch` 判定,失败即 `quit -f -code 1`;
-- `run.do` 的 **`onfinish stop` 必须在 elaborate 之后**,否则 `$finish`/`$fatal` 直接结束会话;
-- `run.do` 结尾的 **run-level gate** 扫 `sim.log`:有 `Error`/`Fatal` 或缺成功标记 → `-code 1`。
+- compile 模式对 VHDL/Verilog 分派并用 `catch` 判定,失败即 `quit -f -code 1`;
+- run 模式的 **`onfinish stop` 必须在 elaborate 之后**,否则 `$finish`/`$fatal` 直接结束会话;
+- run 模式结尾的 **run-level gate** 扫 `sim.log`:有 `Error`/`Fatal` 或缺成功标记 → `-code 1`。
 
-**判据:先要求 `compile.do` 退出 0，再看 `run.do` 的退出码** —— 裸 `vsim` 的退出码**不可信**
+**判据:先要求 compile 模式退出 0，再看 run 模式的退出码** —— 裸 `vsim` 的退出码**不可信**
 (实测 2020.4:`$fatal` 之后 `run -all` 既不抛错也不改退出码,退出码仍是 0),是**模板里的 gate**
 把它变成可靠判据的。**没有 gate 的脚本不能按退出码判。**
 
@@ -166,7 +166,7 @@ try {
 
 ## 第三步:看波形(用户要看时)
 
-批处理只留日志与数据文件,人工排查需要波形窗口。**用已经确认过的 `verif/run.do` 起 GUI**
+批处理只留日志与数据文件,人工排查需要波形窗口。**用已经确认过的 `verif/run.do` 起 GUI(同一个文件,不给模式就是交互装载)**
 (XSim 用 `xelab` 起好的那个 snapshot 起 GUI)—— 库映射、源码集合与顶层都由那份脚本决定,
 另起一次手工加载必然少编东西。**不要在 `verif/` 里直接开 GUI 加载设计**:TB 在时刻 0 会以
 写方式打开它的 dump 文件,光是加载设计就会把那几个文件清零。
@@ -266,8 +266,8 @@ python verif/comp.py <参照文件> <输出文件> [--kind hex|text]
 ## 判据
 
 **判成败靠日志与比对结果,不是退出码**:ModelSim 批处理下 `$fatal` 之后退出码仍是 0(实测),
-"退出码 0 = 通过"对**裸 `vsim`** 不成立 —— 所以 `run.do` 里的 gate 负责把日志条目变成退出码:
-**跑 `run.do` 拿到的退出码才是判据**(没有 gate 的脚本不能这么判)。
+"退出码 0 = 通过"对**裸 `vsim`** 不成立 —— 所以 run 模式里的 gate 负责把日志条目变成退出码:
+**跑 run 模式拿到的退出码才是判据**(没有 gate 的脚本不能这么判)。
 
 本环节的**适用判据**,以及各自落在哪个状态(状态定义见上面那张唯一权威的表):
 
@@ -330,7 +330,7 @@ FAIL);② `verif/*.md` / `synth/*.md` 里引用的路径是否都在(缺了 → 
 | 起仿真编译脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-compile` | 第二步 |
 | 起仿真运行脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run` | 第二步 |
 | 起比对脚本 | `node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind comp` | 第四步 |
-| 跑出来 | 按选中的仿真器:ModelSim / QuestaSim 依次执行 `compile.do`、`run.do`(在 `verif/` 下),选了 XSim 就是 `xvlog`/`xelab`/`xsim` 三步 | 第二步 |
+| 跑出来 | 按选中的仿真器:ModelSim / QuestaSim 依次执行 `do run.do compile`、`do run.do run`(在 `verif/` 下),选了 XSim 就是 `xvlog`/`xelab`/`xsim` 三步 | 第二步 |
 | 看波形 | 用已经确认过的 `verif/run.do` 起 GUI(XSim 用它的 snapshot),不另起一套加载 | 第三步 |
 | **核证据路径** | `node "<自带命令目录>\module\module-report-check.mjs" <模块根>` | 产物(写 `PASS` 之前) |
 

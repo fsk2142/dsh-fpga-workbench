@@ -47,7 +47,7 @@ set STRATEGY   "default"
 
 # ---- 派生路径(不用改) ------------------------------------------------------ #
 set RTL      [file normalize [file join $MODULE_ROOT $RTL_DIR]]
-# DSH-N01:根目录自己也不能是链接(同上;理由见 compile.do 的同一段)。
+# DSH-N01:根目录自己也不能是链接(同上;理由见仿真模板 modelsim_run.do 的同一段)。
 if {[file type $RTL] eq "link"} {
   fail "RTL root is a symlink/Junction; refusing to follow it: $RTL"
 }
@@ -92,7 +92,7 @@ proc collect_files {dir exts skip_stubs} {
     lappend out $f
   }
   foreach d [lsort [glob -nocomplain -directory $dir -type d *]] {
-    # 第八轮复审 E8-04:与 compile.do 的 collect_hdl 同一条判据 —— `glob -type d` 会把**链接目录**
+    # 第八轮复审 E8-04:与仿真模板的 collect_hdl 同一条判据 —— `glob -type d` 会把**链接目录**
     # (symlink / Junction)算进来,顺着走会把工程外的源码收进综合、来源不可复核;跳过链接即断环。
     if {[file type $d] eq "link"} {
       puts "\[run_synth\] SKIP linked dir (not followed): $d"

@@ -233,7 +233,7 @@ export function snakeCase(name) {
  * @param kind - `rtl` / `tb` / `xdc` / `sim-compile` / `sim-run` / `synth-script` / `comp`。
  * @param name - 模块名(脚本类不用它:文件名固定、正文原样复制)。
  * @param template - 模板路径(语言模板的扩展名跟着它走；脚本类文件名固定)。
- * @returns 相对路径:`rtl/<模块名>.<ext>` / `verif/tb_<snake>.<ext>` / `synth/<模块名>.<ext>` / `verif/compile.do` / `verif/run.do` / `synth/run_synth.tcl` / `verif/comp.py`。
+ * @returns 相对路径:`rtl/<模块名>.<ext>` / `verif/tb_<snake>.<ext>` / `synth/<模块名>.<ext>` / `verif/run.do`(编译与运行同一份,按模式调用) / `synth/run_synth.tcl` / `verif/comp.py`。
  */
 export function defaultDestination(kind, name, template) {
   const ext = extname(template);
@@ -241,8 +241,8 @@ export function defaultDestination(kind, name, template) {
   if (kind === "tb") return join("verif", `tb_${snakeCase(name)}${ext}`);
   if (kind === "xdc") return join("synth", `${name}${ext}`);
   // 模块内使用、外部不引用的脚本 → 落点文件名跟模板走(用户定案,避免再冒出旧 run.do 这种含糊名)
-  if (kind === "sim-compile") return join("verif", "compile.do");
-  if (kind === "sim-run") return join("verif", "run.do");
+  // 编译与运行合一份模板(用户口径 2026-09-23):落点仍是 verif/run.do,模式由调用方在命令行给。
+  if (kind === "sim-compile" || kind === "sim-run") return join("verif", "run.do");
   // 比对脚本同理:技能里给的是 `python verif/comp.py <参照> <输出>`
   if (kind === "comp") return join("verif", "comp.py");
   // 综合脚本同理:跑法里写的是 `synth/run_synth.tcl`(报告也按这个目录收)

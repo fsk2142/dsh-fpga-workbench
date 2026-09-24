@@ -45,8 +45,13 @@
 #   只改头文件不涉及 vcom,所以 VHDL 不会因此被全量重编)。
 # 编译身份(compile configuration identity):stamp 里除了每个输入的 mtime/size,还记**配置**
 #   —— 仿真器 / modelsim.ini(路径 + mtime + size)/ TB_DEFINES / EXTRA_INCDIRS / VENDOR_LIBS /
-#   OPT_LEVEL。run 模式重算比对,任何一项变了就退 1 要求重编:否则"改了 defines 直接 run"会静默
-#   跑在按旧配置编出来的库上(实测形态:不报错,结果却是旧配置的)。
+#   OPT_LEVEL。**两边都用同一套比对**(config_diff):
+#     · run / load:重算后不一致就退 1 要求重编;
+#     · compile   :不一致(或证明不了身份)就**清库(work/)+ 全量重编所有语言**。
+#   第二条是必须的:只查不编会造成**假新鲜** —— run 因配置变化拒绝 → compile 因源码没变而
+#   "Nothing changed" → 却把新身份写进 stamp → 再 run 就放行了,而 work/ 还是旧配置编的
+#   (2026-09-24 复核报告 P1,已修)。FULL_REBUILD=1 同样清库:`ifdef 关掉后旧 design unit
+#   会残留在 work/ 里,只有清库才能让"当前源码 + 当前配置 = 当前库"三者真的对得上。
 #
 # Console text stays in English because older ModelSim releases write the local
 # code page to transcripts and Chinese gate messages become unreadable.
@@ -226,6 +231,47 @@ proc read_stamp {stamp_path} {
   return $previous
 }
 
+# 只读回 stamp 里的 `# cfg` 行(配置身份)。compile 用它判断"要不要清库全量重编"。
+proc read_stamp_cfg {stamp_path} {
+  set items {}
+  if {![file isfile $stamp_path]} { return $items }
+  set fh [open $stamp_path r]
+  set text [read $fh]
+  close $fh
+  foreach line [split $text "\n"] {
+    set line [string trim $line]
+    if {[string match "# cfg *" $line]} { lappend items [string range $line 6 end] }
+  }
+  return $items
+}
+
+# 清空**当前目录下这份** work/ 库(配置变了 / FULL_REBUILD 时用)。
+#   * 用 ModelSim 自己的 `vdel -lib work -all` + `vlib work`,不手写递归删除;
+#   * work/ 本身是 symlink/Junction 就**拒绝** —— 清库会穿到工程外,那是数据丢失而不是"重建"
+#     (与 RTL_ROOT 的链接守卫同一条口径);
+#   * 只碰当前工作目录里的 work/,不接受任何路径参数。
+proc clean_work_library {} {
+  if {[file type work] eq "link"} {
+    puts "\n\[ME\] ERROR: work/ is a symlink/Junction; refusing to clean it: [pwd]/work"
+    puts "\[ME\] (cleaning through a link would wipe the target outside this project)"
+    quit -f -code 1
+  }
+  # 只有**真是** ModelSim 库时才 vdel:work/ 可能是个空目录 / 只剩我们的 stamp(实测:那种情况下
+  # `vdel` 报错退出,而它并不是"清不掉",是"本来就没有库")。库目录带 ModelSim 的 `_info` 标记。
+  if {[file isfile [file join work _info]]} {
+    if {[catch { vdel -lib work -all } message]} {
+      puts "\n\[ME\] ERROR: vdel -lib work -all failed: $message"
+      quit -f -code 1
+    }
+  } else {
+    puts "\[ME\] work/ is not a ModelSim library (no _info); recreating it instead of vdel"
+  }
+  if {[catch { vlib work } message]} {
+    puts "\n\[ME\] ERROR: vlib work failed: $message"
+    quit -f -code 1
+  }
+}
+
 # Mapping priority: explicit knob -> selected environment mapping -> simulator install.
 # E8-09/A-1: an EXPLICITLY given mapping file must exist - refuse instead of silently falling back
 # (otherwise you believe your ini took effect while another one did, and compile/run can even
@@ -320,6 +366,26 @@ proc config_pairs {items} {
   return $out
 }
 
+# **两处共用同一套身份比对**:run/load 拿它判"库还算不算当前配置的产物",compile 拿它判
+# "要不要清库全量重编"。只有一份实现,新增 identity 字段时不会两边漂移。
+# 返回差异描述列表(空 = 一致)。
+proc config_diff {old_items new_items} {
+  set old [config_pairs $old_items]
+  set new [config_pairs $new_items]
+  set diff {}
+  foreach key [lsort [dict keys $old]] {
+    if {![dict exists $new $key]} {
+      lappend diff "$key: was '[dict get $old $key]' -> now <absent>"
+    } elseif {[dict get $old $key] ne [dict get $new $key]} {
+      lappend diff "$key: was '[dict get $old $key]' -> now '[dict get $new $key]'"
+    }
+  }
+  foreach key [lsort [dict keys $new]] {
+    if {![dict exists $old $key]} { lappend diff "$key: was <absent> -> now '[dict get $new $key]'" }
+  }
+  return $diff
+}
+
 # ── compile:发现 + **增量**编译,绝不启动仿真 ──────────────────────────────────
 if {$MODE eq "compile"} {
   set parts [collect_sources $RTL_ROOT $VERIF_ROOT]
@@ -375,31 +441,59 @@ if {$MODE eq "compile"} {
   set fresh_work 0
   if {![file isdirectory work]} { vlib work; set fresh_work 1 }
 
-  # VHDL:只有 VHDL 变了 / FULL_REBUILD / 新库才全量;头文件与 vcom 无关,不牵连它。
-  if {$FULL_REBUILD || $fresh_work || $vhdl_changed} {
+  # 配置身份也要进"要不要真编"的判据(2026-09-24 复核报告 P1;这正是**假新鲜**的漏洞):
+  # 之前 run 会因配置变化拒绝、compile 却因源码没变而什么都不编,然后把新身份盖进 stamp ——
+  # 下一次 run 就放行了,而 work/ 其实还是旧配置编出来的。现在:配置变了(或证明不了身份)
+  # 就**清库 + 全量重编** —— 光重编当前文件还不够:`ifdef 关掉之后旧 design unit 会残留在
+  # work/ 里,清库才能让"当前源码 + 当前配置 = 当前库"三者真的对得上。
+  set cfg_diff {}
+  set config_changed 0
+  if {!$fresh_work} {
+    if {![file isfile $STAMP_PATH]} {
+      set config_changed 1
+      lappend cfg_diff "<no compile stamp> (library provenance unknown)"
+    } elseif {[llength [read_stamp_cfg $STAMP_PATH]] == 0} {
+      set config_changed 1
+      lappend cfg_diff "<stamp carries no configuration identity> (written by an older template)"
+    } else {
+      set cfg_diff [config_diff [read_stamp_cfg $STAMP_PATH] [config_identity]]
+      if {[llength $cfg_diff] > 0} { set config_changed 1 }
+    }
+  }
+  if {$config_changed || $FULL_REBUILD} {
+    clean_work_library
+    if {$config_changed} {
+      puts "\n\[ME\] compile configuration changed -> cleaning work/ and rebuilding every source:"
+      foreach item $cfg_diff { puts "\[ME\]   $item" }
+    }
+    if {$FULL_REBUILD} { puts "\n\[ME\] FULL_REBUILD=1: cleaning work/ and compiling every source" }
+  }
+  set force_full [expr {$FULL_REBUILD || $fresh_work || $config_changed}]
+
+  # VHDL:只有 VHDL 变了 / 清库全量才全量;头文件与 vcom 无关,不牵连它。
+  if {$force_full || $vhdl_changed} {
     set vhdl_compile $vhdl_src
   } else {
     set vhdl_compile {}
   }
-  if {$FULL_REBUILD} { puts "\[ME\] FULL_REBUILD=1: compiling every source" }
-  if {$hdr_changed && !$FULL_REBUILD} {
-    puts "\[ME\] header (.svh/.vh) changed: recompiling every Verilog/SystemVerilog source"
+  if {$hdr_changed && !$force_full} {
+    puts "\n\[ME\] header (.svh/.vh) changed: recompiling every Verilog/SystemVerilog source"
     puts "\[ME\] (which file includes which header cannot be inferred here; VHDL is untouched)"
   }
 
   # Verilog/SystemVerilog:**把完整 source set 交给 vlog -incr**(见文件头"加速一")。
-  # 只有"这份 type 里一个文件都没变、没有头文件变更、不是新库、不是 FULL_REBUILD"时才整段跳过。
+  # 只有"这份 type 里一个文件都没变、没有头文件变更、不用清库全量"时才整段跳过。
   set sv_changed 0
   foreach f $sv_src { if {[lsearch -exact $changed $f] >= 0} { set sv_changed 1; break } }
   set v_changed 0
   foreach f $v_src { if {[lsearch -exact $changed $f] >= 0} { set v_changed 1; break } }
 
-  if {$FULL_REBUILD || $fresh_work || $hdr_changed || $sv_changed} {
+  if {$force_full || $hdr_changed || $sv_changed} {
     set sv_compile $sv_src
   } else {
     set sv_compile {}
   }
-  if {$FULL_REBUILD || $fresh_work || $hdr_changed || $v_changed} {
+  if {$force_full || $hdr_changed || $v_changed} {
     set v_compile $v_src
   } else {
     set v_compile {}
@@ -409,9 +503,9 @@ if {$MODE eq "compile"} {
   set n_sv   [llength $sv_compile]
   set n_v    [llength $v_compile]
   set opt_note [expr {$OPT_LEVEL eq "" ? "(tool default -O4)" : $OPT_LEVEL}]
-  # FULL_REBUILD 时不带 -incr:那个旋钮的承诺就是"忽略 stamp、全部重编"。
+  # 清库全量时不带 -incr:库已经空了,没有"可以跳过的旧 unit",带了只会掩盖意图。
   set incr_args {}
-  if {!$FULL_REBUILD} { set incr_args {-incr} }
+  if {!$force_full} { set incr_args {-incr} }
   if {$n_vhdl + $n_sv + $n_v == 0} {
     puts "\n\[ME\] Nothing changed since the last compile ([llength $kept] source(s) up to date)."
     puts "\[ME\] work/ is already current; set FULL_REBUILD 1 to force a full rebuild."
@@ -420,7 +514,7 @@ if {$MODE eq "compile"} {
       puts "\n\[ME\] vlog -incr: handing [expr {$n_sv + $n_v}] Verilog/SystemVerilog file(s) to ModelSim $opt_note"
       puts "\[ME\]   (it decides which design units need recompiling; unchanged units are skipped)"
     } else {
-      puts "\n\[ME\] FULL_REBUILD: compiling [expr {$n_vhdl + $n_sv + $n_v}] of [llength $kept] file(s) $opt_note:"
+      puts "\n\[ME\] full rebuild: compiling [expr {$n_vhdl + $n_sv + $n_v}] of [llength $kept] file(s) $opt_note:"
     }
     foreach f [concat $vhdl_compile $sv_compile $v_compile] { puts "\[ME\]   $f" }
     if {$vhdl_changed && !$FULL_REBUILD && [llength $vhdl_src] > $n_vhdl} {
@@ -502,29 +596,18 @@ foreach line [split $stamp_text "\n"] {
 }
 # ── 配置身份比对(见 config_identity):值变了就等于换了编译配置,work/ 不再是当前配置的产物 ──
 # 旧版模板写的 stamp 里没有这些行:证明不了配置 → 也算不一致(退 1 要求重编),不静默放行。
+# 比对用与 compile 同一个 config_diff(只留一份实现)。
 if {[llength $stamped_cfg] == 0} {
   puts "\n\[ME\] ERROR: this compile stamp carries no configuration identity (written by an older template)."
   puts "\[ME\] re-run the compile mode: vsim -c -do \"do run.do compile; quit -f\""
   quit -f -code 1
 }
-set old_cfg [config_pairs $stamped_cfg]
-set now_cfg [config_pairs [config_identity]]
-set cfg_diff {}
-foreach key [lsort [dict keys $old_cfg]] {
-  if {![dict exists $now_cfg $key]} {
-    lappend cfg_diff "$key: was '[dict get $old_cfg $key]' -> now <absent>"
-  } elseif {[dict get $old_cfg $key] ne [dict get $now_cfg $key]} {
-    lappend cfg_diff "$key: was '[dict get $old_cfg $key]' -> now '[dict get $now_cfg $key]'"
-  }
-}
-foreach key [lsort [dict keys $now_cfg]] {
-  if {![dict exists $old_cfg $key]} { lappend cfg_diff "$key: was <absent> -> now '[dict get $now_cfg $key]'" }
-}
+set cfg_diff [config_diff $stamped_cfg [config_identity]]
 if {[llength $cfg_diff] > 0} {
   puts "\n\[ME\] ERROR: compile configuration changed after the last compile:"
   foreach item $cfg_diff { puts "\[ME\]   $item" }
   puts "\[ME\] the library in work/ was built with a different configuration; refusing to run it."
-  puts "\[ME\] re-run: vsim -c -do \"do run.do compile; quit -f\""
+  puts "\[ME\] re-run: vsim -c -do \"do run.do compile; quit -f\" (that run cleans work/ and rebuilds everything)"
   quit -f -code 1
 }
 puts "\[ME\] compile identity: matches the last compile ([llength $stamped_cfg] item(s))"

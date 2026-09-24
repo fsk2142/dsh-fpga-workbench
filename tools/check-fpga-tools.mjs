@@ -605,7 +605,10 @@ for (const [label, pattern] of [
   // 2026-09-24(复核报告第 2 项):Verilog/SystemVerilog 把**完整 source set** 交给 vlog -incr,
   // 由 ModelSim 决定重编谁(FULL_REBUILD 时才不带 -incr)。
   ["Verilog/SV 全量交 vlog -incr", /vlog \{\*\}\$incr_args -quiet/u],
-  ["FULL_REBUILD 时不带 -incr", /if \{!\$FULL_REBUILD\} \{ set incr_args \{-incr\} \}/u],
+  ["清库全量时(force_full:配置变 / FULL_REBUILD / 新库)不带 -incr", /if \{!\$force_full\} \{ set incr_args \{-incr\} \}/u],
+  ["force_full 把「配置变了」也算进去", /set force_full \[expr \{\$FULL_REBUILD \|\| \$fresh_work \|\| \$config_changed\}\]/u],
+  ["compile 侧也比对配置身份(假新鲜就是这么来的)", /set cfg_diff \[config_diff \[read_stamp_cfg \$STAMP_PATH\] \[config_identity\]\]/u],
+  ["配置变了就清库全量重编", /compile configuration changed -> cleaning work\/ and rebuilding every source/u],
   ["SV/V 的编译清单在全量/全空之间切换(不再只挑 changed)", /set sv_changed 0/u],
   // 2026-09-24:+acc 分流 —— 批处理不带(实测 2.3~2.6× 快),只有 GUI load 带可见性。
   ["批处理与 GUI 的 vopt 参数是两个旋钮", /set BATCH_VOPT_ARGS \{\}/u],
@@ -790,7 +793,12 @@ if (vsimProbe.status !== 0) {
     const hdrFile = join(hdrVerif, "defs.svh");
     writeFileSync(join(hdrRoot, "rtl", "foo.sv"), '`include "defs.svh"\nmodule foo; localparam int W = `DEF_W; endmodule\n');
     writeFileSync(hdrFile, "`define DEF_W 8\n");
-    writeFileSync(join(hdrVerif, "tb_foo.sv"), tbSource("tb_foo"));
+    // TB 带一个 TB_DEFINES 开关:`SAFE_MODE` 定义与否决定打印什么 —— 于是"配置变了必须真重编"
+    // 可以用**行为**验(打印值必须跟着变),而不只是看 stamp。
+    writeFileSync(
+      join(hdrVerif, "tb_foo.sv"),
+      '`timescale 1ns/1ps\nmodule tb_foo;\n    initial begin\n`ifdef SAFE_MODE\n        $display("MODE=SAFE");\n`else\n        $display("MODE=FAST");\n`endif\n        $display("ALL TESTS PASSED (err_cnt=0)");\n        $finish;\n    end\nendmodule\n'
+    );
     const hdrDo = join(hdrVerif, "run.do");
     writeFileSync(hdrDo, bundledRunOnly);
     const modeStep = (mode, options = {}) => {
@@ -859,12 +867,35 @@ if (vsimProbe.status !== 0) {
       /vsim: top=\S+ voptargs=\{-O5\}/u.test(step.output) && !/vsim: top=\S+ voptargs=\{[^}]*\+acc/u.test(step.output),
       `批处理的 voptargs 不带 +acc;实际 ${(step.output.split(/\r?\n/u).find((l) => /voptargs/u.test(l)) ?? "").trim()}`
     );
-    // ① TB_DEFINES 变了(环境变量)
+    // ① TB_DEFINES 变了(环境变量):run 拒绝 **+ 闭环** —— 重新 compile 必须清库全量重编,
+    //    并且之后的行为要真的反映新配置(2026-09-24 复核报告 P1:以前 compile 会"Nothing changed"
+    //    却把新身份盖进 stamp,造成假新鲜;这里把检测之后的**恢复路径**也钉住)。
     step = modeStep("run", { env: { TB_DEFINES: "SAFE_MODE" }, tag: "defines" });
     check(
       step.status === 1 && /compile configuration changed after the last compile/u.test(step.output) &&
         /defines:/u.test(step.output) && /SAFE_MODE/u.test(step.output),
       `配置身份:改 TB_DEFINES → run 拒绝并点名 defines(实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    step = modeStep("compile", { env: { TB_DEFINES: "SAFE_MODE" }, tag: "defines-compile" });
+    check(
+      step.status === 0 && /compile configuration changed -> cleaning work\/ and rebuilding every source/u.test(step.output) &&
+        /full rebuild: compiling/u.test(step.output) && !/Nothing changed/u.test(step.output),
+      `配置身份:改 TB_DEFINES 后 compile **清库全量重编**(不是 Nothing changed;实际 ${String(step.status)})`,
+      step.output.slice(-400)
+    );
+    step = modeStep("run", { env: { TB_DEFINES: "SAFE_MODE" }, tag: "defines-run2" });
+    check(
+      step.status === 0 && /MODE=SAFE/u.test(step.output) && !/MODE=FAST/u.test(step.output),
+      `配置身份闭环:重编之后行为跟着变(MODE=SAFE,不再是 FAST;实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    // ⑨d 什么都没改再 compile:仍要 Nothing changed(别让修复把日常 compile 变成全量)
+    step = modeStep("compile", { env: { TB_DEFINES: "SAFE_MODE" }, tag: "noop" });
+    check(
+      step.status === 0 && /Nothing changed since the last compile/u.test(step.output) &&
+        !/cleaning work\//u.test(step.output),
+      `配置身份:源码与配置都没变时 compile 仍是 Nothing changed、不清库(实际 ${String(step.status)})`,
       step.output.slice(-300)
     );
     // ② EXTRA_INCDIRS 变了(脚本旋钮)
@@ -886,11 +917,13 @@ if (vsimProbe.status !== 0) {
       `配置身份:换 modelsim.ini → run 拒绝并点名 ini(实际 ${String(step.status)})`,
       step.output.slice(-300)
     );
-    // ④ 旧版 stamp(没有任何 # cfg 行)不能被当成"配置一致":证明不了配置就要求重编
+    // ④ 旧版 stamp(没有任何 # cfg 行)不能被当成"配置一致":证明不了配置就要求重编 ——
+    //    并且**升级路径要闭环**:compile 必须清库全量重编,之后 run 正常通过。
     {
       const oldVerif = join(hdrRoot, "verif-old");
       mkdirSync(join(oldVerif, "work"), { recursive: true });
       writeFileSync(join(oldVerif, "tb_foo.sv"), tbSource("tb_foo"));
+      writeFileSync(join(oldVerif, "defs.svh"), "`define DEF_W 8\n"); // rtl/foo.sv 要 include 它
       writeFileSync(join(oldVerif, "work", ".fpga-compile-stamp"), "# compiled 2020-01-01T00:00:00\n");
       const oldDo = join(oldVerif, "run.do");
       writeFileSync(oldDo, bundledRunOnly);
@@ -907,6 +940,19 @@ if (vsimProbe.status !== 0) {
         oldStep === 1 && /carries no configuration identity/u.test(oldOut),
         `配置身份:旧版 stamp(没有 # cfg 行)不会被当成配置一致 → run 退 1 并说明(实际 ${String(oldStep)})`,
         oldOut.slice(-300)
+      );
+      const oldCompile = modeStep("compile", { cwd: oldVerif, doFile: oldDo, tag: "oldstamp-compile" });
+      check(
+        oldCompile.status === 0 && /no configuration identity> \(written by an older template\)/u.test(oldCompile.output) &&
+          /cleaning work\/ and rebuilding every source/u.test(oldCompile.output),
+        `配置身份:旧版 stamp 升级路径 → compile 清库全量重编(实际 ${String(oldCompile.status)})`,
+        oldCompile.output.slice(-400)
+      );
+      const oldRun2 = modeStep("run", { cwd: oldVerif, doFile: oldDo, tag: "oldstamp-run2" });
+      check(
+        oldRun2.status === 0 && /SIMULATION PASSED/u.test(oldRun2.output),
+        `配置身份:旧版 stamp 重编之后 run 正常通过(实际 ${String(oldRun2.status)})`,
+        oldRun2.output.slice(-300)
       );
     }
 
@@ -1003,6 +1049,109 @@ if (vsimProbe.status !== 0) {
         `真语法错:重试不会把它变成通过 → compile 退 1 并说 failed twice(实际 ${String(broken.status)})`,
         broken.output.slice(-300)
       );
+    }
+
+    // ⑬ EXTRA_INCDIRS 的**行为闭环**(复核报告 §18):换 include 搜索目录之后,compile 必须真重编,
+    //    而且重编完的行为要反映新目录里的头文件(只查 stamp 变化不算)。
+    {
+      const incRoot = join(simRoot, "incdir");
+      const incVerif = join(incRoot, "verif");
+      mkdirSync(join(incRoot, "rtl"), { recursive: true });
+      mkdirSync(join(incVerif, "inc_a"), { recursive: true });
+      mkdirSync(join(incVerif, "inc_b"), { recursive: true });
+      writeFileSync(join(incVerif, "inc_a", "defs.svh"), "`define VALUE 1\n");
+      writeFileSync(join(incVerif, "inc_b", "defs.svh"), "`define VALUE 2\n");
+      writeFileSync(
+        join(incRoot, "rtl", "foo.sv"),
+        '`include "defs.svh"\nmodule foo;\n    initial $display("VALUE=%0d", `VALUE);\nendmodule\n'
+      );
+      writeFileSync(
+        join(incVerif, "tb_foo.sv"),
+        '`timescale 1ns/1ps\nmodule tb_foo;\n    foo u_foo();\n    initial begin\n        $display("ALL TESTS PASSED (err_cnt=0)");\n        $finish;\n    end\nendmodule\n'
+      );
+      const withIncdir = (dir) => bundledRunOnly.replace(/set EXTRA_INCDIRS\s+\{\}/u, `set EXTRA_INCDIRS  {${dir}}`);
+      const doA = join(incVerif, "run-a.do");
+      const doB = join(incVerif, "run-b.do");
+      writeFileSync(doA, withIncdir("inc_a"));
+      writeFileSync(doB, withIncdir("inc_b"));
+      check(withIncdir("inc_a") !== bundledRunOnly && withIncdir("inc_b") !== bundledRunOnly, "夹具:EXTRA_INCDIRS 两个档都真被填上了");
+      const incStep = (mode, doFile, tag) => modeStep(mode, { cwd: incVerif, doFile, tag });
+      let inc = incStep("compile", doA, "incdir-a-compile");
+      check(inc.status === 0, `incdir 夹具:用 inc_a 编译退 0(实际 ${String(inc.status)})`, inc.output.slice(-300));
+      inc = incStep("run", doA, "incdir-a-run");
+      check(
+        inc.status === 0 && /VALUE=1/u.test(inc.output),
+        `incdir 夹具:先用 inc_a 跑出 VALUE=1(实际 ${String(inc.status)})`,
+        inc.output.slice(-300)
+      );
+      inc = incStep("run", doB, "incdir-b-stale");
+      check(
+        inc.status === 1 && /incdirs:/u.test(inc.output),
+        `incdir 夹具:换 inc_b → run 拒绝(实际 ${String(inc.status)})`,
+        inc.output.slice(-300)
+      );
+      inc = incStep("compile", doB, "incdir-b-compile");
+      check(
+        inc.status === 0 && /cleaning work\/ and rebuilding/u.test(inc.output),
+        `incdir 夹具:换 inc_b 后 compile 清库全量重编(实际 ${String(inc.status)})`,
+        inc.output.slice(-400)
+      );
+      inc = incStep("run", doB, "incdir-b-run");
+      check(
+        inc.status === 0 && /VALUE=2/u.test(inc.output),
+        `incdir 夹具:行为跟着变 VALUE=2(实际 ${String(inc.status)})`,
+        inc.output.slice(-300)
+      );
+    }
+
+    // ⑭ FULL_REBUILD=1 也走清库(复核报告 §13):语义是"当前库不可信、重建",不是"对现有库重编一遍"。
+    {
+      const fullDo = join(hdrVerif, "run-full.do");
+      writeFileSync(fullDo, bundledRunOnly.replace(/set FULL_REBUILD\s+0/u, "set FULL_REBUILD   1"));
+      check(readFileSync(fullDo, "utf8") !== bundledRunOnly, "夹具:FULL_REBUILD 旋钮真被打开了");
+      const fullStep = modeStep("compile", { doFile: fullDo, tag: "fullrebuild", env: { TB_DEFINES: "SAFE_MODE" } });
+      check(
+        fullStep.status === 0 && /FULL_REBUILD=1: cleaning work\/ and compiling every source/u.test(fullStep.output) &&
+          /full rebuild: compiling/u.test(fullStep.output),
+        `FULL_REBUILD=1:清库 + 全量重编(实际 ${String(fullStep.status)})`,
+        fullStep.output.slice(-400)
+      );
+    }
+
+    // ⑮ 清库的安全边界(复核报告 §12):work/ 本身是 Junction → **拒绝**,不许穿过去清目标目录。
+    {
+      const linkRoot = join(simRoot, "worklink");
+      const linkVerif = join(linkRoot, "verif");
+      mkdirSync(join(linkRoot, "rtl"), { recursive: true });
+      mkdirSync(linkVerif, { recursive: true });
+      writeFileSync(join(linkRoot, "rtl", "foo.sv"), "module foo; endmodule\n");
+      writeFileSync(join(linkVerif, "tb_foo.sv"), tbSource("tb_foo"));
+      const linkDo = join(linkVerif, "run.do");
+      writeFileSync(linkDo, bundledRunOnly.replace(/set FULL_REBUILD\s+0/u, "set FULL_REBUILD   1"));
+      // 自造链接目标(不用文件后面才声明的 junctionOutside;那是 TDZ)
+      const linkTarget = join(simRoot, "worklink-target");
+      mkdirSync(linkTarget, { recursive: true });
+      const markerPath = join(linkTarget, "keep-me.txt");
+      writeFileSync(markerPath, "keep\n");
+      let madeLink = true;
+      try {
+        symlinkSync(linkTarget, join(linkVerif, "work"), "junction");
+      } catch (error) {
+        madeLink = false;
+        console.log(`ok    (跳过)本机造不出 junction(${String(error.code ?? "")}) —— work/ 链接守卫由实现静态分支保证`);
+      }
+      if (madeLink) {
+        const linkStep = modeStep("compile", { cwd: linkVerif, doFile: linkDo, tag: "worklink" });
+        check(
+          linkStep.status === 1 && /refusing to clean it/u.test(linkStep.output) && /symlink\/Junction/u.test(linkStep.output),
+          `work/ 是 Junction → 拒绝清库(实际 ${String(linkStep.status)})`,
+          linkStep.output.slice(-300)
+        );
+        check(
+          existsSync(markerPath) && readFileSync(markerPath, "utf8") === "keep\n",
+          "拒绝之后**链接目标一个字节没动**(清库没有穿过去)"
+        );
+      }
     }
   }
 }

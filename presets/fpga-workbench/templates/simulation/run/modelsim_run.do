@@ -682,17 +682,67 @@ if {$MODE eq "load"} {
 }
 
 puts "\[ME\] vsim: top=$TOP voptargs={$VOPT_ALL}"
-if {[catch {
-  vsim -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG {*}[vopt_argv $VOPT_ALL] $TOP
-} message]} {
-  puts "\n\[ME\] ERROR: vsim failed to start: $message"
+
+# 批处理的"装设计 + 跑"放在**子进程**里(2026-09-25,复核报告 C 项)。
+#
+# 为什么:ModelSim 2020.4 在 design-load / elaboration 失败时会**直接结束整个进程**并退 12 ——
+# 顶层模块不存在、`-L` 库名写错、非法 voptargs 三种都实测过。设计加载与控制 Tcl 同进程时,
+# 它把整个 simulator 一起带走,我们的 `catch` 连机会都没有:既没有 `[ME] ERROR`,退出码也违反
+# "0/1/2" 的契约。改成 controller(本进程)exec 一个子 vsim:子进程死了,controller 还能从
+# `-errorcode`(CHILDSTATUS <pid> <status>)拿到原生退出码,并归一成 1 + 一条 `[ME] ERROR`。
+# 载入设计与仿真**各归各的**:compile 与 `load` 都不动(`load` 必须留在进程内 —— 它要把设计装进
+# 当前 GUI 会话)。
+# argv 里**不放可执行名** —— 由 exec 给出(放进去会被 ModelSim 当成顶层名:`Failed to find
+# design unit vsim`,实测踩过)。
+set child_argv [list -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG {*}[vopt_argv $VOPT_ALL] -do {run -all; quit -f} $TOP]
+puts "\[ME\] design load + simulation run in a child vsim process (argv passed directly, no shell)"
+# transcript 必须是**这次写的**:子进程没起来时旧日志还在,拿它判 PASS 就是"假新鲜"(与 2026-09-24
+# 修过的配置身份同一类)。所以先记下旧 mtime,跑完要求它变新 —— 但**不删**用户已有的日志。
+set log_before [expr {[file isfile $RESULT_LOG] ? [file mtime $RESULT_LOG] : -1}]
+set child_failed [catch {
+  exec [file join [file dirname [info nameofexecutable]] vsim.exe] {*}$child_argv
+} child_out child_opts]
+if {$child_failed} {
+  set native ""
+  if {[dict exists $child_opts -errorcode]
+      && [regexp {CHILDSTATUS\s+\d+\s+(\d+)} [dict get $child_opts -errorcode] -> child_status]} {
+    set native " (child exit code $child_status)"
+  }
+  puts "\n\[ME\] ERROR: the simulator process could not load or run the design${native}."
+  puts "\[ME\]   first ** Error / * Note in $RESULT_LOG is the place to look;"
+  puts "\[ME\]   if that is empty, here is the child's own output:"
+  foreach line [split $child_out "\n"] {
+    if {[string trim $line] ne ""} { puts "\[ME\]     $line" }
+  }
   quit -f -code 1
 }
+if {![file isfile $RESULT_LOG] || [file mtime $RESULT_LOG] <= $log_before} {
+  puts "\n\[ME\] ERROR: no fresh transcript at $RESULT_LOG (the simulator wrote nothing this run)."
+  puts "\[ME\] refusing to judge the previous run's log - re-run the compile mode, then the run mode."
+  quit -f -code 1
+}
+# 子进程自己的输出**原样回显**:`exec` 会把子进程 stdout 收进 $child_out,不回显的话终端就再也
+# 看不到仿真过程($display / 波形提示 / 各家的 Note 都在里面)—— 人眼也要看得见跑的过程。
+foreach line [split $child_out "\n"] {
+  if {[string trim $line] ne ""} { puts $line }
+}
 
-# Must be set after elaboration. Otherwise $finish/$fatal terminates the session
-# before this run-level gate can inspect the transcript.
-onfinish stop
-run -all
+# 2026-09-25:这里原来有一句 `onfinish stop`(为了让本进程里的 `run -all` 不被 $finish 打断,
+# 好让门去读 transcript)。现在**设计与仿真都在子进程里**,本进程不再展开设计 —— 那句话反而变成
+# 非法调用(ModelSim:`onfinish may only be used after elaboration`)并让父进程退 1(实测踩过)。
+# 门的判据读的是子进程已经写好的 transcript,顺序天然有保证,所以不需要它。
+# transcript 里算"错误"的行:必须是 `** Error` / `** Fatal` **本身**(后面跟冒号、空或行尾)。
+# 为什么写这么死(2026-09-25 实测):ModelSim 在会话末尾会写一行汇总 `# Errors: 0, Warnings: 0`,
+# 而 `string match "** Error*"` **会匹配它**(实测 1)—— 旧流程里门读日志时这行还没落盘,所以
+# 一直没暴露;子进程化之后子会话先结束、汇总行已经在日志里,于是每一次正常 PASS 都被误判 FAILED。
+proc is_error_line {line} {
+  set text [string trim $line]
+  if {[string match "# *" $text]} { set text [string trim [string range $text 2 end]] }
+  foreach kind {"** Error" "** Fatal"} {
+    if {$text eq $kind || [string match "$kind:*" $text] || [string match "$kind *" $text]} { return 1 }
+  }
+  return 0
+}
 
 set errors 0
 set passed 0
@@ -701,7 +751,7 @@ if {[file isfile $RESULT_LOG]} {
   set text [read $fh]
   close $fh
   foreach line [split $text "\n"] {
-    if {[string match "** Error*" $line] || [string match "** Fatal*" $line]} {
+    if {[is_error_line $line]} {
       incr errors
     }
     # E8-03:只认**完整成功行**;否定句/自述"没看到 marker"不得算通过

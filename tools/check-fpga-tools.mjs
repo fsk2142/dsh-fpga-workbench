@@ -366,8 +366,10 @@ const firstCompileCmdAt = (() => {
 })();
 check(
   modeCompileAt > 0 && modeRunAt > modeCompileAt && firstCompileCmdAt > modeCompileAt &&
-    compileTemplate.indexOf("vsim -c -modelsimini") > modeRunAt,
-  "合并模板:编译命令都在 compile 段、vsim 只在 run 段(按模式分界,不再各自一份文件)"
+    // 2026-09-25 批处理子进程化:run 段的 vsim 调用变成 `exec … vsim.exe` + argv 列表,
+    // 所以这里找的是"子进程那条命令行"而不是字面的 `vsim -c -modelsimini`。
+    compileTemplate.indexOf("exec [file join [file dirname [info nameofexecutable]] vsim.exe]") > modeRunAt,
+  "合并模板:编译命令都在 compile 段、装设计/仿真都在 run 段(按模式分界,不再各自一份文件)"
 );
 check(
   (/\bsynth_design\b/u.test(synthesisTemplate) || /launch_runs\s+synth_1/u.test(synthesisTemplate)) &&
@@ -584,9 +586,25 @@ const bundledRunOnly = bundledRunDoExists ? readFileSync(bundledRunDoPath, "utf8
     bundledRunDoExists && existsSync(bundledCompileDoPath) && bundledCompileDoPath === bundledRunDoPath,
     "编译与运行分类模板是**同一份**文件,且都存在"
   );
-for (const marker of ["*_stub.*", "onfinish stop", "quit -f -code 1", "ALL TESTS PASSED"]) {
+// `onfinish stop` 不再是标记(2026-09-25 复核报告 C):批处理的"装设计 + 跑"搬进**子进程**后,
+// 本进程不再展开设计,那句话变成非法调用(ModelSim:onfinish may only be used after elaboration)
+// 并让父进程退 1 —— 真正的标记换成"子进程 + argv 直传 + transcript 新鲜度"这三条。
+for (const marker of ["*_stub.*", "quit -f -code 1", "ALL TESTS PASSED"]) {
   check(bundledRunDo.includes(marker), `合并模板里有「${marker}」`);
 }
+for (const [label, pattern] of [
+  ["批处理把装设计与仿真放进子 vsim(不复用自身进程)", /exec \[file join \[file dirname \[info nameofexecutable\]\] vsim\.exe\] \{\*\}\$child_argv/u],
+  ["子进程 argv 不含可执行名(否则被当成顶层名)", /set child_argv \[list -c -modelsimini/u],
+  ["子进程死掉时从 -errorcode 取原生退出码并归一成 1", /CHILDSTATUS\\s\+\\d\+\\s\+\(\\d\+\)/u],
+  ["transcript 必须是这次写的(不拿旧日志判 PASS)", /no fresh transcript/u],
+  ["错误行判据收紧:不把 `Errors: 0` 汇总行当错误", /proc is_error_line/u]
+]) {
+  check(pattern.test(bundledRunDo), `批处理子进程化:${label}`);
+}
+check(
+  !/^onfinish stop$/mu.test(bundledRunDo) && !/^onfinish /mu.test(bundledRunDo),
+  "批处理路径不再设 onfinish(本进程不展开设计,那句是非法调用)"
+);
 // 2026-09-24(审查报告 T-02 / T-09):两处契约改动,断言钉在**可执行**文本上(注释里也会出现
 // .svh/.vh 和 load 这些词,拿注释喂饱断言等于没测)。
 for (const [label, pattern] of [
@@ -629,10 +647,12 @@ check(
   // 锚点用**语句形态**(\nrun -all):load 分支的提示文字里也写着 "no run -all",不能拿它当锚点。
   const loadAt = compileTemplate.indexOf('if {$MODE eq "load"}');
   const loadReturnAt = loadAt < 0 ? -1 : compileTemplate.indexOf("return", loadAt);
-  const runAllAt = compileTemplate.indexOf("\nrun -all");
+  // 2026-09-25 批处理子进程化:`run -all` 现在只出现在**子进程的 -do 参数**里(controller 自己不跑了),
+  // 所以要盯的是"load 分支的 return 早于子进程 spawn",而不是"模板文本里没有 run -all"。
+  const childSpawnAt = compileTemplate.indexOf("exec [file join [file dirname [info nameofexecutable]] vsim.exe]");
   check(
-    loadAt > 0 && loadReturnAt > loadAt && runAllAt > loadReturnAt,
-    `load 模式只装载:在该分支内 return,永远走不到 run -all(load@${String(loadAt)} return@${String(loadReturnAt)} run-all@${String(runAllAt)})`
+    loadAt > 0 && loadReturnAt > loadAt && childSpawnAt > loadReturnAt,
+    `load 模式只装载:在该分支内 return,永远走不到子进程 spawn(load@${String(loadAt)} return@${String(loadReturnAt)} child@${String(childSpawnAt)})`
   );
   check(
     compileTemplate.includes("vsim -modelsimini $INI_FWD") && !/MODE eq "load"[\s\S]{0,400}?vsim -c /u.test(compileTemplate),
@@ -928,6 +948,40 @@ if (vsimProbe.status !== 0) {
       /-voptargs="?\+acc=rn -O5"?/u.test(voptArgsLoad.output),
       "load 照传 -voptargs={+acc=rn -O5}",
       voptArgsLoad.output.slice(-300)
+    );
+    // ⑧e 批处理的"装设计 + 跑"在**子进程**里(2026-09-25 复核报告 C 项):ModelSim 在
+    //     design-load/elaboration 失败时会直接结束**整个进程**并退 12(顶层不存在 / `-L` 库名
+    //     写错 / 非法 voptargs 三种都实测过)—— 同进程里的 Tcl 连 catch 都来不及,于是既没有
+    //     `[ME] ERROR`,退出码也违反 0/1/2。controller 现在 exec 子 vsim,拿 `-errorcode` 的
+    //     CHILDSTATUS 归一成 1 + 一条 `[ME] ERROR`;`load` 必须留在进程内,不受影响。
+    const missingTopDo = join(hdrVerif, "run-missing-top.do");
+    writeFileSync(missingTopDo, bundledRunOnly.replace(/set TOP_OVERRIDE\s+\{\}/u, "set TOP_OVERRIDE   {no_such_module}"));
+    step = modeStep("run", { doFile: missingTopDo, tag: "child-missing-top" });
+    check(
+      step.status === 1 && /\[ME\] ERROR/u.test(step.output) && /child exit code 12/u.test(step.output),
+      `顶层模块不存在 → 退 1 且有 [ME] ERROR(原生 12 被归一;实际 ${String(step.status)})`,
+      step.output.slice(-400)
+    );
+    const badLibDo = join(hdrVerif, "run-bad-lib.do");
+    writeFileSync(badLibDo, bundledRunOnly.replace(/set VENDOR_LIBS\s+\{\}/u, "set VENDOR_LIBS    {no_such_lib}"));
+    step = modeStep("run", { doFile: badLibDo, tag: "child-bad-lib" });
+    check(
+      step.status === 1 && /\[ME\] ERROR/u.test(step.output),
+      `厂商库名写错 → 退 1 且有 [ME] ERROR(实际 ${String(step.status)})`,
+      step.output.slice(-400)
+    );
+    step = modeStep("run", { tag: "child-normal" });
+    check(
+      step.status === 0 && /SIMULATION PASSED/u.test(step.output) &&
+        /child vsim process/u.test(step.output),
+      `正常 PASS:走子进程、门判通过(隐含回归:汇总行 Errors: 0 不再被当成错误;实际 ${String(step.status)})`,
+      step.output.slice(-300)
+    );
+    step = modeStep("load", { tag: "child-load" });
+    check(
+      step.status === 0 && /DESIGN LOADED/u.test(step.output) && !/child vsim process/u.test(step.output),
+      "load 模式**不**走子进程(设计必须留在当前会话里)",
+      step.output.slice(-300)
     );
     // ① TB_DEFINES 变了(环境变量):run 拒绝 **+ 闭环** —— 重新 compile 必须清库全量重编,
     //    并且之后的行为要真的反映新配置(2026-09-24 复核报告 P1:以前 compile 会"Nothing changed"

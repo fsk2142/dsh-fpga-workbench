@@ -61,7 +61,7 @@ const SAFETY_CHECK = "check-install-safety.mjs";
     "  6) 旧技能停用:用户预设目录里造一个清单记过的过期技能,重启后应改名成 *.disabled-by-plugin 且不再加载",
     "  7) 退出码与错误状态:故意让检查失败(删掉一个被引用的证据文件),确认退非零且点名",
     "  8) 有厂商工具时:综合与仿真各跑一次真实夹具；ModelSim / QuestaSim 先 compile.do 再 run.do,不能用 Node 单测替代",
-    "  9) 工程骨架:把一个空目录直接作为 --kind project 的根,核对只生成 doc/sch/prj/src/{rtl,sim}/ip/sim/xdc/bit"
+    "  9) 工程骨架:对一个空目录跑 setup-scaffold.mjs <目录> --kind project(目录本身就是工程根;三个 module-*-new.mjs 都不支持 --kind project),核对只生成 .fpga-workbench.json、AGENTS.fpga.md 与 doc/sch/prj/src/{rtl,sim}/ip/sim/xdc/bit"
   ].join("\\n");
 
 const run = (file) => {

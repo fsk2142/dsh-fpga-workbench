@@ -867,6 +867,68 @@ if (vsimProbe.status !== 0) {
       /vsim: top=\S+ voptargs=\{-O5\}/u.test(step.output) && !/vsim: top=\S+ voptargs=\{[^}]*\+acc/u.test(step.output),
       `批处理的 voptargs 不带 +acc;实际 ${(step.output.split(/\r?\n/u).find((l) => /voptargs/u.test(l)) ?? "").trim()}`
     );
+    // ⑧d `-voptargs` **只在真有内容时传**(2026-09-25 真机)。`OPT_LEVEL {}` 是模板**文档承诺**的
+    //     "退回工具默认",以前却拼出 `-voptargs=""` → ModelSim 2020.4 `** Error: (vsim-3789) Invalid
+    //     -voptargs setting` 并**直接结束进程(退 12)**,于是这条用法只在 run 时才炸。
+    //     判据看 **ModelSim 自己回显的命令行**(`# vsim …`),不是我们打印的那行 —— 后者两种情况一样。
+    const emptyOptDo = join(hdrVerif, "run-empty-opt.do");
+    writeFileSync(
+      emptyOptDo,
+      bundledRunOnly
+        .replace(/set OPT_LEVEL\s+\{-O5\}/u, "set OPT_LEVEL      {}")
+        .replace(/set DEBUG_VOPT_ARGS \{\+acc=rn\}/u, "set DEBUG_VOPT_ARGS {}")
+    );
+    check(
+      readFileSync(emptyOptDo, "utf8") !== bundledRunOnly,
+      "夹具:OPT_LEVEL / DEBUG_VOPT_ARGS 旋钮真被改掉了(没改上的话下面那几条测的是另一回事)"
+    );
+    const emptyOptCompile = modeStep("compile", { doFile: emptyOptDo, tag: "emptyopt-compile" });
+    check(
+      emptyOptCompile.status === 0,
+      `OPT_LEVEL={} → compile 退 0(实际 ${String(emptyOptCompile.status)})`,
+      emptyOptCompile.output.slice(-200)
+    );
+    const emptyOptRun = modeStep("run", { doFile: emptyOptDo, tag: "emptyopt-run" });
+    check(
+      emptyOptRun.status === 0 && /SIMULATION PASSED/u.test(emptyOptRun.output) &&
+        !/-voptargs/u.test(emptyOptRun.output),
+      `OPT_LEVEL={} → run 退 0 且命令行里**根本没有** -voptargs(实际 ${String(emptyOptRun.status)})`,
+      emptyOptRun.output.slice(-300)
+    );
+    const emptyOptLoad = modeStep("load", { doFile: emptyOptDo, tag: "emptyopt-load" });
+    check(
+      emptyOptLoad.status === 0 && /DESIGN LOADED/u.test(emptyOptLoad.output) &&
+        !/-voptargs/u.test(emptyOptLoad.output),
+      `OPT_LEVEL={} + DEBUG_VOPT_ARGS={} → load 同样不传 -voptargs(实际 ${String(emptyOptLoad.status)})`,
+      emptyOptLoad.output.slice(-300)
+    );
+    // 反面:非空时必须照传。顺序有讲究 —— 上面刚用 `OPT_LEVEL={}` 编过,配置身份门会拦住"直接换回
+    // -O5 就 run"(这正是它的职责),所以先验被拦,重编之后再验命令行。
+    const backToDefault = modeStep("run", { tag: "voptargs-stale" });
+    check(
+      backToDefault.status === 1 && /compile configuration changed/u.test(backToDefault.output) &&
+        /opt:/u.test(backToDefault.output),
+      `从 OPT_LEVEL={} 切回 -O5:run 退 1 并点名 opt(身份门的职责;实际 ${String(backToDefault.status)})`,
+      backToDefault.output.slice(-250)
+    );
+    const recompile = modeStep("compile", { tag: "voptargs-recompile" });
+    check(
+      recompile.status === 0 && /cleaning work\/ and rebuilding/u.test(recompile.output),
+      "切回 -O5 后重编:走清库全量路径(配置变了就不该在旧库上补)",
+      recompile.output.slice(-250)
+    );
+    const voptArgsRun = modeStep("run", { tag: "voptargs-batch" });
+    check(
+      /-voptargs="?-O5"?/u.test(voptArgsRun.output),
+      "默认档 run 照传 -voptargs=-O5(空才省,非空不许丢)",
+      voptArgsRun.output.slice(-300)
+    );
+    const voptArgsLoad = modeStep("load", { tag: "voptargs-load" });
+    check(
+      /-voptargs="?\+acc=rn -O5"?/u.test(voptArgsLoad.output),
+      "load 照传 -voptargs={+acc=rn -O5}",
+      voptArgsLoad.output.slice(-300)
+    );
     // ① TB_DEFINES 变了(环境变量):run 拒绝 **+ 闭环** —— 重新 compile 必须清库全量重编,
     //    并且之后的行为要真的反映新配置(2026-09-24 复核报告 P1:以前 compile 会"Nothing changed"
     //    却把新身份盖进 stamp,造成假新鲜;这里把检测之后的**恢复路径**也钉住)。

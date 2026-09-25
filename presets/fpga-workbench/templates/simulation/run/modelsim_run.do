@@ -655,6 +655,16 @@ if {$TOP_OVERRIDE ne ""} {
 # 批处理用 BATCH_VOPT_ARGS(默认空:快),GUI load 用 DEBUG_VOPT_ARGS(默认 {+acc=rn}:看得见信号)。
 set VOPT_ALL [string trim "$BATCH_VOPT_ARGS $OPT_LEVEL"]
 
+# **run 与 load 共用这一个 argv 构造**(2026-09-25):以前两边各写一遍 `vsim … -voptargs=$VOPT_ALL`,
+# 于是"参数到底传没传"这种判断也要写两遍 —— 正是这次出 bug 的地方(见下面 vopt_argv)。
+# `VOPT_ALL` 为空 → **完全不传** `-voptargs`,因为空值≠缺省:ModelSim 2020.4 收到 `-voptargs=""`
+# 会直接 `** Error: (vsim-3789) Invalid -voptargs setting` 并结束进程(实测),那会让
+# "OPT_LEVEL = {} = 退回工具默认" 这条**文档承诺的用法**在 run 时才失败。
+proc vopt_argv {vopt_all} {
+  if {[string trim $vopt_all] eq ""} { return [list] }
+  return [list "-voptargs=$vopt_all"]
+}
+
 # ── load:同一个新鲜度门,只把设计装进 GUI 会话;绝不 run -all、绝不退出 ──────────────
 # 用法是 `vsim -do "do run.do load"`(**不要** -c):父会话是 GUI,这里的 `vsim` 就是"装载设计"这条
 # 命令,所以波形/库映射/顶层与 run 模式完全同源。校验没过就退 1,不开一个不可信的 GUI。
@@ -662,7 +672,7 @@ if {$MODE eq "load"} {
   set VOPT_ALL [string trim "$DEBUG_VOPT_ARGS $OPT_LEVEL"]
   puts "\[ME\] vsim load (GUI): top=$TOP voptargs={$VOPT_ALL}"
   if {[catch {
-    vsim -modelsimini $INI_FWD -lib work {*}$vendor_args -voptargs=$VOPT_ALL $TOP
+    vsim -modelsimini $INI_FWD -lib work {*}$vendor_args {*}[vopt_argv $VOPT_ALL] $TOP
   } message]} {
     puts "\n\[ME\] ERROR: vsim failed to load the design: $message"
     quit -f -code 1
@@ -673,7 +683,7 @@ if {$MODE eq "load"} {
 
 puts "\[ME\] vsim: top=$TOP voptargs={$VOPT_ALL}"
 if {[catch {
-  vsim -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG -voptargs=$VOPT_ALL $TOP
+  vsim -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG {*}[vopt_argv $VOPT_ALL] $TOP
 } message]} {
   puts "\n\[ME\] ERROR: vsim failed to start: $message"
   quit -f -code 1

@@ -2499,6 +2499,30 @@ check(
   `模块名带 / → 退 2 且不落文件(第五轮 3.4;实际 ${String(nameProbe.code)})`,
   nameProbe.output.slice(-200)
 );
+// 2026-09-25 真机:Windows 保留设备名**建得出来、工具也读得了,但 Git 索引不了**
+// (`git add con.sv` → `unable to index file`,退 128;`git status` 只列 `??`)→ 源码永远进不了版本库,
+// 而所有工具链都"看起来正常"。所以必须在**写文件之前**拒掉,大小写不敏感,带扩展名也算。
+for (const bad of ["con", "CON", "con.sv", "nul", "aux", "prn", "com1", "lpt9.vhd"]) {
+  const root = join(SANDBOX, `reserved-${stamp}-${bad}`);
+  mkdirSync(root, { recursive: true });
+  const got = runStderr("module-rtl-new.mjs", [root, bad, "--template", categorizedTemplates.rtl]);
+  check(
+    got.code === 2 && /Windows 保留设备名/u.test(got.output) && !existsSync(join(root, "rtl", `${bad}.sv`)),
+    `保留设备名 ${bad} → 退 2、说清原因、**不落文件**(实际 ${String(got.code)})`,
+    got.output.slice(-160)
+  );
+}
+// 反过来:这些**不是**保留名,不能误杀(它们只是长得像)。
+for (const good of ["console", "connection", "auxiliary", "com10", "lpt10"]) {
+  const root = join(SANDBOX, `benign-${stamp}-${good}`);
+  mkdirSync(root, { recursive: true });
+  const got = runStderr("module-rtl-new.mjs", [root, good, "--template", categorizedTemplates.rtl]);
+  check(
+    got.code === 0 && existsSync(join(root, "rtl", `${good}.sv`)),
+    `${good} 不是 Windows 保留设备名 → 正常起文件(实际 ${String(got.code)})`,
+    got.output.slice(-160)
+  );
+}
 check(
   hasIssue(nameRuleIssues(["    input wire clk,", "    output logic dout", "    wire mid;", "    assign mid = clk;"].join("\n")),
     /内部 wire\|内部 signal 'mid' 用了 wire/u

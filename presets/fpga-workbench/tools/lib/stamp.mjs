@@ -466,6 +466,18 @@ export function parseStampArgs(argv) {
 }
 
 /**
+ * Windows 保留设备名:**带不带扩展名都算**(2026-09-25 实机)。
+ *
+ * 为什么必须挡在起文件之前:这类名字**建得出来、也读得到** —— PowerShell 能读,ModelSim 能编译
+ * (`-- Compiling module con`),Vivado 也能 `read_verilog` 成功 —— 但 **Git 索引不了**:
+ * `git add con.sv` → `error: open("con.sv"): No such file or directory` + `unable to index file`,
+ * 退出码 128,而 `git status` 只把它列成 `??`。也就是说这类模块的源码**永远进不了版本库**,
+ * 而所有工具链都"看起来正常" —— 这是最坏的一类错:没人会发现文件丢了。
+ * (`con`/`prn`/`aux`/`nul`/`com1..9`/`lpt1..9` 由 Win32 保留;`com10`/`lpt10`/`console` 不是。)
+ */
+const WINDOWS_RESERVED_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
+
+/**
  * 模块名必须是**单个目录段** —— 它会在根目录下当同名子目录用(`join(root, name)`)。
  *
  * 为什么必须挡:实测过 `--modules "..\..\evil"`,骨架真建到了根目录**之外**,退出码还是 0;
@@ -483,5 +495,6 @@ export function moduleNameError(name) {
   if (name.includes("/") || name.includes("\\")) return "带了路径分隔符";
   if (name === "." || name === "..") return "`.` / `..` 指向根目录本身或它的上级";
   if (name.includes(":")) return "带了盘符或冒号";
+  if (WINDOWS_RESERVED_DEVICE.test(name)) return "Windows 保留设备名，无法可靠进入 Git";
   return undefined;
 }

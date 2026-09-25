@@ -29,13 +29,10 @@ import { coverageVerdict, shortenList, uncheckedVhdl } from "../lib/rtl-coverage
 // 与 project-rtl-check 共用的**稳定 primitives**(SKIP_DIRS / MEASURED_FIELDS / collectHdl /
 // isFailure / IP 时序卡校验 / 逐条打印)都在 ../lib/rtl-check-driver.mjs。
 // **本入口自己的语义留在下面**:扫哪些目录、coverage 怎么算、JSON 怎么拼、summary 文案与退出码。
-import { collectHdl, ipCardEntries, isFailure, printEntryLines } from "../lib/rtl-check-driver.mjs";
+import { TESTBENCH, collectHdl, ipCardEntries, isFailure, printEntryLines } from "../lib/rtl-check-driver.mjs";
 
 // 对外仍导出 collectHdl:tools/check-fpga-tools.mjs 从本文件取它(旧入口路径保持可用)。
 export { collectHdl };
-
-/** 测试平台文件名:扩展名跟着设置里选的仿真语言走(`.sv` / `.v` / `.vhd`),按语言过滤。 */
-const TESTBENCH = /^tb_.*\.(sv|v)$/iu;
 
 // VHDL 扩展名与覆盖判定统一在 ../lib/rtl-coverage.mjs(第九轮复审②:两个 checker 共用一份)。
 

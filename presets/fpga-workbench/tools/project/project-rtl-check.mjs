@@ -25,20 +25,14 @@ import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { checkFile } from "../lib/rtl-check-rules.mjs";
-import { coverageVerdict, keepSimSupportOnly, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
+import { VHDL, coverageVerdict, keepSimSupportOnly, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
 // 与 module-rtl-check 共用的**稳定 primitives**(SKIP_DIRS / MEASURED_FIELDS / collectHdl /
-// isFailure / IP 时序卡校验 / 逐条打印)都在 ../lib/rtl-check-driver.mjs。
+// isFailure / TESTBENCH 判据 / IP 时序卡校验 / 逐条打印)都在 ../lib/rtl-check-driver.mjs。
 // **本入口自己的语义留在下面**:扫哪些目录、`sim-support` 角色、coverage 怎么算、JSON 顶层键
 // (`project:`)、平铺 IP 文件提示(F7-03)、summary 文案与退出码。
-import { collectHdl, ipCardEntries, isFailure, printEntryLines } from "../lib/rtl-check-driver.mjs";
+import { TESTBENCH, collectHdl, ipCardEntries, isFailure, printEntryLines } from "../lib/rtl-check-driver.mjs";
 
 export { collectHdl };
-
-/** 测试平台文件名:扩展名跟着设置里选的仿真语言走(`.sv` / `.v` / `.vhd`),按语言过滤。 */
-const TESTBENCH = /^tb_.*\.(sv|v)$/iu;
-
-/** VHDL 源文件(本检查器不覆盖,但必须说出来,不能静默当通过)。 */
-const VHDL = /\.(vhd|vhdl)$/iu;
 
 /**
  * F7-03:约定是 `ip/<ip-name>/` 目录;根下平铺的 .xci/.bd/.coe 对不上 timing 卡入口,点出来。

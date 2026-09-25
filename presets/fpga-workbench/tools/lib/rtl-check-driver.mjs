@@ -47,6 +47,12 @@ export const MEASURED_FIELDS = [
 ];
 
 /**
+ * 测试平台文件名:**两个入口逐字相同**的一条判据,所以放在这里,不在各入口各写一份
+ * (改扩展名口径时两边必须一起改 —— 那正是抽共享 primitives 要消掉的那类漂移)。
+ */
+export const TESTBENCH = /^tb_.*\.(sv|v)$/iu;
+
+/**
  * 递归收集 HDL 源文件。
  * @param dir - 起始目录。
  * @param pattern - 文件名匹配(默认 SystemVerilog / Verilog;另用它来找 VHDL)。

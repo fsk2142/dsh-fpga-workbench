@@ -733,7 +733,12 @@ check(
   "那一节里也点名编译器那条命令(不是只说'跑检查')"
 );
 const checkRtlText = readFileSync(join(presetDir, "tools", "module", "module-rtl-check.mjs"), "utf8");
-check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "module-rtl-check 认 .v 的 TB,并对 VHDL 有明确交代");
+// TB 扩展名判据现在在共享 driver 里(TESTBENCH),VHDL 那句交代仍在入口 —— 两边都算,才算这条不变式。
+const rtlDriverEntry = readFileSync(join(presetDir, "tools", "lib", "rtl-check-driver.mjs"), "utf8");
+check(
+  /\(sv\|v\)/u.test(rtlDriverEntry) && /VHDL/u.test(checkRtlText) && /TESTBENCH/u.test(checkRtlText),
+  "module-rtl-check 认 .v 的 TB(判据在共享 driver 里,入口确实引用),并对 VHDL 有明确交代"
+);
 // 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点。
 // SKIP_DIRS 自 2026-09-25 起与 project-rtl-check 共用一份(tools/lib/rtl-check-driver.mjs),
 // 所以这条断言要**两个文件都看**:入口确实用了共享 driver,且 driver 的清单里有 ip/。

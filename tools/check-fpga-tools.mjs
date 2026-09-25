@@ -1849,6 +1849,8 @@ const emptyOut = compCase("empty_out.hex", "\n\n");
 const diffRef = compCase("diff_ref.hex", "0x0001\n");
 const diffOut = compCase("diff_out.hex", "0x0002\n");
 const compStatus = (...args) => spawnSync("python", [bundledCompPath, ...args], { stdio: "ignore" }).status;
+// 归一化那几条要读它的输出("format-only difference ignored: …"),所以这里另外抓一次文本。
+const compOutput = (...args) => spawnSync("python", [bundledCompPath, ...args], { encoding: "utf8" }).stdout;
 const emptyCode = compStatus(emptyRef, emptyOut);
 check(
   emptyCode === 0,
@@ -1857,6 +1859,42 @@ check(
 check(
   compStatus(diffRef, diffOut) === 1,
   "comp.py:取值不一致仍然退 1(去掉 0 样本那条规则没把判据弄丢)"
+);
+// 2026-09-25 深挖补上:脚本**存在的理由**就是"先归一化再只比值"(实测事故:金标 CRLF、输出 LF,
+// 逐字节比让纯排版差异冒充功能失败)。这五种行为原先一条夹具都没有 —— 归一化被改坏不会有人发现。
+const bomRef = (() => {
+  const path = join(compFixture, "bom_ref.hex");
+  writeFileSync(path, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("0x10\n", "utf8")]));
+  return path;
+})();
+const lfRef = compCase("lf_ref.hex", "0x0001\n0x0002\n");
+// CRLF + 行尾空白 + 首尾空行 + 十六进制大小写:全部是**纯排版**,判一致;并且要**说出来忽略了什么**。
+const messyOut = compCase("messy_out.hex", "\r\n  0x0001  \r\n0X0002\r\n\r\n");
+const messyStatus = compStatus(lfRef, messyOut);
+check(
+  messyStatus === 0 && compOutput(lfRef, messyOut).includes("line endings"),
+  `comp.py:纯排版差异(CRLF/LF + 行尾空白 + 空行 + 十六进制大小写)判一致并说明忽略了什么(实际 ${String(messyStatus)})`,
+  compOutput(lfRef, messyOut).slice(-200)
+);
+check(
+  compStatus(bomRef, compCase("bom_out.hex", "0x10\n")) === 0,
+  "comp.py:一侧带 BOM 也判一致(utf-8-sig 抹掉)"
+);
+check(
+  compStatus(compCase("prefix_ref.hex", "0xAA\n"), compCase("prefix_out.hex", "AA\n")) === 0,
+  "comp.py:0x 前缀有无判一致"
+);
+check(
+  compStatus(compCase("text_ref.txt", "hello \n"), compCase("text_out.txt", "hello\n"), "--kind", "text") === 0,
+  "comp.py:--kind text 走文本归一化(行尾空白不算差异)"
+);
+check(
+  compStatus(emptyRef, join(compFixture, "no-such-file.hex")) === 2,
+  "comp.py:文件读不到 → 退 2(参数/环境错,与'值不一致'的 1 区分开)"
+);
+check(
+  compStatus(emptyRef) === 2,
+  "comp.py:参数不全 → 退 2"
 );
 
 // ── module-synth-new:约束落点 ───────────────────────────────────────────────

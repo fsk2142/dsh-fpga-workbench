@@ -68,6 +68,17 @@ ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里
 编译与运行使用**同一份**模板 `verif/run.do`,按模式调用:`do run.do compile` 只收集并编译,`do run.do run` 只加载已编译的
 `work/`、运行并判定。这样可反复改激励/换顶层而不把两个职责混成一份不可复核的大脚本。
 
+**模板自己管新鲜度与配置身份(2026-09-25 起)** —— 遇到这几条报错不要手改 stamp、不要绕过:
+
+- 改 `.svh`/`.vh` → `compile` **全量重编** Verilog/SystemVerilog(谁 include 了它推不出来);VHDL 一变 → 全量重编
+  `vcom`;`.sv`/`.v` 交**全量**给 `vlog -incr`(由 ModelSim 决定重编谁);一个文件都没变时整段跳过 vlog。
+- **编译配置身份**(仿真器、`modelsim.ini` 路径+mtime+size、`TB_DEFINES`、`EXTRA_INCDIRS`、`VENDOR_LIBS`、
+  `OPT_LEVEL`)也进 stamp。改了任一项,`run` 会**退 1 并点名是哪一项**;这时要重跑 `compile`,而它会
+  **清空 `work/` + 全量重编**(不是"什么都没变")。旧版模板写的 stamp 没有这些行 → 同样会被拒。
+- 编译失败会**自动重试一次**:顺序依赖(package/entity 先后)的形态是"先缺后补",失败那趟已把后一个
+  unit 编进库,重试即过(实测反序报 `Could not find the package` → 同命令重跑 0 error)。
+- **批处理不带 `+acc`**(本机实测快 2.3~2.6×):要加 `+acc` 或看内部信号/波形,走第三个模式 `load`。
+
 **别手抄脚本**:从设置里选中的那份**仿真脚本**模板起一份(编译与运行本来就是同一份脚本,起第二次会被
 「已存在、不覆盖」挡下 —— 不要起两次),起完按当前模块改旋钮:
 

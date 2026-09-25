@@ -35,6 +35,11 @@ node "<自带命令目录>\project\project-rtl-check.mjs" <用户指定工程目
 
 **工程级优先用厂商自带的 lint / 语法检查**(Vivado、Quartus 等),命令记原文。
 
+- **设置里选了「Linter 脚本」就用那份**(路径见会话提示,字段 `projectLintTemplate`)。本仓库自带的那份
+  `templates/linter/vivado_rtl_lint.tcl` 已在 **Vivado 2025.2 真机验过**:`synth_design -lint` 先把结果写成
+  `doc/vivado_rtl_lint.rpt`,再用 `-rtl` 展开连通性;ERROR 判死,lint 发现**逐条列出、不判死**(要写进结论)。
+  **别自己拼 `synth_design -rtl -lint ...`** —— 2025.2 报 `Command failed: -lint and -rtl are mutually
+  exclusive`,必须拆成两条命令。
 - **厂商工具没就绪、或没有可用 lint → 本步直接跳过**
 - 跳过时在产物写「厂商 lint:跳过(无可用工具)」——**不算 FAIL**,不要硬找第三方替代
 

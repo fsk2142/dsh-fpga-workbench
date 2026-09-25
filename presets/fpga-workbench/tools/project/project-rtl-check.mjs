@@ -20,70 +20,40 @@
 // 另外查工程根 ip/<ip>/timing.json(IP 时序卡)—— 那是**警告**(见 ipCardEntries)。
 // 退出码:0 全部通过(可以只有警告) / 1 有 FAIL / 2 用法或环境错误。
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { evidenceFileInside } from "../lib/stamp.mjs";
-import { WARN_ONLY, checkFile } from "../lib/rtl-check-rules.mjs";
+import { checkFile } from "../lib/rtl-check-rules.mjs";
 import { coverageVerdict, keepSimSupportOnly, uncheckedVhdl } from "../lib/rtl-coverage.mjs";
+// 与 module-rtl-check 共用的**稳定 primitives**(SKIP_DIRS / MEASURED_FIELDS / collectHdl /
+// isFailure / IP 时序卡校验 / 逐条打印)都在 ../lib/rtl-check-driver.mjs。
+// **本入口自己的语义留在下面**:扫哪些目录、`sim-support` 角色、coverage 怎么算、JSON 顶层键
+// (`project:`)、平铺 IP 文件提示(F7-03)、summary 文案与退出码。
+import { collectHdl, ipCardEntries, isFailure, printEntryLines } from "../lib/rtl-check-driver.mjs";
+
+export { collectHdl };
+
+/** 测试平台文件名:扩展名跟着设置里选的仿真语言走(`.sv` / `.v` / `.vhd`),按语言过滤。 */
+const TESTBENCH = /^tb_.*\.(sv|v)$/iu;
+
+/** VHDL 源文件(本检查器不覆盖,但必须说出来,不能静默当通过)。 */
+const VHDL = /\.(vhd|vhdl)$/iu;
 
 /**
- * 与旧包一致的跳过目录:生成物、仿真库、版本控制等。
- *
- * `ip` 是刻意加的:外来代码(厂商 IP、他人提供的模块)放在 `ip/` 下,它们不按本工程的格式
- * 规范书写(文件头、九个小节块、断言都不是厂商的写法)。不跳过就会成片误报,而"为让检查过就
- * 重排厂商代码"是绝对不能做的事。检查器只管**本工程自有代码**。
- */
-const SKIP_DIRS = new Set([
-  "history", ".xil", ".git", "__pycache__", "work", "_synth_gate", "_ip_gen",
-  "synth_gate.gen", ".srcs", ".runs", ".hw", ".ip_user_files", ".sim", ".cache",
-  ".nano", "rerun", "node_modules", "ip"
-]);
-
-
-/**
- * 端口方向与类型的搭配(用户口径 2026-09-21):input 必须 wire、output 必须 logic、inout 必须 tri。
- *
- * 为什么只查**模块端口**:函数 / 任务的形参写成 `input logic x` 是正常的(那是变量)—— 所以按
- * `function` / `task` 到 `endfunction` / `endtask` 之间跳过(实测踩过:模板里的
- * `function automatic logic saturate (input logic …)` 会被这条误报)。
- */
-/**
- * IP 时序卡里**可识别的测量字段**白名单(第四轮 Q4-12)。
- *
- * 为什么要有它:判据原来是"除 `config` 外存在任意 number" → `{"dummy": 1}` 也算过。那只能证明
- * **结构完整**,证明不了"测过"。这里按现役卡的实际字段收敛(延迟/占用拍/边界/跨口正确性几类),
- * 值还要合法(有限、非负)。脚本不假装懂物理意义 —— 最终"这个数是不是真测出来的"由 agent 查日志或重跑判定。
- */
-const MEASURED_FIELDS = [
-  "read_latency", "read_latency_a", "read_latency_b", "write_latency", "pop_latency", "push_latency",
-  "addr_to_dout_edges", "addr_to_doutb_edges", "push_to_dout", "rd_en_to_next", "empty_lag",
-  "rst_busy_cycles", "cross_port_correct", "underflow_seen", "overflow_seen", "fwft", "dout_reset_value"
-];
-
-
-
-
-/**
- * 工程根 `ip/` 下每个 IP 目录的时序卡(见 `fpga-project-rtl` 的「IP 时序卡」)。
- *
- * 卡是"给人看的前提"(实测出来的读/写延迟、复位占用拍、配置、探针),**缺了不拦门禁** ——
- * 所以它是警告;但它必须被看见:换实现/换器件时读的正是这张卡(实测踩过:FIFO 从厂商 IP 换成
- * XPM 宏,读延迟从 k+2 变 k+1,输出对齐器会少一拍)。只认 `timing.json` 这个名字。
+ * F7-03:约定是 `ip/<ip-name>/` 目录;根下平铺的 .xci/.bd/.coe 对不上 timing 卡入口,点出来。
+ * 工程特有,留在入口里(模块级的 `rtl/ip/` 不做这条)。
  * @param ipDir - `<工程根>/ip`。
- * @param projectRoot - 工程根(probe 路径相对它核验)。
- * @returns 每个 IP 目录一条检查结果(形状与 {@link checkFile} 的文件项一致,便于一起打印)。
+ * @returns 平铺文件对应的检查项(形状与文件项一致)。
  */
-function ipCardEntries(ipDir, projectRoot) {
+function looseIpFileEntries(ipDir) {
   let names;
   try {
     names = readdirSync(ipDir, { withFileTypes: true });
   } catch {
     return [];
   }
-  // F7-03:约定是 ip/<ip-name>/ 目录;根下平铺的 .xci 对不上 timing 卡入口,点出来
-  const loose = names
+  return names
     .filter((entry) => entry.isFile() && /\.(xci|bd|coe)$/iu.test(entry.name))
     .map((entry) => ({
       file: `ip/${entry.name}`,
@@ -93,118 +63,7 @@ function ipCardEntries(ipDir, projectRoot) {
         message: `IP 文件平铺在 ip/ 根下 —— 约定是 ip/<ip-name>/ 一 IP 一目录(放 .xci/.bd/.coe 与 timing.json);请挪进子目录`
       }]
     }));
-  return [
-    ...loose,
-    ...names
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => entry.name)
-    .sort()
-    .map((name) => {
-      const shown = `ip/${name}/timing.json`;
-      const card = join(ipDir, name, "timing.json");
-      const warn = (message) => ({ file: shown, issues: [{ rule: "IP 卡", line: 0, message }] });
-      if (!existsSync(card)) {
-        return warn(`ip/${name}/ 下没有 timing.json —— 这个 IP 的时序前提(读/写延迟、复位占用拍、配置)没有实测记录;测一份再往下走(格式见 fpga-project-rtl 的「IP 时序卡」,量法同 fpga-module-rtl)`);
-      }
-      try {
-        const parsed = JSON.parse(readFileSync(card, "utf8"));
-        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-          return warn("timing.json 的顶层要是一个对象(键值对);数组/标量读不出前提,等于没有卡");
-        }
-        // 卡里必须有这四栏 —— 缺哪一栏,这张卡就说不清"它是什么 / 什么时候测的 / 怎么复核 / 什么配置"(见 fpga-project-rtl)
-        const missingFields = ["card", "measured", "probe", "config"].filter((key) => !(key in parsed));
-        if (missingFields.length > 0) {
-          return warn(`timing.json 缺栏目:${missingFields.join("、")} —— card(这是什么)/ measured(哪天测的)/ probe(拿什么测的)/ config(什么配置)都要有,否则别人没法复核`);
-        }
-        // 光"键在"还不够(第三轮复审 N-12):空串 / 空对象 / 指向不存在的探针,都是"有张卡但复核不了"。
-        const problems = [];
-        for (const key of ["card", "measured", "probe"]) {
-          if (typeof parsed[key] !== "string" || parsed[key].trim() === "") {
-            problems.push(`${key} 要是非空字符串(现在是 ${JSON.stringify(parsed[key])})`);
-          }
-        }
-        if (typeof parsed.config !== "object" || parsed.config === null || Object.keys(parsed.config).length === 0) {
-          problems.push("config 要是非空对象(不写配置,这卡就说不清是在什么配置下测的)");
-        }
-        // 探针必须真的在工程里(相对工程根):不然这张卡说的"谁测的"没法复核
-        if (typeof parsed.probe === "string" && parsed.probe.trim() !== "") {
-          const probeRel = parsed.probe.split(/\s+/u)[0];
-          // F6-01/F7-04:词法 + realpath 不越根 + 必须是普通文件(目录/junction 不算探针)
-          if (!evidenceFileInside(projectRoot, probeRel)) {
-            problems.push(`probe 指的探针不可用:${probeRel}(要写工程根相对的**普通文件**,且真实落点仍在工程内)`);
-          }
-        }
-        // "有实测数值"才是卡的意义 —— 而且要是**可识别的测量字段**(第四轮 Q4-12:光"有个数字"的话
-        // `dummy: 1` 也能过,那只是**结构完整**,不是"测过"。脚本不假装懂物理意义,但至少要认得出
-        // 它写的是哪一类量,并且值合法(有限、非负)。`config` 里的是配置值(几路、什么模式),不算数。
-        const measuredOk = MEASURED_FIELDS.some(
-          (key) => typeof parsed[key] === "number" && Number.isFinite(parsed[key]) && parsed[key] >= 0
-        );
-        if (!measuredOk) {
-          problems.push(
-            `没有任何**可识别的实测字段**(白名单:${MEASURED_FIELDS.slice(0, 8).join(" / ")} …)—— ` +
-              "写个普通数字不算「测过」:结构完整 ≠ 测量已核验"
-          );
-        }
-        if (problems.length > 0) return warn(`timing.json 不完整:${problems.join(";")}`);
-      } catch (error) {
-        return warn(`timing.json 解析不了(${String(error?.message ?? error)}) —— 卡读不出来等于没有卡`);
-      }
-      return { file: shown, issues: [] };
-    })
-  ];
 }
-
-
-
-
-
-
-
-
-/**
- * 递归收集 HDL 源文件。
- * @param dir - 起始目录。
- * @param pattern - 文件名匹配(默认 SystemVerilog / Verilog;另用它来找 VHDL)。
- * @returns 文件绝对路径列表(已排序)。
- */
-export function collectHdl(dir, pattern = /\.(sv|v)$/iu) {
-  const out = [];
-  const walk = (current) => {
-    let entries;
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = join(current, entry.name);
-      if (entry.isDirectory()) {
-        const name = entry.name.toLowerCase();
-        if (SKIP_DIRS.has(name) || name.endsWith("_prj") || name.startsWith(".")) continue;
-        walk(full);
-      } else if (entry.isFile() && pattern.test(entry.name)) {
-        out.push(full);
-      }
-    }
-  };
-  walk(dir);
-  return out.sort();
-}
-
-/** 测试平台文件名:扩展名跟着设置里选的仿真语言走(`.sv` / `.v` / `.vhd`),按语言过滤。 */
-const TESTBENCH = /^tb_.*\.(sv|v)$/iu;
-
-/** VHDL 源文件(本检查器不覆盖,但必须说出来,不能静默当通过)。 */
-const VHDL = /\.(vhd|vhdl)$/iu;
-
-
-/**
- * 一条问题是否阻塞门禁。
- * @param issue - {@link checkFile} 的产出。
- * @returns 是 FAIL 时为 true。
- */
-const isFailure = (issue) => !WARN_ONLY.has(issue.rule);
 
 /** 入口。 */
 function main() {
@@ -255,8 +114,17 @@ function main() {
       // 其余规则(九小节、设计断言、always_ff 形态、复位极性 …)一律不适用于仿真辅助代码。
       issues: role === "sim-support" ? keepSimSupportOnly(checkFile(file, isTb)) : checkFile(file, isTb)
     })),
-    // IP 时序卡:工程根 ip/ 下每个 IP 一张(与文件项同形一起打印)
-    ...ipCardEntries(join(root, "ip"), root).map((entry) => ({ ...entry, role: "ip-card" }))
+    // IP 时序卡:工程根 ip/ 下每个 IP 一张(与文件项同形一起打印);F7-03 的平铺提示并进同一形状。
+    ...[
+      ...looseIpFileEntries(join(root, "ip")),
+      ...ipCardEntries({
+        ipDir: join(root, "ip"),
+        shownPrefix: "ip",
+        probeRoot: root,
+        scope: "工程",
+        skillHint: "fpga-project-rtl 的「IP 时序卡」,量法同 fpga-module-rtl"
+      })
+    ].map((entry) => ({ ...entry, role: "ip-card" }))
   ];
   const failures = report.flatMap((entry) => entry.issues.filter(isFailure));
   const warnings = report.flatMap((entry) => entry.issues.filter((issue) => !isFailure(issue)));
@@ -275,13 +143,7 @@ function main() {
       warnings: warnings.length
     }, null, 2));
   } else {
-    for (const entry of report) {
-      const bad = entry.issues.filter(isFailure).length;
-      console.log(`${bad === 0 ? "ok  " : "FAIL"}  ${entry.file}${entry.issues.length === 0 ? "" : `  (${bad} 项阻塞 / ${entry.issues.length - bad} 项警告)`}`);
-      for (const issue of entry.issues) {
-        console.log(`        ${isFailure(issue) ? "FAIL" : "warn"}  ${issue.line > 0 ? `第 ${issue.line} 行:` : ""}${issue.message}`);
-      }
-    }
+    printEntryLines(report);
     if (skippedVhdlRel.length > 0) {
       console.log(`注意:另有 ${skippedVhdlRel.length} 个 VHDL 未做机械检查(${skippedVhdlRel.slice(0, 5).join("、")}${skippedVhdlRel.length > 5 ? " …" : ""}) —— 本检查器只覆盖 .sv/.v,不要把上面的结论当成全覆盖`);
     }

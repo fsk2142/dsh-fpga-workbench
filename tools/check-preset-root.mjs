@@ -734,8 +734,16 @@ check(
 );
 const checkRtlText = readFileSync(join(presetDir, "tools", "module", "module-rtl-check.mjs"), "utf8");
 check(/\(sv\|v\)/u.test(checkRtlText) && /VHDL/u.test(checkRtlText), "module-rtl-check 认 .v 的 TB,并对 VHDL 有明确交代");
-// 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点
-check(/"ip"/u.test(/const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(checkRtlText)[0]), "module-rtl-check 跳过 ip/ 目录(外来代码不按本规范查)");
+// 外来代码(厂商 IP / 他人模块)不按本模块规范检查:检查器要跳过 ip/,技能里也要写明这一点。
+// SKIP_DIRS 自 2026-09-25 起与 project-rtl-check 共用一份(tools/lib/rtl-check-driver.mjs),
+// 所以这条断言要**两个文件都看**:入口确实用了共享 driver,且 driver 的清单里有 ip/。
+// 为什么加 `?? ""`:形状断言落空时要**报 FAIL**,不是让脚本崩在 `.exec(...)[0]` 上。
+const rtlDriverText = readFileSync(join(presetDir, "tools", "lib", "rtl-check-driver.mjs"), "utf8");
+const skipDirsBlock = /const SKIP_DIRS = new Set\(\[[\s\S]*?\]\)/u.exec(rtlDriverText)?.[0] ?? "";
+check(
+  /"ip"/u.test(skipDirsBlock) && /from "\.\.\/lib\/rtl-check-driver\.mjs"/u.test(checkRtlText),
+  "两个 RTL 检查器跳过 ip/ 目录(SKIP_DIRS 在共享 driver 里,两个入口都从那里 import)"
+);
 check(/rtl\/ip\//u.test(lintText), "检查技能写明外来代码放 rtl/ip/,检查会跳过");
 // IP 流程(用户要求):用到 IP 先问用户"自建还是他提供";生成/拿到后按用途归位 ——
 // 仿真文件 → verif/,RTL 与综合用的部分(含 .xci)→ rtl/ip/
@@ -790,8 +798,8 @@ check(
   "rtl 技能写明 IP 时序卡(rtl/ip/<ip>/timing.json,只写实测到的)"
 );
 check(
-  /timing\.json/u.test(checkRtlText) && /IP 卡/u.test(checkRtlText),
-  "module-rtl-check 检查每个 rtl/ip/<ip>/ 的 timing.json(缺卡/解析不了 → 警告)"
+  /timing\.json/u.test(rtlDriverText) && /IP 卡/u.test(rtlDriverText) && /ipCardEntries/u.test(checkRtlText),
+  "module-rtl-check 检查每个 rtl/ip/<ip>/ 的 timing.json(缺卡/解析不了 → 警告;判据在共享 driver 里,入口确实调用)"
 );
 // 端口方向与类型(用户 2026-09-21 定):input wire / output logic / inout tri;内部信号 logic,
 // 只有"实例之间的连接网"用 wire;函数 / 任务形参不受限。断言钉在"方向 + 类型 + 例外"三件一起。

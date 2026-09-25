@@ -35,12 +35,34 @@ const note = (ok, label) => {
   if (!ok) fail.push(label);
 };
 
+/**
+ * pnpm 的 **JS 入口**(Windows 上才有意义),找不到就是 null。
+ *
+ * 为什么绕这一圈(2026-09-25 实测):`pnpm` 在 Windows 上是 `pnpm.cmd` shim,而 Node **不能不经
+ * shell 执行 .cmd** —— `spawnSync("pnpm.cmd", …, { shell: false })` 直接失败(status null);
+ * 退回 `shell: true` 又会触发 **DEP0190**(参数只做拼接、不转义),并且路径里带空格就会把参数
+ * 拆错(`file:C:/My Repo` 这类)。所以这里用 `where.exe`(真实 .exe,不经 shell)找到 shim 旁边
+ * 的 `node_modules/pnpm/bin/pnpm.cjs`,之后一律用 node 直接跑它 —— 没有 shell、没有拼接。
+ */
+const PNPM_JS = (() => {
+  if (process.platform !== "win32") return null;
+  const found = spawnSync("where.exe", ["pnpm"], { encoding: "utf8", windowsHide: true });
+  for (const line of `${found.stdout ?? ""}`.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean)) {
+    const candidate = join(dirname(line), "node_modules", "pnpm", "bin", "pnpm.cjs");
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+})();
+
 /** 在镜像里跑一次 pnpm。 */
 function pnpm(args) {
-  const result = spawnSync("pnpm", args, {
+  const via = PNPM_JS === null
+    ? { command: "pnpm", prefix: [], shell: process.platform === "win32" }
+    : { command: process.execPath, prefix: [PNPM_JS], shell: false };
+  const result = spawnSync(via.command, [...via.prefix, ...args], {
     cwd: MIRROR,
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: via.shell,
     windowsHide: true,
     env: {
       ...process.env,
@@ -82,12 +104,16 @@ mkdirSync(MIRROR, { recursive: true });
 
 const profile = JSON.parse(readFileSync(PROFILE_MANIFEST, "utf8"));
 
-// git 规格的依赖在解析时要执行 `git init` 等子进程。受限沙箱会以 EPERM 拒绝,
-// 而它与「既有依赖会不会位移」这个问题无关,所以排除并明确报告排除了什么。
+// git 规格的依赖在解析时要执行 `git init` 等子进程。**能不能纳入只看 git 在不在**(2026-09-25):
+// 之前是无条件排除,理由写的是"本沙箱不可用"—— 那是**环境**限制,不是"与本题无关",于是那个依赖
+// 的版本位移其实一直没被检查。现在先探一次 git:可用就纳入;不可用才排除,并且这一条会**判 FAIL**
+// (覆盖不到就说覆盖不到,别让"排除"看起来像"没关系")。
+const gitAvailable = spawnSync("git", ["--version"], { encoding: "utf8", windowsHide: true }).status === 0;
 const dependencies = {};
 const excluded = [];
 for (const [name, spec] of Object.entries(profile.dependencies ?? {})) {
-  if (/^(git\+|github:|git:|https?:)/.test(spec) || /\.git(#|$)/.test(spec)) excluded.push(`${name} (${spec})`);
+  const isGitSpec = /^(git\+|github:|git:|https?:)/.test(spec) || /\.git(#|$)/.test(spec);
+  if (isGitSpec && !gitAvailable) excluded.push(`${name} (${spec})`);
   else dependencies[name] = spec;
 }
 
@@ -104,7 +130,9 @@ if (existsSync(PROFILE_WORKSPACE)) {
 
 const direct = Object.keys(dependencies);
 console.log(`镜像 profile 的依赖:${direct.length} 个`);
-if (excluded.length > 0) console.log(`已排除(需 git 子进程,本沙箱不可用):${excluded.join(", ")}`);
+console.log(`pnpm 调用方式:${PNPM_JS === null ? "退回 pnpm shim(shell:true;会有 DEP0190 警告)" : `直接 node 跑 ${PNPM_JS}(不经 shell)`}`);
+console.log(`git 子进程:${gitAvailable ? "可用 → git 规格的依赖已纳入检查" : "不可用 → git 规格的依赖被排除,它们的版本位移未覆盖"}`);
+if (excluded.length > 0) console.log(`已排除:${excluded.join(", ")}`);
 console.log("第一步:解析基线树(可能要几分钟,要联网)…");
 const before = pnpm(["install", "--lockfile-only"]);
 if (before.code !== 0) {
@@ -144,6 +172,7 @@ if (changed.length === 0) {
 }
 
 note(changed.length === 0, "加入本插件不会移动任何既有依赖的锁定版本");
+note(excluded.length === 0, `git 规格的依赖也纳入检查${excluded.length === 0 ? "" : `(排除了 ${excluded.length} 个:版本位移未覆盖)`}`);
 const self = afterLock.get("dsh-fpga-workbench");
 note(self !== undefined, "本插件进入了依赖树");
 console.log(`本插件锁定为 dsh-fpga-workbench@${self ?? "(未锁定)"}`);

@@ -39,4 +39,17 @@
     启动时生效;ModelSim / Questa 的默认值放 `modelsim.ini`(改了会自动要求重编,编译身份里记着它)。
     `launch_runs -jobs` 管的是并行 run,不是单个 run 的算法线程 —— 这两件事都别在工程 Tcl 里再设一遍:
     launcher 脚本里设的 `set_param` 传不到 run 进程,只会让人误以为生效了。
+12. **交给 Tcl 的 Windows 路径先归一化**:Vivado / ModelSim 的 Tcl 里 `\f` `\v` `\t` `\r` `\b` `\n` 都是
+    转义 —— 路径一旦进**双引号字符串**就会被吃掉(实测 `C:\Work\fpga_module\verif` 会变成
+    `C:Work<0x0C>pga_module<0x0B>erif`)。做法:一律写 `/`、或用 `{...}` 花括号、或在拼接**之前**
+    `[string map {\\ /} $path]` —— 已经转义坏掉的字符串再归一化救不回来。典型翻车点:把环境变量
+    (如 `APPDATA`)手工拼进 `.tcl`。
+13. **是环境问题还是设计问题,先按这条排查**:① 受限沙箱下 `launch_runs` 起的 run 子进程会**挂死**
+    (`ISEWrap.js` 经 WSH `Exec` 要命名管道;被挡后 `runme.log` 停在 banner、`wait_on_run` 无限等)
+    —— 要么给足文件权限,要么接受"单进程非工程流"的损失(后者没有 `impl_1` run state,bitstream
+    环节会因为找不到 `<TOP>_routed.dcp` 而拒绝);② Vivado 写不了 `%APPDATA%\Xilinx`、报
+    `[Common 17-354]` / `tclapp::load_apps failed` 时,正解是 `XILINX_LOCAL_USER_DATA=NO`
+    (AMD AR 62945,让 TclStore 从安装目录读),**不要**靠重定向 `APPDATA` —— 那正是第 12 条那个坑的
+    来源;③ MSYS2 装的 Verilator 必须带 `VERILATOR_ROOT=<msys2>/mingw64/share/verilator`
+    (会话提示的"已就绪工具"里会给推导值),否则第一步就报 `Cannot find verilated_std_waiver.vlt`。
 

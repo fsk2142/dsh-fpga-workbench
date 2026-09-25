@@ -963,6 +963,40 @@ check(
 const unreadable = describeEnv(undefined, probeWith([]));
 check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设置时如实说读不到,而不是当成没配");
 
+// ── MSYS2 装的 Verilator:必须把 VERILATOR_ROOT 那一行给到会话(2026-09-24 实测) ──
+//
+// 不带它 verilator 第一步就失败(`Cannot find verilated_std_waiver.vlt`,因为 MSYS2 把 root 编成了
+// 内部路径 `/mingw64/share/verilator`);而 Perl 包装脚本在 PowerShell 里跑不起来。插件**机械推导**
+// 那一行,推不出来(或用户已经自己设过)就闭嘴 —— 不猜、不写死路径。
+{
+  const savedRoot = process.env.VERILATOR_ROOT;
+  delete process.env.VERILATOR_ROOT;
+  const msysBin = "C:\\msys64\\mingw64\\bin\\verilator_bin.exe";
+  const msysWaiver = "C:\\msys64\\mingw64\\share\\verilator\\include\\verilated_std_waiver.vlt";
+  const msysText = describeEnv(
+    { ...prepared, verilatorPath: msysBin },
+    probeWith([...Object.values(prepared), msysBin, msysWaiver])
+  );
+  check(
+    msysText.includes("VERILATOR_ROOT") && msysText.includes("$env:VERILATOR_ROOT='C:/msys64/mingw64/share/verilator'"),
+    "MSYS2 布局的 verilator:提示里给出可照抄的 VERILATOR_ROOT 行(正斜杠)"
+  );
+  const nonMsys = "D:\\tools\\verilator_bin.exe";
+  const nonMsysText = describeEnv(
+    { ...prepared, verilatorPath: nonMsys },
+    probeWith([...Object.values(prepared), nonMsys])
+  );
+  check(!nonMsysText.includes("VERILATOR_ROOT"), "找不到自带 waiver 文件时不硬塞 VERILATOR_ROOT 提示");
+  process.env.VERILATOR_ROOT = "C:/msys64/mingw64/share/verilator";
+  const presetText = describeEnv(
+    { ...prepared, verilatorPath: msysBin },
+    probeWith([...Object.values(prepared), msysBin, msysWaiver])
+  );
+  check(!presetText.includes("VERILATOR_ROOT"), "用户已经设过 VERILATOR_ROOT 就不再提示");
+  if (savedRoot === undefined) delete process.env.VERILATOR_ROOT;
+  else process.env.VERILATOR_ROOT = savedRoot;
+}
+
 // ── 浏览:列目录(设置页「浏览…」靠它) ──────────────────────────────────────
 const browseRoot = join(TMP_ROOT, `browse-fixture-${RUN_ID}`);
 mkdirSync(join(browseRoot, "subdir"), { recursive: true });

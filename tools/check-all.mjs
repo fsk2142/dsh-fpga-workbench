@@ -26,7 +26,7 @@ const TOOLS = dirname(fileURLToPath(import.meta.url));
 const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
 
 /** 源码级检查:不依赖本机 DSH 安装与 profile。 */
-const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs"];
+const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-package.mjs"];
 
 /** 环境级检查:需要本机装好的 DSH(缺了就 SKIP)。
  *  check-patch-file 用的是**宿主那份** js-yaml 与 cordis-plugin-include schema,

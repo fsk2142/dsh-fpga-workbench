@@ -28,86 +28,52 @@ const yaml = require("js-yaml");
 const { evaluate, isJsExpr } = require("@deepseek-ai/cordis-plugin-loader");
 const { entryListSchema } = require("@deepseek-ai/cordis-plugin-include");
 
-// 1. 解析补丁
+// 1. 解析补丁:官方 0.1.7 registry 只从组合里的 @deepseek-ai/dsh-agent-preset 行收集预设。
 const patchPath = join(ROOT, "cordis.patch.yml");
 const rows = yaml.load(readFileSync(patchPath, "utf8"), { schema: entryListSchema });
 check(
-  Array.isArray(rows) && rows.some((row) => row.id === "agent-presets"),
-  `顶层是数组且含 agent-presets 覆盖行(实际 ${Array.isArray(rows) ? `${rows.length} 条` : "非数组"})`
+  Array.isArray(rows) && rows.length === 1,
+  `顶层是数组且只有 1 个 insert(实际 ${Array.isArray(rows) ? `${rows.length} 条` : "非数组"})`
 );
+check(!rows.some((row) => row.id === "agent-presets"), "没有旧的 agent-presets 覆盖行");
+const inserted = rows.flatMap((row) => row.insert ?? []);
+check(inserted.length === 2, `补丁插入宿主行与预设声明行(实际 ${inserted.length})`);
+check(inserted[0]?.id === "fpga-workbench" && inserted[0]?.name === "dsh-fpga-workbench", "宿主行按包名挂载");
+const presetRow = inserted.find((row) => row.id === "preset-fpga-workbench");
+check(presetRow?.name === "@deepseek-ai/dsh-agent-preset", "预设声明行按官方包名挂载");
+check(presetRow?.config?.id === "fpga-workbench", "预设 config.id = fpga-workbench");
+check(Array.isArray(presetRow?.config?.plugins) && presetRow.config.plugins.length > 0, "预设声明了 plugins 数组");
 
-// 2. 找到 agent-presets 那条覆盖
-const row = rows.find((r) => r.id === "agent-presets");
-check(row !== undefined, "补丁里有 agent-presets 覆盖行");
-if (row === undefined) {
-  process.exitCode = 1;
-  process.exit();
-}
-
-// 3. 关键:把 config 里的 !!js 求值出来。
-//    evaluate 需要 loader ctx;baseUrl 设为补丁文件所在目录,与宿主一致。
-const baseUrl = pathToFileURL(`${dirname(patchPath)}/`).href;
-const ctx = { baseUrl, loader: {} };
-const resolved = {};
-for (const [key, value] of Object.entries(row.config)) {
-  if (isJsExpr(value)) {
-    resolved[key] = evaluate(ctx, value.__jsExpr);
-    const prefix = `${key}.path`;
-    console.log(`      ${prefix} 由 !!js 求值`);
-  } else if (Array.isArray(value)) {
-    resolved[key] = value.map((item) => {
-      const out = { ...item };
-      for (const [k, v] of Object.entries(item)) {
-        if (isJsExpr(v)) out[k] = evaluate(ctx, v.__jsExpr);
-      }
-      return out;
-    });
-  } else {
-    resolved[key] = value;
+// 2. 预设文件仍是可编辑源:它必须存在且能解析,并与组合里的声明保持同一份行集合。
+const presetDir = join(ROOT, "presets", "fpga-workbench");
+check(existsSync(presetDir), "包内 FPGA 预设目录存在");
+const compositionPath = join(presetDir, "agent.cordis.yml");
+check(existsSync(compositionPath), "fpga-workbench 有 agent.cordis.yml");
+const flattenRows = (list, out = []) => {
+  for (const row of Array.isArray(list) ? list : []) {
+    if (!row || typeof row !== "object") continue;
+    if (row.group === true) flattenRows(row.config, out);
+    else out.push(`${String(row.id)}:${String(row.name)}`);
+  }
+  return out;
+};
+if (existsSync(compositionPath)) {
+  try {
+    const entries = yaml.load(readFileSync(compositionPath, "utf8"), { schema: entryListSchema });
+    check(Array.isArray(entries) && entries.length > 0, "FPGA 预设组装是可解析的非空 entry list");
+    const sourceRows = flattenRows(entries);
+    const patchRows = flattenRows(presetRow?.config?.plugins);
+    check(
+      sourceRows.join("\n") === patchRows.join("\n"),
+      "补丁里的预设行与 agent.cordis.yml 完全一致(防止两边漂移)",
+      `源 ${sourceRows.length} 行 / 补丁 ${patchRows.length} 行`
+    );
+  } catch (error) {
+    check(false, "FPGA 预设组装解析失败", error.message);
   }
 }
 
-const roots = resolved.roots ?? [];
-check(roots.length === 1, `roots 求值后有 1 项(实际 ${roots.length})`);
-for (const entry of roots) {
-  console.log(`      path = ${String(entry.path)}`);
-  check(typeof entry.path === "string" && entry.path.length > 0, "roots 项的 path 是字符串");
-  check(existsSync(entry.path), `roots 路径存在(${String(entry.path)})`);
-  if (existsSync(entry.path)) {
-    const presets = readdirSync(entry.path, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
-    console.log(`      发现的预设:${presets.join(", ") || "(无)"}`);
-    check(presets.includes("fpga-workbench"), "该目录里有 fpga-workbench 预设");
-
-    // 每个预设必须有 agent.cordis.yml(缺了会被报成 broken 并让选择器显示不出)
-    for (const preset of presets) {
-      const composition = join(entry.path, preset, "agent.cordis.yml");
-      check(existsSync(composition), `${preset} 有 agent.cordis.yml`);
-      // 组合必须是可解析的 entry list
-      if (existsSync(composition)) {
-        try {
-          const entries = yaml.load(readFileSync(composition, "utf8"), { schema: entryListSchema });
-          check(Array.isArray(entries) && entries.length > 0, `${preset} 的组装是可解析的非空 entry list(${Array.isArray(entries) ? entries.length : "非数组"} 行)`);
-        } catch (error) {
-          check(false, `${preset} 的组装解析失败`, error.message);
-        }
-      }
-    }
-  }
-}
-
-// 4. 覆盖行必须重述要保留的字段 —— 按 id 定位的 patch 不做深度合并
-for (const kept of ["default", "includeShippedRoot", "includeUserRoot"]) {
-  check(kept in resolved, `覆盖行重述了 ${kept}(否则该字段会丢)`);
-}
-check(resolved.includeShippedRoot === true, "保留内置预设根(否则 standard 等官方预设会消失)");
-
-// 5. 真正让预设出现的是 lib/index.js 里的 ensureUserPreset —— 它把预设同步进**用户预设
-//    目录** `$DSH_HOME/.agent-presets/`。
-//
-//    为什么不是"给预设名单加一个 roots":dsh-agent-presets 的构造函数里
-//    `resolvedRoots = [内置根] + config.roots + [用户根]`,也就是 roots **只从行 config 取,
-//    不读设置值**;而给行 config 加根的补丁覆盖实测没生效(名单里看不到本预设,且不存在的
-//    根会被 scanRoot 静默跳过 —— 完全没有报错)。用户根则无条件扫描,放进去就行。
+// 3. 旧的 ensureUserPreset 仍保留作为兼容路径;官方 0.1.7 的可见性不依赖它。
 const hostSource = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
 const codeOnly = hostSource
   .replace(/\/\*[\s\S]*?\*\//gu, " ")
@@ -118,28 +84,21 @@ check(
   /new URL\("\.\.\/presets\/", import\.meta\.url\)/u.test(codeOnly),
   "预设根由 import.meta.url 求值(不依赖补丁 !!js 的 baseUrl 语义)"
 );
+check(/profileContext\?\.home/u.test(codeOnly),
+  "预设同步优先使用当前宿主的 profileContext.home");
 check(/function ensureUserPreset/u.test(codeOnly), "有用例把预设同步进用户预设目录");
 check(/USER_PRESET_DIR/u.test(codeOnly) && codeOnly.includes('".agent-presets"'),
   "用的是 dsh-agent-presets 约定的用户预设目录名");
-check(/process\.env\.DSH_HOME \?\? join\(homedir\(\), "\.dsh"\)/u.test(codeOnly),
-  "harness home 取 DSH_HOME,退回 ~/.dsh");
+check(/profileContext\?\.home[\s\S]{0,160}DSH_HOME/u.test(codeOnly),
+  "没有 profileContext.home 时才退回 DSH_HOME / ~/.dsh");
 check(/cpSync\(source, destination/u.test(codeOnly), "复制预设(而不是只登记路径)");
 // 只比较"我们在维护的那部分"(包内文件 + 该清的旧文件):用户自己在预设目录里加的普通文件
 // 不该让两棵树永远不一致 —— 那会导致每次启动都重同步、重备份一遍。
 check(/presetSyncNeeded\(source, destination, manifest\)/u.test(codeOnly), "内容一致就跳过(幂等,不每次重写)");
-// 曾经写过 settings.yaml 的 agent-presets.roots —— 实测那层根本不参与 roots 解析,是无用写入,
-// 还污染了用户配置。断言的是**别去写别人的设置**,而不是禁用 settings.update:
-// 本插件自己的字段迁移(改名的旧键 → 新键)要用它,而且 `register()` 返回的句柄已经绑定了
-// 命名空间(update(patch) 只接补丁)。所以真正要守的是这两条:
-check(/ctx\.settings\.register\(NS,/u.test(codeOnly), "设置句柄只从本插件的命名空间(NS)注册");
-check(
-  !/settings\.(update|replace|mutate)\(\s*["']/u.test(codeOnly),
-  "没有按名字去写别的设置命名空间(句柄已绑定,不该再传 ns)"
-);
+// 预设同步是当前宿主扫描用户目录的唯一入口;不再断言旧的 settings.register 句柄。
 
 // 6. 显示名只有一处真相:预设的 name 与设置页的 LABEL 必须相同。
 //    改名只改一半会让用户看到两个名字(预设选择器一个、设置里一个)。
-const presetDir = join(ROOT, "presets", "fpga-workbench");
 const presetYml = readFileSync(join(presetDir, "preset.yml"), "utf8");
 const presetName = /^\s*name:\s*(.+)$/mu.exec(presetYml)?.[1]?.trim();
 const clientLabel = /const LABEL = "([^"]+)"/u.exec(readFileSync(join(ROOT, "lib", "client.js"), "utf8"))?.[1];
@@ -160,7 +119,6 @@ check(
 //    「选中这个模式才有的东西」全靠这里:预设行只在命名了本预设的会话里挂载。
 //    名字写错不会报错 —— discovery 会把整个预设判成 broken、从选择器里消失,
 //    所以这一行的解析必须机器验。
-const compositionPath = join(presetDir, "agent.cordis.yml");
 let compositionRows = [];
 try {
   compositionRows = yaml.load(readFileSync(compositionPath, "utf8"), { schema: entryListSchema });
@@ -197,17 +155,18 @@ check(
 //
 // 用户的原话:"一定是开发模式采用这些东西,不是开发模式不要用这些"。
 // 机制上靠**两层分工**:
-//   · profile 层(cordis.patch.yml,全局):只挂插件行(设置读写 + 状态/浏览路由)与预设名单;
-//   · 预设层(agent.cordis.yml,只被点名本预设的会话挂载):人设、工具链提示、16 个技能。
-// 这条分工很容易在以后挪一行时被破坏(把提示或技能目录挪到全局层),那时**所有会话**都会看到
-// FPGA 的东西。所以按"全局层不许出现什么"来断言,而不是只断言"预设层有这些"。
-const patchText = readFileSync(patchPath, "utf8");
-check(!/systemPrompt/u.test(patchText), "全局层(补丁)不注册任何会话提示 —— 提示只能来自预设层");
-check(!/customSkillDirs|skill-filesystem/u.test(patchText), "全局层不注册技能目录 —— 技能只在预设层可见");
-check(!/能力地图|实现思路/u.test(patchText), "全局层不含本模式的人设文字(那是预设 persona 的事)");
+//   · profile 层(cordis.patch.yml 的宿主行,全局):只挂插件行(设置读写 + 状态/浏览路由);
+//   · 预设层(@deepseek-ai/dsh-agent-preset 的 config.plugins,只有点名本预设的会话挂载):
+//     人设、工具链提示、16 个技能。
+// 官方 registry 用 @deepseek-ai/dsh-agent-preset 的 isolate 语义隔离这些行;宿主行里出现
+// 提示/技能/模式半侧才会泄漏给所有会话。所以这里只检查**宿主 insert 行**。
+const hostRowText = JSON.stringify(inserted[0] ?? {});
+check(!/systemPrompt/u.test(hostRowText), "全局层(宿主行)不注册任何会话提示 —— 提示只能来自预设层");
+check(!/customSkillDirs|skill-filesystem/u.test(hostRowText), "全局层不注册技能目录 —— 技能只在预设层可见");
+check(!/能力地图|实现思路/u.test(hostRowText), "全局层不含本模式的人设文字(那是预设 persona 的事)");
 check(
-  !/dsh-fpga-workbench\/mode/u.test(patchText),
-  "全局层不挂模式半侧(它必须待在内置预设里,否则每个会话都会加载那段工具链提示)"
+  !/dsh-fpga-workbench\/mode/u.test(hostRowText),
+  "全局层不挂模式半侧(它必须待在预设声明里,否则每个会话都会加载那段工具链提示)"
 );
 // 反过来:预设层必须有这三样,缺一样本模式就残废
 check(rowById.get("persona") !== undefined, "预设层有 persona 行(能力地图随模式走)");

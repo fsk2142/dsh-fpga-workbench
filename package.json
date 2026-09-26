@@ -2,6 +2,7 @@
   "name": "dsh-fpga-workbench",
   "version": "0.4.0",
   "description": "FPGA 开发模式 + 工具链设置:一个 DSH agent 预设(人设/工具/技能 + 本机工具链提示),外加「设置 → FPGA 开发模式」里配置 Vivado / ModelSim / QuestaSim / Verilator 与仿真库映射文件。",
+  "icon": "icon.svg",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -14,7 +15,8 @@
   "files": [
     "lib",
     "presets",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "icon.svg"
   ],
   "scripts": {
     "test": "node tools/check-all.mjs",
@@ -29,7 +31,18 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
+    "manifestVersion": 1,
+    "compatibility": {
+      "dsh": "^0.1.7-rc.2",
+      "dshReleases": {
+        "0.1.7-rc.2": "compatible"
+      }
+    },
     "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
       "platform": "web"
     }
   }

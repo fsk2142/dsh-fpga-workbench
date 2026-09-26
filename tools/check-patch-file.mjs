@@ -3,9 +3,9 @@
 // 起因一:pwsh 打印 cordis.patch.yml 时中文注释全是乱码。若文件里真有坏字节,合并补丁时
 // YAML 解析会失败,而「空文件或坏文件会让启动失败」是 DSH 的明确行为。
 //
-// 起因二(更实际):这个包现在**只是把预设挂进名单**,补丁里应当只有一条 agent-presets
-// 覆盖行 —— 没有 insert、没有插件行。所以这里断言它"恰好只有那一条",防止旧 UI 时代的
-// 插件行被加回来(那会让插件又被当客户端挂载)。
+// 起因二(更实际):DSH 0.1.7-rc.2 已移除 `agent-presets` 补丁行,由宿主的新 preset registry
+// 扫描用户预设目录。这个包现在只需要一条 insert 插件行;保留旧覆盖行会产生
+// "entry agent-presets not found" 警告,并可能遮蔽新注册表的行为。
 //
 // 用加载补丁时的同一个 schema(含 !!js 标签)解析,而不是默认 schema。
 import { readFileSync } from "node:fs";
@@ -60,23 +60,33 @@ try {
 
 if (rows !== null) {
   check(Array.isArray(rows), "顶层是数组");
-  check(rows.length === 2, `有 2 个顶层条目(实际 ${rows.length})`);
+  check(rows.length === 1, `只有 1 个顶层 insert 条目(实际 ${rows.length})`);
 
-  // 一:宿主插件行 —— 没有它,「设置 → FPGA 开发模式」没有可绑定的命名空间。
+  // 一:宿主插件行 —— 没有它,「设置 → FPGA 开发模式」没有可绑定的命名空间和设置路由。
   const inserted = rows.flatMap((row) => row.insert ?? []);
-  check(inserted.length === 1, `有 1 条 insert 插件行(实际 ${inserted.length})`);
-  check(inserted[0]?.id === "fpga-workbench", `insert 行 id 正确(实际 ${String(inserted[0]?.id)})`);
+  check(inserted.length === 2, `有 2 条 insert 行(宿主插件 + 预设声明;实际 ${inserted.length})`);
+  check(inserted[0]?.id === "fpga-workbench", `宿主 insert 行 id 正确(实际 ${String(inserted[0]?.id)})`);
   // 用包名而不是绝对路径:裸名从 profile 的 node_modules 解析,它的 import 也跟着解析。
   check(
     inserted[0]?.name === "dsh-fpga-workbench",
-    `insert 用包名挂载(实际 ${String(inserted[0]?.name)})`
+    `宿主 insert 用包名挂载(实际 ${String(inserted[0]?.name)})`
   );
 
-  // 二:agent-presets 覆盖行
-  const override = rows.find((row) => row.id === "agent-presets");
-  check(override !== undefined, "有 agent-presets 覆盖行");
-  // 覆盖行不该夹带插件行之外的配置项(它是整份替换,不是合并)
-  check(override?.insert === undefined, "agent-presets 覆盖行不是 insert 行");
+  // 二:官方 0.1.7 registry 只从组合里的 @deepseek-ai/dsh-agent-preset 行收集预设。
+  const presetRow = inserted.find((row) => row.id === "preset-fpga-workbench");
+  check(presetRow !== undefined, "有 FPGA 预设声明行");
+  check(
+    presetRow?.name === "@deepseek-ai/dsh-agent-preset",
+    `预设行按官方包名挂载(实际 ${String(presetRow?.name)})`
+  );
+  check(presetRow?.config?.id === "fpga-workbench", "预设 config.id 是 fpga-workbench");
+  check(
+    Array.isArray(presetRow?.config?.plugins) && presetRow.config.plugins.length > 0,
+    "预设声明了非空的 plugins 数组"
+  );
+
+  // 三:不再有 agent-presets 覆盖行
+  check(!rows.some((row) => row.id === "agent-presets"), "没有旧的 agent-presets 覆盖行");
 }
 
 // 3. 不能是空文件或纯注释(DSH 明确:会让启动失败)

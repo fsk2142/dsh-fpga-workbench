@@ -21,7 +21,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),这里的默认值
 // 只为单独调用(`node tools/check-preset-sync.mjs`)兜底。
 const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
-const SHIPPED = join(APP, "node_modules", "@deepseek-ai", "dsh-agent-presets", "presets", "standard", "agent.cordis.yml");
+// 通过 DSH_STANDARD_PRESET 指向当前 DSH 版本导出的 standard 组装;它可以是标准预设文件,
+// 也可以是含 preset-standard 行的完整 profile 组装。旧路径保留为兜底。
+const SHIPPED = process.env.DSH_STANDARD_PRESET
+  ?? join(APP, "node_modules", "@deepseek-ai", "dsh-agent-presets", "presets", "standard", "agent.cordis.yml");
 
 /** 本插件在 standard 之上自己加的行(有意为之,不是漂移)。 */
 const ADDED = new Set(["fpga-workbench-mode"]);
@@ -44,15 +47,21 @@ const { entryListSchema } = require("@deepseek-ai/cordis-plugin-include");
 function rowsOf(path) {
   if (!existsSync(path)) return undefined;
   const entries = yaml.load(readFileSync(path, "utf8"), { schema: entryListSchema });
+  // 完整 profile 组装里 standard 预设是 preset-standard.config.plugins 这一段;
+  // 独立的 standard 组装本身就是顶层行列表。
+  const standard = Array.isArray(entries)
+    ? entries.find((row) => row?.id === "preset-standard")
+    : undefined;
+  const list = standard?.config?.plugins ?? entries;
   const out = new Map();
-  const visit = (list) => {
-    for (const row of Array.isArray(list) ? list : []) {
+  const visit = (rows) => {
+    for (const row of Array.isArray(rows) ? rows : []) {
       if (row === null || typeof row !== "object") continue;
       if (typeof row.id === "string") out.set(row.id, { name: row.name, disabled: row.disabled });
       if (Array.isArray(row.config)) visit(row.config);
     }
   };
-  visit(entries);
+  visit(list);
   return out;
 }
 

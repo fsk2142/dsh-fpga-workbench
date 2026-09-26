@@ -1,37 +1,369 @@
-# 本插件的 profile 层补丁:两件事 —— 挂载宿主半侧,以及把 FPGA 模式挂进预设名单。
+# 本插件的 profile 层补丁：挂载宿主半侧，并按 DSH 0.1.7-rc.2 的
+# @deepseek-ai/dsh-agent-preset 行格式把「FPGA 开发模式」注册进 agent-preset-registry。
+# 官方 registry 不扫描 .agent-presets 目录；预设必须在组合里有声明行。
 
-# ── 一、宿主半侧 ────────────────────────────────────────────────────────────
-#
-# 宿主半侧(lib/index.js)注册工具链设置的命名空间,并给设置页三条只读接口(状态 / 列目录 / 检测本机工具)。
-# 没有这一行,「设置 → FPGA 开发模式」就没有可绑定的命名空间,页面等于不存在。
-#
-# 往会话提示里注入工具链那段的是**模式半侧**(lib/mode.js),不是这里 —— 提示段的作用域
-# 只能是本预设的会话,挂在插件行会泄漏给普通会话(见 lib/index.js 顶部那段说明)。
-#
-# name 用**包名**而不是绝对路径:插件装进 profile 的 node_modules,裸名从那里解析,
-# 它自己的 import(等等)也跟着从 profile 解析。
 - insert:
     - id: fpga-workbench
       name: 'dsh-fpga-workbench'
+    - id: preset-fpga-workbench
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: fpga-workbench
+        name: 'FPGA 开发模式'
+        description: 'FPGA 模块与工程开发会话:规格、RTL、验证、综合、集成、实现、时序、上板与证据归档。能力按需使用、可反复回跳,不自动推进流程。'
+        order: 50
+        plugins:
+          # The `standard` agent preset: the full coding agent, mounted once per process.
+          #
+          # This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
+          # standing scope; every session naming it joins by scope parentage, so the
+          # tools and prompt sections registered here cover each joined agent while a
+          # session's own state stays keyed per Session/Agent inside the plugins. The
+          # host composition (`base.cordis.yml` + `web.cordis.yml`) keeps everything a
+          # preset must not own: the registries themselves, the sandbox and approval
+          # stack, persistence, and the model route.
+          #
+          # A service row here MUST sit inside a group carrying an `isolate` realm.
+          # Without one it publishes into the root realm, where it is process-global —
+          # another preset publishing the same name collides, and a host reader would
+          # resolve one preset's instance for every session; `dsh-agent-presets` rejects
+          # that at mount. `true` means an entry-local realm: this standing mount's own
+          # private instance, apart from every other preset's. (A shared label does NOT
+          # pool instances — `provide()` throws on the second registration under the
+          # same realm symbol; labels join REALMS, and are not what this file needs.)
 
-# ── 二、让 FPGA 模式(agent 预设)随插件走 ──────────────────────────────────
-#
-# agent-presets 那一行由 @deepseek-ai/dsh-web-app 插入(它排 bundle 列表第 1 位,
-# 本插件排在最后),后层覆盖前层。
-#
-# ⚠️ 按 id 定位的 patch 不做深度合并,会替换整份 config —— 所以
-# default / includeShippedRoot / includeUserRoot 这些要保留的字段必须在这里重述。
-# 漏掉 includeShippedRoot 会让 standard/minimal/ptc/cordis 那些官方预设整个消失。
-#
-# roots 里的 !!js 用 baseUrl 求值,而 baseUrl 是**本补丁文件所在目录**
-# (dsh-app-boot/lib/index.js:140)。本补丁在包根,所以 'presets/' 就够了 ——
-# 路径随插件走,不写死机器路径。(官方示例写 '../presets/' 是因为它那份文件在
-# presets/cordis/ 下一层,层次不同。)
-- id: agent-presets
-  config:
-    default: standard
-    includeShippedRoot: true
-    includeUserRoot: true
-    roots:
-      - path: !!js process.getBuiltinModule('node:url').fileURLToPath(new URL('presets/', baseUrl))
-        trust: user
+          # ── identity ────────────────────────────────────────────────────────────────
+
+          # The preset's own persona, shadowing the deployment default for this agent.
+          # `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+          #
+          # 本文件其余部分是从官方 standard 预设复制来的组装(工具行、子代理、工作流等),
+          # 目的只是让 FPGA 开发模式会话拿到与常规会话相同的能力底座 —— 预设之间不继承,
+          # 不复制就会缺工具。DSH 升级后 standard 若增删行,这里需要同步:
+          # tools/check-preset-sync.mjs 会比对两者并报出差异。
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              suffix: Your working directory is {{cwd}}.
+              prefix: |-
+                你是 **FPGA 开发模式**会话里的开发助手,运行在 DeepSeek Harness 上,由 {{model}} 驱动。
+                你面对的是一个真实工程环境,不是演示。
+
+                **用户当前的问题就是本次任务。** 下面的技能是按需取用的能力地图,**不是必经的阶段流水线**:
+                需要哪个才加载哪个,可以只用一个、反复用、来回换、也可以不用。不要为了"推进到下一阶段"而
+                结束手里的活,也不要在用户的问题已经解决之后继续往下走。
+
+                按任务类型挑能力(典型用法,不是执行顺序):
+
+                | 用户要什么 | 加载哪个 |
+                |---|---|
+                | 谈需求、定方案、画实现思路流程图 | fpga-module-spec / fpga-project-spec |
+                | 写或改模块 RTL、查模块规范、定位编译与 lint 报错 | fpga-module-rtl |
+                | 写工程专用 RTL / 顶层，或检查工程 RTL | fpga-project-rtl / fpga-project-lint |
+                | 写测试平台、把数据跑出来、拿参考模型比、查为什么对不上 | fpga-module-verif |
+                | 跑模块综合、解释报错、看资源与综合后时序 | fpga-module-synth |
+                | 跑工程综合、看资源与综合后时序摘要 | fpga-project-synth |
+                | 判工程级 post-route 时序是否收敛 | fpga-project-timing |
+                | 审代码或方案、查早期风险、通盘看东西齐不齐对不对 | fpga-module-review(按需,不强制) |
+                | 顶层骨架、接口对接、elaboration | fpga-project-integrate |
+                | 管脚、时钟、IO 标准 | fpga-project-constraints |
+                | 多模块联仿、接口与背压 | fpga-project-syssim |
+                | 实现、下载与回读、固化 | fpga-project-impl / fpga-project-board |
+                | 版次、归档、可复现步骤 | fpga-project-release |
+
+                几条硬要求:
+
+                - **动手规则的唯一出处是本模式工作区规则**:动手前先看清现状、方案要不要先出图确认、局部
+                  问题怎么闭环、结论与证据怎么留 —— 都写在骨架落下的 `<用户指定工程目录>/AGENTS.fpga.md` 里(正文
+                  来自包内 README 的 `fpga-mode-rules` 区块)。**下面几条只是它的引用与摘要,不要在这里另立
+                  一套**;项目里还没有那份文件时,按 `fpga-module-spec` / `fpga-module-rtl` 等技能里各自那条
+                  判据办。
+                - **要不要先出图确认,按任务风险判**(不是按"有没有新功能";工作区规则第 2 条):重大架构 /
+                  公共接口 / 跨时钟方案 / 关键数据通路 / 用户可见的算法决策且**尚未确定** → 先把实现思路画成
+                  **流程图**(模块级)或**框图**(工程级)贴给他**确认**;已有批准方案里的普通实现、以及
+                  **局部修复**(改语法错、单条 lint 告警、已有模块的局部 Bug)→ **直接动手**,读相关代码与
+                  项目约束、改完做聚焦验证,不要求先补一整套规格。
+                - **缺规格文件 ≠ 缺关键决策依据**(工作区规则第 3 条):没有 `spec/` 或 `flow.md` 不必然阻塞
+                  局部任务;只有接口 / 时序口径 / 复位极性与事件沿 / 算法参数这些**影响结果**的决策定不下来
+                  时,才回去问用户。
+                - **确定性检查交给脚本,不要用肉眼替代**;能跑的就跑,把输出当事实依据。
+                - **正式验收与发布**才要求完整证据链:模块级要跑完相关环节并有结论,工程级才谈整机验收;
+                  **不是每个模块都会走到工程级** —— 只交付 IP / 库模块的,模块级审查通过就算完成。
+                  工程级一般都要上板,除非这个工程根本不部署到硬件(那时才写 NOT_APPLICABLE)。
+                - **高风险操作先取得确认**:改管脚 / 电平 / 时钟例外 / 固化参数、把 bit 下到板子、擦除或
+                  清空、不可逆的批量改动 —— 先核实目标与依据,并让用户点头,不要自行推断参数。
+                - **复位与事件沿以实际工程为准**(工作区规则第 9 条):模板默认可以用高有效复位与模板指定的
+                  时序风格;**已有工程按它实际的接口与项目约定来** —— 要改复位极性或事件沿,必须先说明理由并
+                  取得确认。
+                - 长任务的结论与证据落到文件里(工作区规则第 10 条),不要只留在对话里 —— 会话会被压缩,
+                  文件不会。结果文件里保留 `结论:PASS`(或 FAIL / BLOCKED / NOT_APPLICABLE / UNVERIFIED)
+                  那一行,接手时长任务的人读这一行就知道上个环节停在哪;判定词的含意见验证技能
+                  `fpga-module-verif` 的**状态表**(唯一权威,别处只引用、不各自复述);短任务不必。
+
+          # 工作区指令:宿主按候选名发现 AGENTS.md 一类文件并注入。
+          #
+          # 本模式把 `AGENTS.fpga.md` 排在最前(用户口径,2026-09-19):它是**本模式自有**的工作区指令,
+          # 只在本模式下被加载 —— 这样项目里那份"按项目改的模式规则"不用挤进用户的 AGENTS.md。
+          # 候选名给全(不合并默认值,给了就以给的为准),否则 AGENTS.md / CLAUDE.md 会**不再被加载**。
+          # `.local.md` 叠加层没动,仍走默认。
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+              instructionFileCandidates:
+                - AGENTS.fpga.md
+                - AGENTS.md
+                - CLAUDE.md
+
+          # ── 本机工具链(仅本模式) ───────────────────────────────────────────────────
+
+          # 「用户填的那些路径真的被用起来」的落点:注册一段**会话作用域**的提示,把设置页里
+          # 已核对过存在性的工具路径与调用姿势交给本模式的 agent,它就不必去 where/PATH 猜。
+          #
+          # 为什么挂在这里而不是插件行(profile 层):那层作用域是全局,普通会话也会看到 FPGA
+          # 工具链信息 —— 与"不影响正常会话"冲突。预设行只在命名了本预设的会话里挂载。
+          #
+          # name 是"包名 + 子路径":预设行里的裸名从 profile 解析(dsh-agent-presets 的
+          # PresetTree.import 用 harnessBase 覆盖预设目录作为解析基准),本包就装在 profile 的
+          # node_modules 下,子路径 ./mode 在 package.json 的 exports 里声明。
+          #
+          # ⚠️ 名字写错不会报错,只会让 discovery 把本预设判成 broken、在选择器里整个消失 ——
+          # tools/check-preset-root.mjs 断言这一行能被解析到。
+          - id: fpga-workbench-mode
+            name: 'dsh-fpga-workbench/mode'
+
+          # ── shell ───────────────────────────────────────────────────────────────────
+
+          # `shell-env` stays in the HOST composition: `apps/cli/src/web.ts` injects it to
+          # publish `DSH_WEB_URL`/`DSH_WEB_MODE`, and a host row that injects a service is
+          # the criterion for host-plane ownership — injection resolves before any session
+          # exists, so there is no agent to key by. Behind a preset realm those variables
+          # never reached the model's shell at all. Both shell tools consume the host
+          # registry from here; their executors (`bash-sandbox`/`pwsh-sandbox`) are
+          # host-plane too.
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+
+          # ── filesystem ──────────────────────────────────────────────────────────────
+
+          # Both register into the host `tools` registry and provide nothing, so
+          # they need no realm. The `fs` service and its policy stay in the host.
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+
+          # ── background jobs ────────────────────────────────────────────────────────
+
+          # Only the model-facing controls. The task REGISTRY stays on the host plane:
+          # its producers sit outside any realm this file could put it in — `tool-bash`
+          # above resolves it with `ctx.get`, and an entry-local realm here is invisible
+          # to every sibling row, so `run_in_background` would answer "background jobs
+          # unavailable" while these controls sat in the catalog. The registry is keyed by
+          # owning agent anyway, so one host instance serves every session. What a preset
+          # chooses is whether its agent can collect and stop background work at all.
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+
+          # ── skills ──────────────────────────────────────────────────────────────────
+
+          # The skill REGISTRY lives in the host composition and is layered per scope:
+          # these rows register into THIS preset's layer of it, so they need no realm.
+          # `skill-filesystem` contributes local-root discovery for agents on this preset, and
+          # `tool-skill` gives them the catalog and loader; the merged catalog also
+          # carries whatever the deployment registered globally (repository plugins).
+          #
+          # 本预设自己还带一份技能目录(presets/fpga-workbench/skills/):它只在本模式可见,
+          # 因为下面那行把**预设目录下**的 skills/ 追加进 customSkillDirs。!!js 里的 baseUrl
+          # 是组装文件自己的目录,所以预设被 ensureUserPreset 复制到用户预设目录之后依然指得对
+          # —— 这是官方 cordis 预设的写法,照抄。(includeDefaultRoots 保持默认的 true:
+          # 你的工作区技能与用户技能在本模式下照常可见,这里是"追加"而不是"替换"。)
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+            config:
+              customSkillDirs:
+                - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+
+          # ── goals ───────────────────────────────────────────────────────────────────
+
+          # The goal service and session driver stay on the host plane, where the Gateway
+          # can resolve them. The human command and model-facing tool register into this
+          # preset's scoped layers.
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+
+          # ── plan mode ───────────────────────────────────────────────────────────────
+
+          # Plan state is per-agent by nature, so an entry-local realm is not a
+          # workaround here — it is the correct lifetime.
+          - id: planning
+            name: cordis:group
+            group: true
+            isolate:
+              planMode: true
+            config:
+              - id: plan-mode
+                name: '@deepseek-ai/dsh-plan-mode'
+                config:
+                  section: |
+                        You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+                        Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+                        The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+                        Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+                        Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+                        When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+
+          # ── compaction ──────────────────────────────────────────────────────────────
+
+          # `compaction-basic` reads `toolResultPrune` through `ctx.get`, so the pruner must
+          # share this realm rather than sit outside it.
+          #
+          # `tokenMeter` is deliberately NOT in this realm: the meter stays on the HOST
+          # plane, and the rows here resolve that one instance. It takes no configuration,
+          # keys every fold by Session, and owns the context-meter projection units the
+          # browser reads for every session — behind a realm those units would come and go
+          # with whichever presets happen to be mounted. What a preset chooses is whether
+          # its agent compacts at all, which is `compaction-basic` below.
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+
+          # ── delegation and workflows ────────────────────────────────────────────────
+
+          # The `subagents` registry and its spawn/fork backends live in the HOST
+          # composition: the registry is a process singleton whose cross-session queries
+          # the api-proxy serves to the browser, and a provider name may only be
+          # registered once. This preset contributes the delegation TOOLS, which resolve
+          # that host registry.
+          #
+          # `workflows` is different — nothing outside an agent reads it — so every row
+          # that reaches it shares one entry-local realm here, and a consumer left
+          # outside would resolve a host registry this preset does not populate.
+          - id: delegation
+            name: cordis:group
+            group: true
+            isolate:
+              workflowEngine: true
+            config:
+              - id: tool-subagent-control
+                name: '@deepseek-ai/dsh-tool-subagent-control'
+
+              - id: tool-subagent-list-agents
+                name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+              - id: tool-subagent
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: spawn
+                  toolName: subagent
+                  modelSelectionSettings: true
+                  backgroundMode: continuable
+
+              # Fork omits model selection so provider/model stay equal to the parent and
+              # the inherited history remains eligible for KV Cache reuse. This preset
+              # keeps fork continuable; parent and child inherit the same messaging tool,
+              # while the parent id and return guidance follow the inherited history.
+              - id: tool-subagent-fork
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: fork
+                  toolName: subagent_fork
+                  backgroundMode: continuable
+
+              # Production dsh does not install these optional providers. Install the
+              # matching Bundle in this Profile and restart the Host, then copy this
+              # preset and remove `disabled` from the matching tool row. Host availability
+              # alone grants no tool.
+              - id: tool-subagent-codex
+                name: '@deepseek-ai/dsh-tool-subagent'
+                disabled: true
+                config:
+                  provider: codex
+                  toolName: subagent_codex
+                  backgroundMode: one-shot
+                  maxDepth: provider-managed
+
+              - id: tool-subagent-claude-code
+                name: '@deepseek-ai/dsh-tool-subagent'
+                disabled: true
+                config:
+                  provider: claude-code
+                  toolName: subagent_claude_code
+                  backgroundMode: one-shot
+                  maxDepth: provider-managed
+
+              - id: workflow-ptc
+                name: '@deepseek-ai/dsh-workflow-ptc'
+                config:
+                  provider: spawn
+
+              - id: tool-workflow
+                name: '@deepseek-ai/dsh-tool-workflow'
+
+              - id: tool-ralph
+                name: '@deepseek-ai/dsh-tool-ralph'
+                disabled: true
+                config:
+                  subagentProvider: spawn
+                  maxRounds: 64
+
+          # ── remaining model-facing rows ─────────────────────────────────────────────
+
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+
+          # The `web` service and its search provider stay in the host composition; only
+          # the model-facing tool is per-session.
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
+
+          # 当前 standard 预设保留插件管理器工具行,但默认关闭,由用户在预设层显式启用。
+          - id: tool-plugin-manager
+            name: '@deepseek-ai/dsh-plugin-manager/tools'
+            disabled: true

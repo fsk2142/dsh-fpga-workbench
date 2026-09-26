@@ -765,15 +765,15 @@ for (const step of ["比特流生成", "RTL 功能仿真", "厂商原语仿真"]
 // 取不到状态接口时必须说出来 —— 字段定义也来自那里,否则界面会是一片空白,
 // 看起来像插件没装好,而其实只是那条路由没答上来。
 check(clientSource.includes("failed"), "客户端在拿不到状态接口时会给出说明(否则就是空白页)");
-// 写入模型:改动先留在页面上,点「保存改动」才**一次原子提交**(scope.mutate 多字段)。
+// 写入模型:改动先留在页面上,点「保存改动」才**一次原子提交**(宿主 settings 路由多字段 patch)。
 // 逐字段写的老做法已经删掉 —— 它会出现"存了三个、第四个失败"的半吊子状态。
 check(
-  clientSource.includes("scope.mutate(ops)") && clientSource.includes('op: "set"'),
-  "保存走一次原子提交(scope.mutate 多字段,不是逐字段写)"
+  clientSource.includes("SETTINGS_URL") && clientSource.includes("JSON.stringify({ patch: submitted })"),
+  "保存走一次原子提交(宿主 settings 路由多字段 patch,不是逐字段写)"
 );
 check(
   /const missed = keys\.filter/u.test(clientSource),
-  "保存成败靠比对宿主刷新后的值(宿主拒收时 mutate 也正常结算,等它报错是等不到的)"
+  "保存成败靠比对宿主刷新后的值(宿主拒收时也正常结算,等它报错是等不到的)"
 );
 check(
   clientSource.includes("const [drafts, setDrafts]") && clientSource.includes("有未保存的改动"),

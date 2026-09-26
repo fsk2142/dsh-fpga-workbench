@@ -1,0 +1,63 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>FPGA 开发模式</title>
+  <desc>深蓝精密芯片图标，中央为 FPGA 信号波形。</desc>
+  <defs>
+    <linearGradient id="body" x1="248" y1="248" x2="776" y2="792" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FAFF"/>
+      <stop offset="0.48" stop-color="#A7B5C8"/>
+      <stop offset="1" stop-color="#536277"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="256" y1="256" x2="768" y2="768" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="0.35" stop-color="#B7C6DC"/>
+      <stop offset="1" stop-color="#61728B"/>
+    </linearGradient>
+    <linearGradient id="core" x1="360" y1="360" x2="664" y2="664" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#15285C"/>
+      <stop offset="1" stop-color="#070D24"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="404" y1="512" x2="812" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8CF6D6"/>
+      <stop offset="1" stop-color="#31B7E8"/>
+    </linearGradient>
+    <filter id="shadow" x="120" y="120" width="784" height="784" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#020617" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <g fill="#C7D4E6">
+      <rect x="132" y="330" width="112" height="44" rx="22"/>
+      <rect x="132" y="430" width="112" height="44" rx="22"/>
+      <rect x="132" y="530" width="112" height="44" rx="22"/>
+      <rect x="132" y="630" width="112" height="44" rx="22"/>
+      <rect x="132" y="730" width="112" height="44" rx="22"/>
+      <rect x="780" y="330" width="112" height="44" rx="22"/>
+      <rect x="780" y="430" width="112" height="44" rx="22"/>
+      <rect x="780" y="530" width="112" height="44" rx="22"/>
+      <rect x="780" y="630" width="112" height="44" rx="22"/>
+      <rect x="780" y="730" width="112" height="44" rx="22"/>
+      <rect x="330" y="132" width="44" height="112" rx="22"/>
+      <rect x="430" y="132" width="44" height="112" rx="22"/>
+      <rect x="530" y="132" width="44" height="112" rx="22"/>
+      <rect x="630" y="132" width="44" height="112" rx="22"/>
+      <rect x="730" y="132" width="44" height="112" rx="22"/>
+      <rect x="330" y="780" width="44" height="112" rx="22"/>
+      <rect x="430" y="780" width="44" height="112" rx="22"/>
+      <rect x="530" y="780" width="44" height="112" rx="22"/>
+      <rect x="630" y="780" width="44" height="112" rx="22"/>
+      <rect x="730" y="780" width="44" height="112" rx="22"/>
+    </g>
+
+    <rect x="220" y="220" width="584" height="584" rx="96" fill="url(#body)" stroke="url(#edge)" stroke-width="12"/>
+    <rect x="270" y="270" width="484" height="484" rx="68" fill="#0B1642" stroke="#3E5FC4" stroke-width="8"/>
+    <rect x="360" y="360" width="304" height="304" rx="44" fill="url(#core)" stroke="#5DE3C5" stroke-width="10"/>
+
+    <path d="M404 512H472L512 420L580 604L632 484H676L712 552H748" stroke="#8CF6D6" stroke-opacity="0.22" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M404 512H472L512 420L580 604L632 484H676L712 552H748" stroke="url(#wave)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <path d="M320 352H376M320 672H376M648 352H704M648 672H704" stroke="#8EA6C4" stroke-width="10" stroke-linecap="round" opacity="0.72"/>
+    <circle cx="512" cy="320" r="12" fill="#5DE3C5"/>
+    <circle cx="512" cy="704" r="12" fill="#5DE3C5" opacity="0.72"/>
+  </g>
+</svg>

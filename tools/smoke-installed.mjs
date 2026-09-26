@@ -71,14 +71,29 @@ if (mode !== undefined) {
 }
 
 // ── 3. 真设置跑一遍:设置页载荷 + 会话提示段 ─────────────────────────────────
+//
+// js-yaml 只用来读测试夹具里的 settings.yaml,不是插件运行时的依赖。宿主安装目录
+// 可能不存在(桌面版是 asar),或者没有把 js-yaml 暴露在宿主 package 的解析根下;
+// 那时跳过"读真实设置"这一步,继续用空设置验证导出与载荷,不能因此让安装回滚。
 const require = createRequire(`${APP}/package.json`);
-const yaml = require("js-yaml");
 let values = {};
+let settingsRead = false;
 try {
-  values = yaml.load(readFileSync(`${PROFILE}\\..\\..\\settings.yaml`, "utf8"))?.["fpga-workbench"] ?? {};
-  check(true, `读到真实设置(${Object.keys(values).length} 项)`);
+  const yaml = require("js-yaml");
+  try {
+    values = yaml.load(readFileSync(`${PROFILE}\\..\\..\\settings.yaml`, "utf8"))?.["fpga-workbench"] ?? {};
+    settingsRead = true;
+    check(true, `读到真实设置(${Object.keys(values).length} 项)`);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      console.log("      跳过读取真实设置(没有 settings.yaml;它只用于测试,不属于插件运行时)");
+    } else {
+      check(false, "读到真实设置", String(error));
+    }
+  }
 } catch (error) {
-  check(false, "读到真实设置", String(error));
+  if (error?.code !== "MODULE_NOT_FOUND" && error?.code !== "ERR_MODULE_NOT_FOUND") throw error;
+  console.log("      跳过读取真实设置(宿主解析环境没有 js-yaml;它只用于测试,不属于插件运行时)");
 }
 
 if (host !== undefined) {
@@ -164,7 +179,11 @@ if (mode !== undefined) {
     const text = describeEnv(values, probeFilesystem);
     check(text.length > 200, `提示段能组装出内容(${text.length} 字符)`);
     check(text.includes("这是能力配置，不是执行顺序"), "提示段明确设置不是自动化流水线");
-    check(text.includes("工具设置中已登记且路径可用的工具"), "提示段说明工具设置里已登记的工具");
+    if (settingsRead && Object.keys(values).length > 0) {
+      check(text.includes("工具设置中已登记且路径可用的工具"), "提示段说明工具设置里已登记的工具");
+    } else {
+      console.log("      跳过真实工具提示断言(没有读到非空的 FPGA 设置值)");
+    }
     check(text.includes("模块工具能力偏好") && text.includes("工程工具能力偏好"), "提示段分别说明模块与工程能力工具");
     check(text.includes("语言与标准"), "提示段含「语言与标准」一节");
     check(text.includes("模板库:"), "提示段说明模板库来源与按需扫描规则");

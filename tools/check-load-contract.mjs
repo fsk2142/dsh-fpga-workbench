@@ -29,6 +29,22 @@ const check = (ok, label, detail) => {
 
 const read = (rel) => readFileSync(join(ROOT, rel), "utf8");
 const manifest = JSON.parse(read("package.json"));
+check(manifest.dsh?.manifestVersion === 1, `清单声明 dsh.manifestVersion = 1(实际 ${String(manifest.dsh?.manifestVersion)})`);
+check(
+  manifest.dsh?.compatibility?.dsh === "^0.1.7-rc.2" &&
+    manifest.dsh?.compatibility?.dshReleases?.["0.1.7-rc.2"] === "compatible",
+  "清单声明兼容 DSH 0.1.7-rc.2"
+);
+check(
+  Array.isArray(manifest.dsh?.client?.inject) &&
+    manifest.dsh.client.inject.includes("@deepseek-ai/dsh-client-ui-slots") &&
+    manifest.dsh.client.inject.includes("@deepseek-ai/dsh-client-ui-settings"),
+  "客户端清单声明 slots 与 settings 服务模块"
+);
+check(manifest.dsh?.client?.platform === "web", "客户端清单声明 web 平台");
+check(manifest.icon === "icon.svg", `清单声明插件图标 icon.svg(实际 ${String(manifest.icon)})`);
+check(existsSync(join(ROOT, "icon.svg")), "插件图标文件存在");
+check((manifest.files ?? []).includes("icon.svg"), "files 白名单包含 icon.svg(否则安装副本没有图标)");
 
 /**
  * 一套极小的 React 替身:够把客户端组件真的跑起来。
@@ -263,6 +279,11 @@ check(linkProblems.length === 0, "lib/ 内部相对 import 都能解析", linkPr
 
 // ── 3. 客户端 bundle 契约 ───────────────────────────────────────────────────
 const client = read("lib/client.js");
+const clientCode = client
+  .replace(/\/\*[\s\S]*?\*\//gu, " ")
+  .split("\n")
+  .filter((line) => !line.trim().startsWith("//"))
+  .join("\n");
 const loaderId = /__ModuleLoader__\.load\(\{[\s\S]{0,120}?id:\s*"([^"]+)"/u.exec(client)?.[1];
 check(loaderId === manifest.name, `bundle 的 loader id 等于包名(实际 ${String(loaderId)} vs ${manifest.name})`);
 check(/exports\.inject\s*=\s*\[/u.test(client), "exports.inject 是数组(写成对象会让整行不激活)");
@@ -275,14 +296,30 @@ check(
   /\.fpga-set\s+\.fpga-set-collapsed\s*\{\s*display:\s*none/u.test(client),
   "收起样式的优先级高于工具体与能力卡的 display:flex"
 );
-check(/settingsScope/u.test(client) && !/exports\.inject\s*=\s*\[[^\]]*settingsScope/u.test(client),
-  "可能不存在的服务(settingsScope)走内部 inject,不放进 exports.inject");
+check(!/settingsScope/u.test(clientCode) && /plugins\.bundle\.config/u.test(clientCode),
+  "客户端使用 0.1.7 的 plugins.bundle.config 槽(不再依赖 settingsScope)");
+check(/settings\.section/u.test(clientCode), "客户端同时注册设置菜单入口 settings.section");
 
 // ── 4. 宿主半侧 ────────────────────────────────────────────────────────────
 const host = read("lib/index.js");
+const hostCode = host
+  .replace(/\/\*[\s\S]*?\*\//gu, " ")
+  .split("\n")
+  .filter((line) => !line.trim().startsWith("//"))
+  .join("\n");
 check(/export function apply/u.test(host), "宿主导出 apply");
 check(/export const inject = \["settings"\]/u.test(host), `宿主 inject 恰好是 ["settings"]`);
 check(!/systemPrompt/u.test(host), "index.js 里不出现 systemPrompt(提示只能由模式半侧注册)");
+check(!/ctx\.settings\.register/u.test(hostCode), "宿主不再调用 0.1.7 已移除的 settings.register");
+check(/export const Config/u.test(host), "宿主导出当前 settings 表单使用的 Config schema");
+check(/\.volatile\(\)/u.test(host), "Config 字段标记 volatile(0.1.7 只允许写 volatile 字段)");
+check(/service\.describe/u.test(hostCode) && /service\.update\(NS/u.test(hostCode), "宿主使用 0.1.7 的 describe/update settings API");
+const patchText = read("cordis.patch.yml");
+check(!/- id: agent-presets/u.test(patchText), "补丁不再覆盖已移除的 agent-presets 行");
+check(
+  /- id: preset-fpga-workbench[\s\S]*?name: '@deepseek-ai\/dsh-agent-preset'/u.test(patchText),
+  "补丁按官方 0.1.7 格式插入 @deepseek-ai/dsh-agent-preset 预设行"
+);
 check(/export const name = /u.test(host), "宿主导出 name");
 check(
   /export const TEMPLATE_PATH = "\/plugins\/fpga-workbench\/templates"/u.test(host) &&
@@ -300,22 +337,23 @@ check(
   "未知能力与模板读取异常返回非 2xx JSON"
 );
 
-// settings 句柄的调用签名:`register()` 返回的是**已绑定命名空间**的句柄 ——
-// get() 不带参、update(patch) 只接补丁。多传一个 ns 会被当成补丁本身,运行时才报
-// "must be a plain object"(方法存在、参数类型错,静态完全看不出来 —— 踩过一次)。
-const handleCalls = [...host.matchAll(/settings\.(get|update|replace|watch)\(([^)]*)\)/gu)].map(
-  (match) => `settings.${match[1]}(${match[2]})`
-);
-check(handleCalls.length > 0, "宿主在用 settings 句柄");
-check(
-  handleCalls.every((call) => !/^settings\.(update|replace|watch)\(\s*(NS|["'])/u.test(call)),
-  "settings 句柄的写方法只传数据、不传命名空间(句柄已绑定)",
-  handleCalls.join("  ")
-);
+// 旧版 settings 句柄的调用签名断言已失效:0.1.7 的服务是 describe/update,不是绑定句柄。
+// 这里只钉住新接口的两个关键形状,避免把旧 register 契约误当成当前要求。
+check(/service\.update\(NS, patch\)/u.test(hostCode), "settings 写入按当前行的 NS 调用 update(NS, patch)");
 
 const mode = read("lib/mode.js");
 check(/export const inject = \["systemPrompt"\]/u.test(mode), `模式半侧 inject 是 ["systemPrompt"]`);
 check(/export function apply/u.test(mode), "模式半侧导出 apply");
+
+// 当前桌面版 standard 已把工作流与插件管理器纳入预设；本插件的复制底座也必须跟上。
+const preset = read("presets/fpga-workbench/agent.cordis.yml");
+check(/- id: workflow-ptc[\s\S]*?name: '@deepseek-ai\/dsh-workflow-ptc'/u.test(preset), "FPGA 预设包含新版 workflow-ptc 行");
+check(!/workflow-worker-thread/u.test(preset), "FPGA 预设不再挂载已移除的 workflow-worker-thread 行");
+check(/- id: tool-ralph[\s\S]*?disabled: true/u.test(preset), "FPGA 预设中的 tool-ralph 与新版 standard 一样默认禁用");
+check(
+  /- id: tool-plugin-manager[\s\S]*?name: '@deepseek-ai\/dsh-plugin-manager\/tools'[\s\S]*?disabled: true/u.test(preset),
+  "FPGA 预设包含新版插件管理器工具行"
+);
 
 // ── 5. 客户端渲染冒烟 ───────────────────────────────────────────────────────
 //
@@ -501,6 +539,7 @@ const capabilityFields = capabilityFixtures.flatMap((capability) => [
  * `pendingCleanup` 的那份 preset(见 `statusPreset`)。
  */
 const payload = {
+  values: { ...hostValues },
   sections: [
     { key: "common", label: "工具设置", hint: "逐项登记本机工具" },
     { key: "module", label: "模块工具", hint: "不是流水线" },
@@ -641,8 +680,28 @@ let rejectDetect = false;
 let malformedDetect = false;
 /** 让下一轮预演直接拒绝,验证失败不能被静默吞掉。 */
 let rejectPreview = false;
-const fetchStub = (url) => {
+const fetchStub = (url, options = {}) => {
   const target = String(url);
+  if (target.includes("/settings")) {
+    let patch = {};
+    try {
+      patch = JSON.parse(String(options.body ?? "{}")).patch ?? {};
+    } catch {
+      patch = {};
+    }
+    written.push(...Object.entries(patch).map(([key, value]) => ({ op: "set", path: [key], value })));
+    const accept = () => {
+      if (hostAcceptsSave) Object.assign(hostValues, patch);
+    };
+    if (deferSaves === null) {
+      accept();
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ values: { ...hostValues } }) });
+    }
+    return new Promise((resolve) => deferSaves.push(() => {
+      accept();
+      resolve({ ok: true, json: () => Promise.resolve({ values: { ...hostValues } }) });
+    }));
+  }
   if (target.includes("/browse")) {
     browserRequested += 1;
     const data = browsePayload;
@@ -761,21 +820,17 @@ let firstTree;
 let secondTree;
 try {
   clientExports.apply({
-    inject: (deps, callback) => callback({
-      settingsScope: { bind: () => scope },
-      effect: (fn) => fn(),
-      slots: {
-        inject: (name, generator) => {
-          generator().next();
-        },
-        register: (spec, component) => {
-          captured = component;
-          return { dispose() {} };
-        }
+    slots: {
+      inject: (name, register) => {
+        if (name === "plugins.bundle.config") register();
+      },
+      register: (spec, component) => {
+        captured = component;
+        return { dispose() {} };
       }
-    })
+    }
   });
-  check(typeof captured === "function", "设置页把组件注册到了 settings.section 槽");
+  check(typeof captured === "function", "设置页把组件注册到了 plugins.bundle.config 槽");
   fake.reset();
   firstTree = captured();
   await new Promise((resolve) => setImmediate(resolve));

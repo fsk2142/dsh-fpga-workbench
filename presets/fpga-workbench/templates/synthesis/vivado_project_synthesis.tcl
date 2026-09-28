@@ -112,7 +112,9 @@ proc spec_part {path} {
   set text [read $fh]
   close $fh
   foreach line [split $text "\n"] {
-    if {[regexp {器件|Device|Part} $line] && [regexp {xc[a-z0-9-]+} $line part]} { return $part }
+    # 模式本身也要用 ASCII 的 \u 转义写:脚本文件同样被 Tcl 按系统编码读取,
+    # 直接写中文的话,内存里的模式就已经是乱码了 —— 文件读对了也匹配不上。
+    if {[regexp "\u5668\u4ef6|Device|Part" $line] && [regexp {xc[a-z0-9-]+} $line part]} { return $part }
   }
   return ""
 }

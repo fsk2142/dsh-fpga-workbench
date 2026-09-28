@@ -247,6 +247,13 @@ for (const [label, file] of [
     /fconfigure\s+\$fh\s+-encoding\s+utf-8/u.test(specPartProc),
     "spec_part 按 UTF-8 读取 doc/spec.md(不依赖系统编码)"
   );
+  // 脚本文件本身也被 Tcl 按系统编码读取;正则里直接写中文时,内存里的模式已是乱码。
+  // 必须用 ASCII 的 \u 转义写模式,文件读对了才匹配得上。
+  check(
+    /regexp\s+"\\u5668\\u4ef6\|Device\|Part"/u.test(specPartProc) &&
+      !/regexp\s+\{[^}]*器件/u.test(specPartProc),
+    "spec_part 的「器件」模式用 \\u 转义(不依赖脚本文件的读取编码)"
+  );
 }
 
 // DSH-N01:E8-04 只挡了**递归子目录**的链接;collector 的**根目录自己**是 symlink/Junction 时,整段

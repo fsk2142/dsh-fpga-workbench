@@ -104,7 +104,11 @@ puts "\[run_prj_synth\] reports: [string map {\\ /} $RPT]"
 # ---- 预检 2:器件一致性(工程 spec 为准) ------------------------------------ #
 proc spec_part {path} {
   if {![file isfile $path]} { return "" }
+  # doc/spec.md 是用户手写的 UTF-8 文本。Tcl 的 `open $path r` 用系统编码
+  # (中文 Windows 上是 cp936),不显式指定时「器件」会被解成乱码,于是这一行
+  # 明明写着器件也会被判成"规格里没有器件"。
   set fh [open $path r]
+  fconfigure $fh -encoding utf-8
   set text [read $fh]
   close $fh
   foreach line [split $text "\n"] {

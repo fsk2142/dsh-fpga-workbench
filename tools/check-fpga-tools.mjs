@@ -239,6 +239,14 @@ for (const [label, file] of [
       /doc\/spec\.md not found/u.test(projectSynthSource),
     "工程综合模板:doc/spec.md 缺失或读不到器件 → fail(不给不带器件核对结论的 PASS)"
   );
+  // spec.md 是用户手写、正文通常是 UTF-8 中文。Tcl 的 `open $path r` 用系统编码
+  // (中文 Windows 上是 cp936);不显式指定 UTF-8 时,`器件` 会被解成乱码,
+  // spec_part 就会返回空、把规格里有器件误判成没有。
+  const specPartProc = /proc spec_part \{path\} \{[\s\S]*?\n\}/u.exec(projectSynthSource)?.[0] ?? "";
+  check(
+    /fconfigure\s+\$fh\s+-encoding\s+utf-8/u.test(specPartProc),
+    "spec_part 按 UTF-8 读取 doc/spec.md(不依赖系统编码)"
+  );
 }
 
 // DSH-N01:E8-04 只挡了**递归子目录**的链接;collector 的**根目录自己**是 symlink/Junction 时,整段

@@ -254,6 +254,37 @@ for (const [label, file] of [
       !/regexp\s+\{[^}]*器件/u.test(specPartProc),
     "spec_part 的「器件」模式用 \\u 转义(不依赖脚本文件的读取编码)"
   );
+
+  // 行为测试:把模板里的 spec_part **原样**交给真实 Tcl 跑一遍。
+  // 静态断言只能证明"写法像对的";上一轮就是静态断言过了、真机仍然返回空。
+  // 没有 ModelSim 时明说跳过,不把跳过记成 PASS。
+  const specPartDir = join(SANDBOX, `spec-part-utf8-${String(Date.now())}`);
+  mkdirSync(specPartDir, { recursive: true });
+  const specFile = join(specPartDir, "spec.md");
+  writeFileSync(specFile, "# 工程规格\n\n- 器件: xc7z020clg484-1\n", "utf8");
+  const probeScript = join(specPartDir, "spec-part-check.tcl");
+  writeFileSync(
+    probeScript,
+    `${specPartProc}\nset r [spec_part "${specFile.replace(/\\/gu, "/")}"]\nputs "SPEC_PART_RESULT=$r"\n`,
+    "utf8"
+  );
+  const probeLog = join(specPartDir, "vsim.log");
+  const probeFd = openSync(probeLog, "w");
+  const probe = spawnSync("vsim", ["-c", "-do", `source ${probeScript.replace(/\\/gu, "/")}; quit -f`], {
+    stdio: ["ignore", probeFd, "ignore"]
+  });
+  closeSync(probeFd);
+  const probeOutput = existsSync(probeLog) ? readFileSync(probeLog, "utf8") : "";
+  if (probe.error !== undefined || probe.status !== 0) {
+    console.log(
+      `  SKIP 真机 Tcl:spec_part 从 UTF-8 中文 spec 读出器件(本机 vsim 不可用:${probe.error?.message ?? `退出码 ${String(probe.status)}`})—— 记 NOT_TESTED`
+    );
+  } else {
+    check(
+      /SPEC_PART_RESULT=xc7z020clg484-1/u.test(probeOutput),
+      "真机 Tcl:spec_part 从 UTF-8 中文 spec 读出器件"
+    );
+  }
 }
 
 // DSH-N01:E8-04 只挡了**递归子目录**的链接;collector 的**根目录自己**是 symlink/Junction 时,整段
@@ -2651,6 +2682,18 @@ for (const good of ["console", "connection", "auxiliary", "com10", "lpt10"]) {
   check(
     got.code === 0 && existsSync(join(root, "rtl", `${good}.sv`)),
     `${good} 不是 Windows 保留设备名 → 正常起文件(实际 ${String(got.code)})`,
+    got.output.slice(-160)
+  );
+}
+// 模块名会被替换进生成的 RTL / Tcl 文本:非 ASCII 或非标识符字符既写不出合法 HDL,
+// 也会在 Tcl 按系统编码读脚本时变成乱码(与 spec_part 同一类)。必须挡在落盘之前。
+for (const bad of ["中文模块", "uart-rx", "1uart", "uart rx"]) {
+  const root = join(SANDBOX, `ident-${stamp}-${bad.replace(/[^A-Za-z0-9]/gu, "_")}`);
+  mkdirSync(root, { recursive: true });
+  const got = runStderr("module-rtl-new.mjs", [root, bad, "--template", categorizedTemplates.rtl]);
+  check(
+    got.code === 2 && /合法的 HDL 标识符/u.test(got.output) && !existsSync(join(root, "rtl")),
+    `非标识符模块名「${bad}」→ 退 2、说清原因、**不落文件**(实际 ${String(got.code)})`,
     got.output.slice(-160)
   );
 }

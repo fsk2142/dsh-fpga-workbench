@@ -496,5 +496,10 @@ export function moduleNameError(name) {
   if (name === "." || name === "..") return "`.` / `..` 指向根目录本身或它的上级";
   if (name.includes(":")) return "带了盘符或冒号";
   if (WINDOWS_RESERVED_DEVICE.test(name)) return "Windows 保留设备名，无法可靠进入 Git";
+  // 名字会被替换进生成的 RTL / Tcl 文本:非 ASCII 或带连字符的名字既不是合法 HDL 标识符,
+  // 也会因为 Tcl 按系统编码读脚本而在内存里变成乱码(与 doc/spec.md 的器件正则同一类问题)。
+  if (!/^[A-Za-z_][A-Za-z0-9_$]*$/u.test(name)) {
+    return "不是合法的 HDL 标识符(只能用 A-Z a-z 0-9 _ $,首字符不能是数字)";
+  }
   return undefined;
 }

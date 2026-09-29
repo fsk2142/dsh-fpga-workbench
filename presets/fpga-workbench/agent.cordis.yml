@@ -24,8 +24,8 @@
 #
 # 本文件其余部分是从官方 standard 预设复制来的组装(工具行、子代理、工作流等),
 # 目的只是让 FPGA 开发模式会话拿到与常规会话相同的能力底座 —— 预设之间不继承,
-# 不复制就会缺工具。DSH 升级后 standard 若增删行,这里需要同步:
-# tools/check-preset-sync.mjs 会比对两者并报出差异。
+# 不复制就会缺工具。DSH 升级后 standard 若增删行,这份与 cordis.patch.yml 内联的
+# 行集合都要同步;tools/check-preset-root.mjs 会逐行比对两者并报出差异。
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:

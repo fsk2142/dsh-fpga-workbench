@@ -15,7 +15,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const LIB = join(ROOT, "lib");
@@ -31,9 +31,10 @@ const read = (rel) => readFileSync(join(ROOT, rel), "utf8");
 const manifest = JSON.parse(read("package.json"));
 check(manifest.dsh?.manifestVersion === 1, `清单声明 dsh.manifestVersion = 1(实际 ${String(manifest.dsh?.manifestVersion)})`);
 check(
-  manifest.dsh?.compatibility?.dsh === "^0.1.7-rc.2" &&
-    manifest.dsh?.compatibility?.dshReleases?.["0.1.7-rc.2"] === "compatible",
-  "清单声明兼容 DSH 0.1.7-rc.2"
+  manifest.dsh?.compatibility?.dsh === "^0.1.7-rc.2 || ^0.2.0-rc.1" &&
+    manifest.dsh?.compatibility?.dshReleases?.["0.1.7-rc.2"] === "compatible" &&
+    manifest.dsh?.compatibility?.dshReleases?.["0.2.0-rc.1"] === "compatible",
+  "清单声明兼容 DSH 0.1.7-rc.2 与 0.2.0-rc.1"
 );
 check(
   Array.isArray(manifest.dsh?.client?.inject) &&
@@ -344,6 +345,26 @@ check(/service\.update\(NS, patch\)/u.test(hostCode), "settings 写入按当前�
 const mode = read("lib/mode.js");
 check(/export const inject = \["systemPrompt"\]/u.test(mode), `模式半侧 inject 是 ["systemPrompt"]`);
 check(/export function apply/u.test(mode), "模式半侧导出 apply");
+// 0.2.0 的 settings 服务只有 describe/update;会话提示必须从 descriptor 取本插件的真实值。
+const modeModule = await import(pathToFileURL(join(LIB, "mode.js")).href);
+const modePromptWith = (settings) => {
+  let render;
+  modeModule.apply({
+    get: (name) => name === "settings" ? settings : undefined,
+    effect: (register) => register(),
+    systemPrompt: { section: ({ text }) => { render = text; } }
+  });
+  return render();
+};
+const configuredTool = process.execPath;
+check(
+  modePromptWith({ describe: () => [{ ns: "fpga-workbench", value: { pythonPath: configuredTool } }] }).includes(configuredTool),
+  "0.2.0 模式提示从 settings.describe 读取已保存的工具路径"
+);
+check(
+  modePromptWith({ get: () => ({ pythonPath: configuredTool }) }).includes(configuredTool),
+  "旧版模式提示仍能从 settings.get 读取工具路径"
+);
 
 // 当前桌面版 standard 已把工作流与插件管理器纳入预设；本插件的复制底座也必须跟上。
 const preset = read("presets/fpga-workbench/agent.cordis.yml");
@@ -534,10 +555,7 @@ const capabilityFields = capabilityFixtures.flatMap((capability) => [
     category: template.category, control: "template", path: template.selection, configured: false, present: true, default: ""
   }))
 ]);
-/**
- * 状态路由的答复(不带查询串那条 = 初次取字段定义)。字段表本身固定;末段要换的是带
- * `pendingCleanup` 的那份 preset(见 `statusPreset`)。
- */
+/** 状态路由的答复(不带查询串那条 = 初次取字段定义)。字段表本身固定。 */
 const payload = {
   values: { ...hostValues },
   sections: [
@@ -634,11 +652,6 @@ let previewRequested = 0;
  * 预演安排不同的答复,用来分辨"最后落在界面上的是哪一次的结果"。
  */
 let statusPayload = payload;
-/**
- * 状态路由答复里的 `preset`(预设同步那一行 + 待清理清单)。默认 undefined = 拿不到 ——
- * 那条路径上"整行不显示"也是要验的行为之一;末段再给它一份带 `pendingCleanup` 的。
- */
-let statusPreset;
 /** 预演答复:可同时改字段与对应能力,用来验证未保存状态和乱序保护。 */
 const previewAnswer = (fieldOverrides, fieldKey = "verilatorPath", capabilityKey, capabilityOverrides = {}) => ({
   ...payload,
@@ -743,7 +756,7 @@ const fetchStub = (url, options = {}) => {
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
   }
-  return Promise.resolve({ ok: true, json: () => Promise.resolve({ ...payload, preset: statusPreset }) });
+  return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
 };
 const doc = createFakeDocument();
 /** 可切换的外壳:空 UA = 普通浏览器;带 Electron = 桌面壳。客户端在点击时读它。 */
@@ -2004,73 +2017,6 @@ try {
   check(false, "检测结论里的版本信息能走通", String(error));
 } finally {
   // 这一段在文件末尾:别把闸门或那份假答复留给后面的人
-  deferDetect = null;
-  detectPayload = { found: [] };
-}
-
-// ── 待清理清单要在设置页看得见(第 4 件) ──────────────────────────────────────
-//
-// "事实报了、但没人看见"那一类:待清理清单只躺在宿主日志里,设置页一个字都不显示 —— 用户不知道
-// 该清什么(而且插件零删除,他不处置就永远留着)。
-//
-// ⚠ 这一段原来还捎带着验"版本期望进状态"(F-05)与"不采用版本不匹配的候选"(F-06)。那两条守护的
-// 是**版本要求**这条能力:终端字段(唯一声明过版本要求的字段)已于 2026-09-21 删掉(理由见
-// lib/toolchain.js 的 FIELDS 顶上那段注),`versionExpected` / `versionOk` 这套判定随它一起删除 ——
-// 于是那两条自检也没有了被测对象(留着就是拿夹具去测一段永远不执行的分支),一并删掉。
-// 仍然在验的是:检测结论照实报**实测版本**(见上面那段)、以及下面这段待清理清单。
-try {
-  // 待清理清单要在设置页看得见(第 4 件):路径 + 类别 + "只是提示,不会自动删",且没有删除按钮
-  const stalePath = "C:\\home\\.agent-presets\\fpga-workbench\\skills\\gone\\SKILL.md";
-  const emptyDirPath = "C:\\home\\.agent-presets\\fpga-workbench\\skills\\旧技能";
-  statusPreset = {
-    state: "synced",
-    dir: "C:\\home\\.agent-presets\\fpga-workbench",
-    pendingCleanup: [
-      { kind: "stale", label: "过期技能/模板", path: stalePath },
-      { kind: "emptyDir", label: "空技能目录", path: emptyDirPath }
-    ]
-  };
-  fake.reset();
-  captured();
-  fake.runEffects();
-  await tick();
-  fake.reset();
-  const cleanupTree = captured();
-  const cleanupText = JSON.stringify(cleanupTree ?? {});
-  check(
-    cleanupText.includes(asJsonText(stalePath)) && cleanupText.includes(asJsonText(emptyDirPath)),
-    `第 4 件:两条待清理路径都渲染出来(实际 ${cleanupText.slice(0, 240)})`
-  );
-  check(cleanupText.includes("过期技能/模板") && cleanupText.includes("空技能目录"), "第 4 件:每条带上类别");
-  check(/不会自动删/u.test(cleanupText), "第 4 件:说清这只是提示、不会自动删");
-  check(countButtons(cleanupTree, "删除") === 0, "第 4 件:没有任何删除按钮(零删除,不做一键删除)");
-
-  // 条目多时只给条数(不把一屏清单铺出来);前几条照旧全列
-  statusPreset = {
-    ...statusPreset,
-    pendingCleanup: Array.from({ length: 8 }, (_, index) => ({
-      kind: "temp",
-      label: "临时项",
-      path: `C:\\tmp\\leftover-${String(index)}.tmp`
-    }))
-  };
-  fake.reset();
-  captured();
-  fake.runEffects();
-  await tick();
-  fake.reset();
-  const manyText = JSON.stringify(captured() ?? {});
-  check(
-    manyText.includes("另有") && !manyText.includes(asJsonText("C:\\tmp\\leftover-7.tmp")),
-    "第 4 件:条目多时给条数,不把一屏清单全铺出来"
-  );
-  check(
-    manyText.includes("临时项") && manyText.includes(asJsonText("C:\\tmp\\leftover-0.tmp")),
-    "第 4 件:少量时全列(前几条路径照旧显示)"
-  );
-} catch (error) {
-  check(false, "版本期望 / 候选采用 / 待清理清单这几段渲染能走通", String(error));
-} finally {
   deferDetect = null;
   detectPayload = { found: [] };
 }

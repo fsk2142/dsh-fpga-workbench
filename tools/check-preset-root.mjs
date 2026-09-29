@@ -73,31 +73,17 @@ if (existsSync(compositionPath)) {
   }
 }
 
-// 3. 旧的 ensureUserPreset 仍保留作为兼容路径;官方 0.1.7 的可见性不依赖它。
+// 3. 可见性只来自组合里的 @deepseek-ai/dsh-agent-preset 行;宿主不再往用户预设目录写副本。
 const hostSource = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
 const codeOnly = hostSource
   .replace(/\/\*[\s\S]*?\*\//gu, " ")
   .split("\n")
   .filter((line) => !line.trim().startsWith("//"))
   .join("\n");
-check(
-  /new URL\("\.\.\/presets\/", import\.meta\.url\)/u.test(codeOnly),
-  "预设根由 import.meta.url 求值(不依赖补丁 !!js 的 baseUrl 语义)"
-);
-check(/profileContext\?\.home/u.test(codeOnly),
-  "预设同步优先使用当前宿主的 profileContext.home");
-check(/function ensureUserPreset/u.test(codeOnly), "有用例把预设同步进用户预设目录");
-check(/USER_PRESET_DIR/u.test(codeOnly) && codeOnly.includes('".agent-presets"'),
-  "用的是 dsh-agent-presets 约定的用户预设目录名");
-check(/profileContext\?\.home[\s\S]{0,160}DSH_HOME/u.test(codeOnly),
-  "没有 profileContext.home 时才退回 DSH_HOME / ~/.dsh");
-check(/cpSync\(source, destination/u.test(codeOnly), "复制预设(而不是只登记路径)");
-// 只比较"我们在维护的那部分"(包内文件 + 该清的旧文件):用户自己在预设目录里加的普通文件
-// 不该让两棵树永远不一致 —— 那会导致每次启动都重同步、重备份一遍。
-check(/presetSyncNeeded\(source, destination, manifest\)/u.test(codeOnly), "内容一致就跳过(幂等,不每次重写)");
-// 预设同步是当前宿主扫描用户目录的唯一入口;不再断言旧的 settings.register 句柄。
+check(!/ensureUserPreset|USER_PRESET_DIR|presetSyncNeeded/u.test(codeOnly),
+  "宿主不再同步用户预设目录(预设由组合里的注册行提供)");
 
-// 6. 显示名只有一处真相:预设的 name 与设置页的 LABEL 必须相同。
+// 4. 显示名只有一处真相:预设的 name 与设置页的 LABEL 必须相同。
 //    改名只改一半会让用户看到两个名字(预设选择器一个、设置里一个)。
 const presetYml = readFileSync(join(presetDir, "preset.yml"), "utf8");
 const presetName = /^\s*name:\s*(.+)$/mu.exec(presetYml)?.[1]?.trim();

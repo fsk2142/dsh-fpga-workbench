@@ -47,6 +47,15 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 
 ## 安装
 
+官方 DeepSeek Harness Desktop `0.2.0-rc.1`:在侧边栏的「插件」页安装本仓库的绝对路径
+`C:\Work\dsh-fpga-workbench`，更新后重启桌面端，再新建会话选择「FPGA 开发模式」。
+插件声明同时保留对 DSH `0.1.7-rc.2` 的兼容。插件自身的 `0.4.0` 是独立版本号，
+不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本，
+不要用旧的全局命令更新官方桌面端的 profile。
+
+下面的命令与 `tools/install.mjs` 是旧 DSH Desktop 环境的安装方式；使用前先确认
+`dsh --version` 与目标桌面端相符。
+
 ```powershell
 # 从本机工作区(开发时用)
 dsh plugin --profile desktop add file:C:\Work\dsh-fpga-workbench
@@ -85,7 +94,7 @@ dsh plugin --profile desktop add git+ssh://git@github.com/fsk2142/dsh-fpga-workb
 ```
 package.json                  dsh.bundle.patch + dsh.client + exports['./mode'];
                               peer 依赖 schemastery(profile 自带,不新增依赖)
-cordis.patch.yml              profile 层:挂载宿主半侧 + 覆盖 agent-presets 行
+cordis.patch.yml              profile 层:挂载宿主半侧 + 插入 FPGA 预设声明行
 lib/index.js                  宿主半侧(全局):注册设置、同步预设、探测路径、只读状态路由
 lib/mode.js                   模式半侧(只有本模式):把工具链交给本模式的会话
 lib/toolchain.js              字段定义 + 存在性判定 + 提示文案 —— 只依赖 node 内置模块
@@ -243,25 +252,15 @@ FPGA 工具链的信息与警告,与"不影响正常会话"冲突。所以工具
 注册,它只从本预设的组装里挂载。`tools/check-toolchain.mjs` 有一条源码断言守着这个分工:
 `lib/index.js` 里不允许出现 `systemPrompt`。
 
-同理,技能也按模式隔离:`agent.cordis.yml` 里 `skill-filesystem` 那一行把**预设目录下**的
-`skills/` 追加进 `customSkillDirs`(`!!js ... new URL('skills/', baseUrl)`,baseUrl 是组装
-文件自己的目录,所以预设被复制到用户预设目录之后依然指得对 —— 官方 `cordis` 预设就是这么写的)。
-`includeDefaultRoots` 保持默认的 `true`:你的工作区技能与用户技能在本模式下**照常可见**,
-这里是追加,不是替换。
+同理,技能也按模式隔离:预设声明里的 `skill-filesystem` 行把**包内**
+`presets/fpga-workbench/skills/` 追加进 `customSkillDirs`(`!!js ... new URL('skills/', baseUrl)`,
+baseUrl 是补丁文件自己的目录,路径随包走)。`includeDefaultRoots` 保持默认的 `true`:
+你的工作区技能与用户技能在本模式下**照常可见**,这里是追加,不是替换。
 
-**注意技能是从 `~/.dsh/.agent-presets/<id>/skills/` 扫的,不是从包里扫的** —— 启动时
-`ensureUserPreset` 把包内预设同步进用户预设目录(`cpSync`,只合并不删)。所以**包内删掉或改名的
-技能,用户目录里那份不会自己消失**,还照样被加载(改一次技能名就会新旧两套同时生效)。
-为此同步时做三件事,顺序不能反:
-
-1. **先备份**:用户改过或新增的文件,连同"包内已删的旧文件"一起,备份到
-   `$DSH_HOME/.fpga-workbench-backup/<时间>/`;
-2. **再列出该清理的(不删)**:上次清单里记过的、包里已经没有的文件,加上 **`skills/` 下的空
-   技能目录** —— **只报告路径,不删除**(零删除;技能留着就直接改变 AI 行为,所以清单必须打出来);
-3. **同步并写清单** `$DSH_HOME/.fpga-workbench-backup/synced-files.json`(记我们写过哪些文件;
-   放预设目录**外面**,否则"两棵树是否一致"永远为假、每次启动都白同步)。
-
-用户自己在预设目录里加的东西(不在清单、也不在 `skills/` 下)一律不动。
+预设本身由 `cordis.patch.yml` 里的 `@deepseek-ai/dsh-agent-preset` 声明行注册 ——
+DSH 0.1.7-rc.2 的 `agent-preset-registry` 只从组合里收集声明,**不扫描**用户预设目录。
+`presets/fpga-workbench/agent.cordis.yml` 是可编辑源,`cordis.patch.yml` 内联同一份行集合;
+`tools/check-preset-root.mjs` 会逐行比对两者,防止漂移。
 
 **工作区指令 `AGENTS.fpga.md`(本模式自有,排在 `AGENTS.md` 之前)**
 
@@ -289,20 +288,20 @@ pnpm 安装 `file:` 依赖时按 `files` 打包,白名单外的东西**不会被
 `presets/` 没写进 `files` → 安装副本缺预设目录 → **预设列表里永远看不到这个模式,而且没有
 任何报错**。`tools/check-installed.mjs` 会断言这条,并逐字节比对整个 `presets/` 树。
 
-**二、覆盖 `agent-presets` 必须重述要保留的字段。**
+**二、预设必须在组合里有 `@deepseek-ai/dsh-agent-preset` 声明行。**
 
-按 id 定位的 patch 不做深度合并,会**替换整份 config**。所以 `default` /
-`includeShippedRoot` / `includeUserRoot` 都必须重述——漏掉 `includeShippedRoot`
-会让 `标准 / 极简 / PTC / 创造` 那些官方预设**整个消失**。
-`tools/check-preset-root.mjs` 用宿主同一个 loader 的求值器把 `!!js` 算出来,断言
-路径真实存在、预设结构合法、字段重述完整。
+DSH 0.1.7-rc.2 的 `agent-preset-registry` 只从组合里的声明行收集预设,**不扫描**
+`.agent-presets` 目录。所以 `cordis.patch.yml` 里必须有
+`id: preset-fpga-workbench` + `name: '@deepseek-ai/dsh-agent-preset'` 的 insert 行,
+且 `config.plugins` 与 `agent.cordis.yml` 保持一致。
+`tools/check-preset-root.mjs` 会断言声明行存在、包名正确、两边逐行一致。
 
 **三、预设行里的包名写错不会报错,只会让预设消失。**
 
 `agent.cordis.yml` 里那一行 `name: 'dsh-fpga-workbench/mode'` 靠 `exports['./mode']`
 解析。名字对不上时,discovery 会把整个预设判成 **broken**、从选择器里摘掉,只在日志里
-留一行。`tools/check-preset-root.mjs` 断言这一行的解析,`tools/check-preset-sync.mjs`
-断言它没跟官方 `standard` 漂移。
+留一行。`tools/check-preset-root.mjs` 断言这一行的解析,以及补丁声明与 `agent.cordis.yml`
+逐行一致(不跟任何外部 standard 比对:组合里内联的就是唯一真相)。
 
 ## 机器级设置放哪:Vivado_init.tcl / modelsim.ini
 
@@ -342,8 +341,7 @@ node tools/check-all.mjs --list   # 看它到底跑哪些
 node tools/check-toolchain.mjs      # 字段/存在性/警告措辞/两侧契约/提示文案三种状态
 node tools/check-load-contract.mjs  # 加载契约:语法/lib 内部 import/bundle 契约/半侧分工(重启前必跑)
 node tools/check-fpga-tools.mjs     # 自带命令的判定正确性 + 自带模板自洽 + CLI 退出码
-node tools/check-preset-root.mjs    # 预设路径求值 + 组装结构 + 模式行 + 自带技能
-node tools/check-preset-sync.mjs    # 预设底座与官方 standard 的漂移(行 id / 包名)
+node tools/check-preset-root.mjs    # 预设声明行 + 组装结构 + 模式行 + 自带技能
 node tools/check-patch-file.mjs     # 补丁字节合法 + 形状
 node tools/check-installed.mjs      # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)
 node tools/smoke-installed.mjs      # 已装副本在真实解析环境里能否加载(装完/重启前跑)
@@ -361,8 +359,12 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
 状态载荷与会话提示段。"文件都对但一加载就炸"只有它能抓住,而那种情况重启后就是黑屏。
 `tools/install.mjs` 装完会自动跑它。
 
-宿主相关的检查用的是**本机 DSH 安装目录**:装在别处时用 `DSH_APP_DIR` 指过去(不设就用默认安装位置),
-profile 用 `DSH_PROFILE_DIR`;那个目录不存在时记 **SKIP** 并打印实际找过的路径,不会误报成源码层失败。
+宿主相关的检查需要一个能被普通 Node `require` 到 `js-yaml` 与
+`cordis-plugin-include` 的目录。`check-all.mjs` 按顺序探测:
+`DSH_APP_DIR` → `%APPDATA%\npm\node_modules\@deepseek-ai\dsh` → 旧桌面版默认路径;
+第一个存在 `package.json` 的候选会被用上,找不到就记 **SKIP**(不视作通过)。
+桌面预览版的代码在 `app.asar` 里,普通 Node 读不了,所以别把 `DSH_APP_DIR` 指到 asar 上。
+profile 用 `DSH_PROFILE_DIR` 指定。
 
 ## 现状与下一步
 

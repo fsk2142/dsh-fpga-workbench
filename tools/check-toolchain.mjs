@@ -17,38 +17,23 @@ import { fileURLToPath } from "node:url";
 import {
   BINDINGS,
   CAPABILITIES,
-  DORMANT_SUFFIX,
   FIELDS,
   NS,
   SETTINGS_SECTIONS,
   STAGES,
   TEMP_GRACE_MS,
   DETECT_TARGETS,
-  CLEANUP_KINDS,
   TEMPLATE_FIELDS,
   TOOL_CATALOG,
   TOOL_GROUPS,
   TOOLS,
-  backupChangedFiles,
-  cleanupEntry,
   describeEnv,
   detectTools,
-  dormantTargets,
   inspectTools,
-  isDormantPath,
   isMissing,
   legacyMigrationPatch,
   listDirectory,
-  listEmptySkillDirs,
-  listFiles,
   listTempLeftovers,
-  nextManifest,
-  existingUnder,
-  newlyReportedCleanup,
-  nextReportedCleanup,
-  nonRegularOverwriteTargets,
-  presetFileDiff,
-  presetSyncNeeded,
   probeFilesystem,
   queryVersion,
   readdirNames,
@@ -58,7 +43,6 @@ import {
   resolveCapabilityTemplates,
   resolveCapabilities,
   resolveTemplates,
-  staleShippedFiles,
   statusOf,
   toolLevelPrefix,
   toolPath
@@ -795,7 +779,6 @@ check(
   probeFilesystem(ROOT, "file") === false && probeFilesystem(ROOT, "directory") === true,
   "目录填进文件字段 → 不可用(不允许「只要存在就算」)"
 );
-check(clientSource.includes("预设同步失败"), "预设同步失败在设置页可见(否则只躺在日志里)");
 check(
   !clientSource.includes("检测本组工具") && clientSource.includes("detectNote"),
   "没有全量检测按钮:展开工具卡才检测该工具,结论写在自己的路径行下面"
@@ -1341,312 +1324,6 @@ check(
   outsideVersion.length === 0,
   `起进程只出现在 queryVersion 里,其余字段只探文件系统(越界 ${outsideVersion.length} 处:${outsideVersion.map(({ index }) => `第 ${index + 1} 行`).join("、") || "无"})`,
   outsideVersion.map(({ line }) => line.trim()).join("\n        ")
-);
-
-// ── 覆盖用户预设前的备份(用户的地盘不能无条件盖掉) ──────────────────────────
-const backupRoot = join(TMP_ROOT, `backup-check-${RUN_ID}-${String(Date.now())}`);
-const backupSource = join(backupRoot, "source");
-const backupTarget = join(backupRoot, "user");
-mkdirSync(join(backupSource, "skills"), { recursive: true });
-mkdirSync(join(backupTarget, "skills"), { recursive: true });
-writeFileSync(join(backupSource, "skills", "SKILL.md"), "包内新版\n");
-writeFileSync(join(backupSource, "preset.yml"), "一样的内容\n");
-writeFileSync(join(backupTarget, "skills", "SKILL.md"), "用户自己改的\n");
-writeFileSync(join(backupTarget, "preset.yml"), "一样的内容\n");
-writeFileSync(join(backupTarget, "我加的笔记.md"), "用户新增\n");
-
-// 待清理清单:还在的留着,用户清掉的不再列(否则设置页永远念着那两个文件)。
-const cleanupRoot = join(TMP_ROOT, `cleanup-live-${RUN_ID}`);
-mkdirSync(join(cleanupRoot, "templates"), { recursive: true });
-writeFileSync(join(cleanupRoot, "templates", "old_a.tcl"), "旧的\n");
-check(
-  JSON.stringify(existingUnder(cleanupRoot, ["templates/old_a.tcl", "templates/old_b.tcl"])) ===
-    JSON.stringify(["templates/old_a.tcl"]),
-  "待清理清单只列仍然存在的项(清完的就不再念)"
-);
-
-const backedUp = backupChangedFiles(backupSource, backupTarget, join(backupRoot, "out"));
-// 第九轮复审:备份范围收敛到**托管文件**(listFiles(source)) —— foreign 文件既不会被 cpSync 覆盖,
-// 也没有备份它们的必要;若 foreign 是指向预设外的 symlink,copyFileSync 还会把外部内容读进备份。
-check(
-  backedUp?.count === 1,
-  `只备份**被改过内容的托管文件**(用户新增的 foreign 不进备份;实际 ${String(backedUp?.count)} 个)`
-);
-check(
-  backedUp.files.some((file) => file.endsWith(join("skills", "SKILL.md")))
-    && readFileSync(backedUp.files.find((file) => file.endsWith(join("skills", "SKILL.md"))), "utf8").includes("用户自己改的"),
-  "备份下来的是用户那份的内容"
-);
-check(
-  !backedUp.files.some((file) => file.endsWith("我加的笔记.md")),
-  "用户自己放进来的 foreign 文件不进备份(它不会被同步覆盖,靠 cpSync 只写托管文件来保住)"
-);
-check(!backedUp.files.some((file) => file.endsWith("preset.yml")), "没改动的文件不备份(不制造无用备份)");
-check(
-  backupChangedFiles(backupSource, backupSource, join(backupRoot, "never")) === undefined,
-  "两边一致时不做任何备份"
-);
-// 第八轮复审 E8-02:用户预设目录里的同名 **链接 / Junction** 不能被 cpSync 换成普通文件
-// (文本有备份、链接关系恢复不了)。判据是生产函数 `nonRegularOverwriteTargets`;夹具用
-// **Junction**(Windows 上不需要特权即可创建)—— 真文件 symlink 需要特权,造不出时记 SKIP,不记 PASS。
-const e802Root = join(TMP_ROOT, `e802-${RUN_ID}-${String(Date.now())}`);
-const e802Dest = join(e802Root, "user");
-mkdirSync(join(e802Dest, "skills"), { recursive: true });
-writeFileSync(join(e802Dest, "skills", "SKILL.md"), "用户自己写的内容\n");
-writeFileSync(join(e802Dest, "普通文件.md"), "正常文件\n");
-let e802JunctionMade = false;
-try {
-  mkdirSync(join(e802Root, "outside"), { recursive: true });
-  writeFileSync(join(e802Root, "outside", "secret.md"), "OUTSIDE_SENTINEL\n");
-  symlinkSync(join(e802Root, "outside"), join(e802Dest, "skills", "linked"), "junction");
-  e802JunctionMade = true;
-} catch (error) {
-  console.log(`  SKIP E8-02 夹具:造不出 Junction(${String(error.code ?? error.message)})—— 记 SKIP,不记 PASS`);
-}
-if (e802JunctionMade) {
-  const targets = nonRegularOverwriteTargets(e802Dest, [
-    "skills/SKILL.md",
-    "普通文件.md",
-    "skills/linked",
-    "skills/linked/secret.md",
-    "还没建的.md"
-  ]);
-  check(
-    targets.includes("skills/linked"),
-    `非普通文件目标(junction 本目录)被点出来:${JSON.stringify(targets)}`
-  );
-  check(
-    targets.includes("skills/linked/secret.md"),
-    `穿过 junction 的目标也被点出来(不会顺着链接去覆盖外部文件):${JSON.stringify(targets)}`
-  );
-  check(
-    !targets.includes("普通文件.md") && !targets.includes(join("skills", "SKILL.md")) && !targets.includes("还没建的.md"),
-    `普通文件与还不存在的目标**不**算非普通文件(不误伤正常同步):${JSON.stringify(targets)}`
-  );
-  check(
-    readFileSync(join(e802Root, "outside", "secret.md"), "utf8").includes("OUTSIDE_SENTINEL"),
-    "判据只读目录项、不动外部文件的内容"
-  );
-}
-
-check(
-  backupChangedFiles(backupSource, join(backupRoot, "不存在"), join(backupRoot, "never")) === undefined,
-  "目标不存在时不做备份"
-);
-
-// 我们从包里删掉的文件,用户预设目录里那份会**留在原地** —— 但必须被列出来(过期技能/模板)。
-// 技能是从用户预设目录扫的,包里删掉的旧技能照样在被加载,所以这件事必须报,不能沉默。
-//
-// 但**判据只能是"上次同步清单里记过没有"**:以前还有一半是"只要在 skills/ 这种行为目录下,
-// 包里没有就删" —— 那会连**用户自己写的技能**一起算进去(这个目录本来就是他的地盘)。
-const staleRoot = join(TMP_ROOT, `stale-check-${RUN_ID}-${String(Date.now())}`);
-const staleSource = join(staleRoot, "source");
-const staleTarget = join(staleRoot, "user");
-mkdirSync(join(staleSource, "skills", "keep-me"), { recursive: true });
-writeFileSync(join(staleSource, "skills", "keep-me", "SKILL.md"), "还在提供的技能\n");
-mkdirSync(join(staleTarget, "skills", "keep-me"), { recursive: true });
-mkdirSync(join(staleTarget, "skills", "gone"), { recursive: true });
-// 用户自己写的技能:目录名与插件无关、清单里也没有 —— 正是以前会被误删的那一类
-mkdirSync(join(staleTarget, "skills", "my-own-skill"), { recursive: true });
-writeFileSync(join(staleTarget, "skills", "keep-me", "SKILL.md"), "还在提供的技能\n");
-writeFileSync(join(staleTarget, "skills", "gone", "SKILL.md"), "我们已经删掉的旧技能\n");
-writeFileSync(join(staleTarget, "skills", "my-own-skill", "SKILL.md"), "用户自己写的技能\n");
-writeFileSync(join(staleTarget, "用户自己的笔记.md"), "用户加的\n");
-
-const shippedBefore = ["skills/keep-me/SKILL.md", "skills/gone/SKILL.md"];
-const diff = presetFileDiff(staleSource, staleTarget, shippedBefore);
-check(diff.stale.includes("skills/gone/SKILL.md"), "上次是我们写的、包里已删的文件进「待清理」清单", JSON.stringify(diff.stale));
-check(!diff.stale.includes("skills/keep-me/SKILL.md"), "包里还提供的文件不进清单");
-check(!diff.stale.includes("用户自己的笔记.md"), "用户自己加的文件不在清单里 → 既不清理也不报成待清理");
-check(
-  !diff.stale.includes("skills/my-own-skill/SKILL.md"),
-  "**用户自己放进 skills/ 的技能不得列为待清理**(行为目录不是我们的地盘 —— R-01 的核心边界)",
-  JSON.stringify(diff.stale)
-);
-check(
-  diff.foreign.includes("skills/my-own-skill/SKILL.md") && diff.foreign.includes("用户自己的笔记.md"),
-  `清单外的文件进 foreign 报出来(发现非本插件文件,已保留:实际 ${JSON.stringify(diff.foreign)})`
-);
-check(
-  staleShippedFiles(staleSource, staleTarget, shippedBefore).join(",") === diff.stale.join(","),
-  "staleShippedFiles 就是 presetFileDiff 的 stale 那一半(同一个判据,不是两份实现)"
-);
-check(listFiles(staleSource).join(",") === "skills/keep-me/SKILL.md", "listFiles 给出相对路径且用 / 分隔");
-
-// ── 同步清单要按当前事实一次算清(第四轮复审 Q4-06)──────────────────────────
-//
-// 停用旧技能(改名)与"要不要重新复制内容"是两件事:以前只有 cpSync 那条分支写清单,于是
-// "只剩一个旧技能要停用、其余内容一致"时,清单里不记 `.disabled-by-plugin` → 下次它被当成
-// "用户自己放的东西",待清理与归属都不再真实。
-check(
-  nextManifest(["a.md", "skills/keep/SKILL.md"], ["skills/gone/SKILL.md"], ["skills/gone/SKILL.md.disabled-by-plugin"]).join(",") ===
-    ["a.md", "skills/gone/SKILL.md", "skills/gone/SKILL.md.disabled-by-plugin", "skills/keep/SKILL.md"].join(","),
-  "nextManifest:包内的 + 上次是我们的过期文件 + 这次停用的,都记进清单(排序去重)"
-);
-check(
-  nextManifest(["a.md"], [], []).join(",") === "a.md" && nextManifest([], undefined, undefined).length === 0,
-  "nextManifest:没有过期/停用项时就是包内清单;空输入不炸"
-);
-check(
-  nextManifest(["a.md", "a.md"], ["a.md"], []).join(",") === "a.md",
-  "nextManifest:同一路径只记一次(去重)"
-);
-// ── 停用过期技能入口(第三轮复审 N-11)──────────────────────────────────────
-//
-// 宿主的技能插件没有白名单配置:只要 `SKILL.md` 还在,老技能就照样进活动技能集合 —— 所以
-// "只列出待清理"拦不住加载。这里判的是**该把哪些改名停用**(改名不是删除,可改回)。
-const dormantNow = dormantTargets(diff.stale);
-check(
-  dormantNow.length === 1 && dormantNow[0].from === "skills/gone/SKILL.md" &&
-    dormantNow[0].to === `skills/gone/SKILL.md${DORMANT_SUFFIX}`,
-  `过期技能入口会被改名停用(实际 ${JSON.stringify(dormantNow)})`
-);
-check(
-  dormantTargets(["templates/old.tcl", "verif/old.md", "skills/keep-me/notes.md"]).length === 0,
-  "只动技能入口文件(名叫 SKILL.md 的):模板 / 说明文档不改名(它们不参与加载)"
-);
-check(
-  dormantTargets([`skills/gone/SKILL.md${DORMANT_SUFFIX}`]).length === 0,
-  "已经带停用后缀的不再处理(幂等:重跑不会变成 .disabled-by-plugin.disabled-by-plugin)"
-);
-check(isDormantPath(`skills/gone/SKILL.md${DORMANT_SUFFIX}`) && !isDormantPath("skills/gone/SKILL.md"), "isDormantPath 认停用标记");
-check(
-  !dormantTargets(diff.stale).some((item) => item.from.startsWith("skills/my-own-skill/")),
-  "**用户自己放进 skills/ 的技能永不被停用**(它根本不在 stale 里 —— R-01 边界)"
-);
-
-// 清单丢了(第一次升级 / 清单被删)时就**分不清**"我们的旧技能"与"用户写的技能" ——
-// 那种情况下一个都不列:列错了会让人去清用户的东西。留着最多是多加载一个技能。
-const noManifest = presetFileDiff(staleSource, staleTarget, undefined);
-check(noManifest.stale.length === 0, "没有清单时一律不列为待清理(分不清是谁写的)", JSON.stringify(noManifest.stale));
-check(
-  noManifest.foreign.includes("skills/gone/SKILL.md") &&
-    noManifest.foreign.includes("skills/my-own-skill/SKILL.md"),
-  `没有清单时两者都报成「非本插件文件,已保留」(实际 ${JSON.stringify(noManifest.foreign)})`
-);
-// 清单里记过、但位于 skills/ 之外的(比如旧模板):按清单列进待清理
-writeFileSync(join(staleTarget, "旧模板.sv"), "包里已经没有的模板\n");
-const withManifest = staleShippedFiles(staleSource, staleTarget, [...shippedBefore, "旧模板.sv"]);
-check(withManifest.includes("旧模板.sv"), "清单里记过、位于 skills/ 之外的文件进待清理清单");
-check(!staleShippedFiles(staleSource, staleTarget, undefined).includes("旧模板.sv"), "没有清单时不动 skills/ 之外的文件");
-// 宿主那半侧也得按这套走:按清单列出待清理 + 把保留数量报进返回值(设置页那条事实)。
-// lib/index.js 要 schemastery,这里 import 不了,所以断言源码 —— "行为目录那一半"不许复活。
-check(
-  /const \{ stale, foreign \} = presetFileDiff\(source, destination, manifest\)/u.test(hostSource) &&
-    !/behaviorDirs/u.test(hostSource),
-  "宿主按清单列出待清理,且不再有「行为目录下就算我们的」这半(源码级)"
-);
-check(
-  hostSource.includes("个非本插件文件,已保留") && /keptForeign/u.test(hostSource),
-  "宿主把「发现非本插件文件,已保留」写进日志与 presetSync() 返回值(不是静默保留)"
-);
-// 待清理清单必须**真的**进返回值:只写日志的话设置页看不见,用户也就不会去处置。
-// (lib/index.js import 不了 schemastery,所以这条是源码级断言;行为验证在 .tmp 沙箱里另跑。)
-check(
-  /cleanupEntry\(isDormantPath\(rel\) \? "dormant" : "stale", join\(destination, rel\)\)/u.test(hostSource) &&
-    /cleanupEntry\("dormant", join\(destination, rel\)\)/u.test(hostSource) &&
-    /cleanupEntry\("emptyDir", dir\)/u.test(hostSource),
-  "宿主的待清理清单分三类:过期技能/模板 + 已停用的旧技能 + 空技能目录(源码级)"
-);
-// N-11:停用是**改名**(不是删除),而且新名字要记进同步清单 —— 否则下次会被当成"用户自己放的东西"
-check(
-  /function disableDormantSkills\(/u.test(hostSource) &&
-    /renameSync\(abs, target\)/u.test(hostSource) &&
-    /nextManifest\(listFiles\(source\), stale, dormant\)/u.test(hostSource) &&
-    /dormant\.length > 0/u.test(hostSource),
-  "宿主把过期技能入口**改名**停用,并把停用后的名字写进同步清单(源码级;绝不删除)"
-);
-check(
-  (hostSource.match(/recordPresetSync\(\{[^}]*pendingCleanup/gu) ?? []).length >= 2,
-  "「无需同步」与「已同步」两条路径都把 pendingCleanup 带进 presetSync() 返回值"
-);
-check(
-  /pendingCleanup/u.test(hostSource),
-  "宿主侧用 pendingCleanup 报告待清理(源码级;零删除由本文件末尾的静态守卫把住)"
-);
-check(
-  /reportPendingCleanup\(ctx, pendingCleanup, join\(home, BACKUP_DIR, CLEANUP_REPORTED_FILE\)\)/u.test(hostSource) &&
-    /CLEANUP_REPORTED_FILE/u.test(hostSource),
-  "宿主把「已提示过」的记录文件路径传进去(同一批只提示一次要靠它持久化;源码级)"
-);
-
-// ── 待清理清单:同一批只提示一次(用户定案 2026-09-21)─────────────────────────
-//
-// 这些东西我们永远不会删,同一条反复提示就是每天一次的噪音。判据两半:
-//   · 新出现的才提示;已提示过的(仍在清单里)不再提示 → 提醒只喊一次;
-//   · "已提示过"的记录按**这次的清单**重写(剪掉已消失的路径)→ 同名空壳将来重现时还会提示。
-const cleanupNow = [
-  cleanupEntry("emptyDir", "C:\\home\\skills\\gone"),
-  cleanupEntry("stale", "C:\\home\\skills\\old\\SKILL.md")
-];
-const freshOnly = newlyReportedCleanup(cleanupNow, ["C:\\home\\skills\\gone"]);
-check(
-  freshOnly.length === 1 && freshOnly[0].path.endsWith("SKILL.md"),
-  `已经提示过的条目不再重复提示,只报新出现的(实际 ${freshOnly.map((e) => e.path).join("、") || "无"})`
-);
-check(newlyReportedCleanup(cleanupNow, []).length === 2, "第一次(没有记录)时全部提示");
-check(newlyReportedCleanup([], ["C:\\x"]).length === 0, "没有待清理项时什么都不提示");
-check(
-  nextReportedCleanup([...cleanupNow, cleanupEntry("temp", "C:\\tmp\\a.tmp")]).length === 3 &&
-    nextReportedCleanup([cleanupNow[0]]).join(",") === "C:\\home\\skills\\gone",
-  "记录按这次的清单重写(消失的路径被剪掉;同一路径将来重现时还会提示)"
-);
-// 文案:空目录那条要把"可能是谁的"说清 —— 不然用户会以为一定是插件留下的
-check(
-  /空技能目录/u.test(CLEANUP_KINDS.emptyDir) && /也可能是你自己建/u.test(CLEANUP_KINDS.emptyDir),
-  "「空技能目录」的说明写清它可能是谁的(插件删/改名技能的壳,或你自己建的空目录)"
-);
-
-// 用户自己往预设目录里放的东西(不在 skills/ 下的普通文件)**不参与"要不要同步"的判定** ——
-// 否则两棵树永远不一致,每次启动都重同步、重备份一遍(实测就是这么攒出一堆无用备份的)。
-const syncRoot = join(TMP_ROOT, `preset-sync-${RUN_ID}`);
-const syncSource = join(syncRoot, "source");
-const syncTarget = join(syncRoot, "user");
-mkdirSync(join(syncSource, "skills", "fpga-module-rtl"), { recursive: true });
-mkdirSync(join(syncTarget, "skills", "fpga-module-rtl"), { recursive: true });
-writeFileSync(join(syncSource, "preset.yml"), "包内那版\n");
-writeFileSync(join(syncTarget, "preset.yml"), "包内那版\n");
-writeFileSync(join(syncSource, "skills", "fpga-module-rtl", "SKILL.md"), "技能正文\n");
-writeFileSync(join(syncTarget, "skills", "fpga-module-rtl", "SKILL.md"), "技能正文\n");
-const syncManifest = listFiles(syncSource);
-check(presetSyncNeeded(syncSource, syncTarget, syncManifest) === false, "内容一致 → 不重新同步(幂等)");
-writeFileSync(join(syncTarget, "我的笔记.md"), "用户自己放的\n");
-check(
-  presetSyncNeeded(syncSource, syncTarget, syncManifest) === false,
-  "用户加的普通文件不触发重同步(第二次启动不该再同步一遍)"
-);
-check(
-  backupChangedFiles(syncSource, syncTarget, join(syncRoot, "out")) === undefined,
-    "只有用户自己加的文件时**不产生备份**(新契约:备份只覆盖托管文件;用户文件靠 cpSync 只写托管文件来保住)"
-);
-writeFileSync(join(syncSource, "preset.yml"), "包内新版\n");
-check(presetSyncNeeded(syncSource, syncTarget, syncManifest) === true, "包内文件变了 → 要同步");
-writeFileSync(join(syncTarget, "preset.yml"), "包内新版\n");
-mkdirSync(join(syncTarget, "skills", "gone"), { recursive: true });
-writeFileSync(join(syncTarget, "skills", "gone", "SKILL.md"), "包内已删的旧技能\n");
-check(
-  presetSyncNeeded(syncSource, syncTarget, [...syncManifest, "skills/gone/SKILL.md"]) === false,
-  "包内已删的旧技能还在 → **不算「需要同步」**:零删除之后同步清不掉它,算进去只会每次启动白备份 + 白复制一遍",
-  "它改由 pendingCleanup 报出来(见上面 presetFileDiff 那组断言)"
-);
-
-// 空技能目录(被删技能腾出来的壳)也**不删**,只列出来:技能按目录扫,空目录不会被加载,
-// 但留着会让人误判"技能还在"。只处理 skills/ 下的那一层,用户自己建的东西不碰。
-const pruneRoot = join(TMP_ROOT, `prune-skills-${RUN_ID}-${String(Date.now())}`);
-mkdirSync(join(pruneRoot, "旧技能"), { recursive: true });
-mkdirSync(join(pruneRoot, "有内容的技能"), { recursive: true });
-writeFileSync(join(pruneRoot, "有内容的技能", "SKILL.md"), "还在用\n");
-const emptyDirs = listEmptySkillDirs(pruneRoot);
-check(
-  emptyDirs.length === 1 &&
-    emptyDirs[0].endsWith("旧技能") &&
-    existsSync(join(pruneRoot, "旧技能")),
-  `空技能目录被**列出**且仍留在原地(实际列出 ${emptyDirs.length} 个:${JSON.stringify(emptyDirs)})`
-);
-check(existsSync(join(pruneRoot, "有内容的技能", "SKILL.md")), "有内容的技能目录不进清单");
-check(
-  listEmptySkillDirs(join(ROOT, ".tmp", "根本没有这个目录")).length === 0,
-  "目录不存在时返回空数组(不抛)"
 );
 
 // ── 临时残留:只列"确属我们"的条目,**一个都不删** ──────────────────────────

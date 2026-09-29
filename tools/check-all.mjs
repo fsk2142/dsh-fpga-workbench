@@ -20,10 +20,16 @@ import { fileURLToPath } from "node:url";
 
 const TOOLS = dirname(fileURLToPath(import.meta.url));
 
-// 宿主安装目录的**唯一来源**:DSH 装在别处时用 `DSH_APP_DIR` 指过去(默认值不变,向后兼容)。
-// 子检查是各自独立的 Node 进程,所以 run() 会用**同一个**环境变量把它传下去 —— 那几个文件里
-// 同名的兜底默认值只在被单独调用(`node tools/check-xxx.mjs`)时才生效。
-const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
+// 宿主解析环境:优先 `DSH_APP_DIR`;没给时按常见安装位置探测第一个真实存在的。
+// 桌面预览版把代码装在 asar 里,而宿主检查要的是**能被 Node require 到 js-yaml /
+// cordis-plugin-include 的目录**,所以 npm 全局装的 `@deepseek-ai/dsh` 也在候选里。
+// 子检查是各自独立的 Node 进程,run() 会用同一个环境变量把它传下去。
+const APP_CANDIDATES = [
+  process.env.DSH_APP_DIR,
+  process.env.APPDATA === undefined ? undefined : join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh"),
+  "C:/Program Files/DSH Desktop/resources/app"
+].filter((candidate) => typeof candidate === "string" && candidate !== "");
+const APP = APP_CANDIDATES.find((candidate) => existsSync(join(candidate, "package.json"))) ?? APP_CANDIDATES.at(-1);
 
 /** 源码级检查:不依赖本机 DSH 安装与 profile。 */
 const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-package.mjs"];
@@ -34,8 +40,7 @@ const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-pac
 const HOST_CHECKS = [
   { file: "check-patch-file.mjs", needs: APP },
   { file: "check-load-contract.mjs", needs: APP },
-  { file: "check-preset-root.mjs", needs: APP },
-  { file: "check-preset-sync.mjs", needs: APP }
+  { file: "check-preset-root.mjs", needs: APP }
 ];
 
 /** 需要本机 profile(只在 --installed 时跑)。 */
@@ -58,10 +63,9 @@ const SAFETY_CHECK = "check-install-safety.mjs";
     "  3) 会话提示:带上本机工具路径与「本模式自带的命令」(含 module-report-check.mjs / project-rtl-check.mjs)",
     "  4) 技能按需加载:让它读一个技能,内容与 presets/ 下的一致",
     "  5) 起文件:module-rtl-new / module-verif-new / module-synth-new 各跑一次,落点正确",
-    "  6) 旧技能停用:用户预设目录里造一个清单记过的过期技能,重启后应改名成 *.disabled-by-plugin 且不再加载",
-    "  7) 退出码与错误状态:故意让检查失败(删掉一个被引用的证据文件),确认退非零且点名",
-    "  8) 有厂商工具时:综合与仿真各跑一次真实夹具；ModelSim / QuestaSim 先 compile.do 再 run.do,不能用 Node 单测替代",
-    "  9) 工程骨架:对一个空目录跑 setup-scaffold.mjs <目录> --kind project(目录本身就是工程根;三个 module-*-new.mjs 都不支持 --kind project),核对只生成 .fpga-workbench.json、AGENTS.fpga.md 与 doc/sch/prj/src/{rtl,sim}/ip/sim/xdc/bit"
+    "  6) 退出码与错误状态:故意让检查失败(删掉一个被引用的证据文件),确认退非零且点名",
+    "  7) 有厂商工具时:综合与仿真各跑一次真实夹具；ModelSim / QuestaSim 先 compile.do 再 run.do,不能用 Node 单测替代",
+    "  8) 工程骨架:对一个空目录跑 setup-scaffold.mjs <目录> --kind project(目录本身就是工程根;三个 module-*-new.mjs 都不支持 --kind project),核对只生成 .fpga-workbench.json、AGENTS.fpga.md 与 doc/sch/prj/src/{rtl,sim}/ip/sim/xdc/bit"
   ].join("\\n");
 
 const run = (file) => {

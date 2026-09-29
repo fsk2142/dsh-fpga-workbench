@@ -736,6 +736,29 @@ const clientSource = readFileSync(new URL("../lib/client.js", import.meta.url), 
 check(clientSource.includes(`"${NS}"`), `客户端命名空间与宿主一致(${NS})`);
 check(clientSource.includes("/plugins/fpga-workbench/toolchain"), "客户端用的状态路由与宿主一致");
 check(clientSource.includes("/plugins/fpga-workbench/detect"), "客户端用的检测路由与宿主一致");
+check(clientSource.includes("/plugins/fpga-workbench/selfcheck"), "客户端用的自检路由与宿主一致");
+// 「运行自检」跑在**用户正在用的宿主进程里**:它必须只读 —— 不起进程、不写文件、不删文件。
+// 真机自检(npm test 那一套,含 Vivado/ModelSim)留在仓库的 tools/ 下,发布包里没有它们。
+const selfCheckSource = readFileSync(new URL("../lib/selfcheck.js", import.meta.url), "utf8");
+const selfCheckForbidden = [
+  "spawnSync",
+  "execSync",
+  "spawn(",
+  "writeFileSync",
+  "appendFileSync",
+  "mkdirSync",
+  "rmSync",
+  "rmdirSync",
+  "unlinkSync",
+  "renameSync",
+  "copyFileSync"
+].filter((name) => selfCheckSource.includes(name));
+check(selfCheckForbidden.length === 0, "自检实现是只读的(不起进程、不写/删文件)", selfCheckForbidden.join(", "));
+check(
+  /export function runSelfCheck/u.test(selfCheckSource) &&
+    /SELFCHECK_PATH/u.test(readFileSync(new URL("../lib/index.js", import.meta.url), "utf8")),
+  "宿主导出 runSelfCheck 并注册自检路由常量"
+);
 const hardcoded = KEYS.filter((key) => clientSource.includes(`"${key}"`));
 check(hardcoded.length === 0, "客户端没有硬编码任何字段名(定义只存在于宿主)", hardcoded.join(", "));
 const hardcodedHints = FIELDS.filter(

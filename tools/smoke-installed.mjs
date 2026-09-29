@@ -39,6 +39,10 @@ if (host !== undefined) {
   check(typeof host.apply === "function", "导出 apply");
   check(host.SettingsSchema !== undefined, "导出 SettingsSchema(宿主注册设置命名空间要用)");
   check(typeof host.statusOf === "function", "导出 statusOf(设置页字段定义靠它)");
+  check(
+    host.SELFCHECK_PATH === "/plugins/fpga-workbench/selfcheck",
+    `导出 SELFCHECK_PATH(设置页「运行自检」用;实际 ${String(host.SELFCHECK_PATH)})`
+  );
 }
 
 let toolchain;
@@ -107,6 +111,42 @@ try {
 } catch (error) {
   if (error?.code !== "MODULE_NOT_FOUND" && error?.code !== "ERR_MODULE_NOT_FOUND") throw error;
   console.log("      跳过读取真实设置(宿主解析环境没有 js-yaml;它只用于测试,不属于插件运行时)");
+}
+
+// 设置页「运行自检」的宿主实现:在**已装副本**上真跑一遍(只读、不起进程)。
+// 这是这项功能唯一的端到端证据 —— 客户端那边只验渲染,判据本身在这里。
+let selfCheckModule;
+try {
+  selfCheckModule = await import(pathToFileURL(`${INSTALLED}\\lib\\selfcheck.js`).href);
+  check(true, "已装 lib/selfcheck.js 能 import");
+} catch (error) {
+  check(false, "已装 lib/selfcheck.js 能 import", String(error));
+}
+if (selfCheckModule !== undefined) {
+  try {
+    const report = selfCheckModule.runSelfCheck(values);
+    const byId = Object.fromEntries(report.checks.map((item) => [item.id, item]));
+    check(report.checks.length === 6, `自检给出 6 项结论(实际 ${String(report.checks.length)})`);
+    check(
+      report.ok === true && report.failed === 0,
+      `已装副本自检无阻塞项(failed=${String(report.failed)},warn=${String(report.warned)}` +
+        `;${report.checks.filter((item) => item.status === "fail").map((item) => `${item.label}:${item.detail}`).join(" / ")}`
+    );
+    check(byId.package?.status === "pass", `包内运行时文件检查通过(${String(byId.package?.detail)})`);
+    check(byId.preset?.status === "pass", "预设声明行检查通过");
+    check(
+      byId.skills?.status === "pass" && /\d+ 个技能目录/u.test(String(byId.skills?.detail)),
+      `自带技能检查通过(${String(byId.skills?.detail)})`
+    );
+    check(
+      report.checks.every(
+        (item) => ["pass", "warn", "fail"].includes(item.status) && typeof item.detail === "string" && item.detail !== ""
+      ),
+      "每项自检都有状态与说明(不留空壳)"
+    );
+  } catch (error) {
+    check(false, "已装副本能跑一次自检", String(error));
+  }
 }
 
 if (host !== undefined) {

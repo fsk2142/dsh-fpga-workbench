@@ -702,6 +702,20 @@ let rejectTemplate = false;
 let malformedTemplate = false;
 let rejectDetect = false;
 let malformedDetect = false;
+/** 自检路由:请求计数 + 可切换的答复(正常 / 有阻塞 / 拉不到)。 */
+let selfCheckRequested = 0;
+let selfCheckUrls = [];
+let rejectSelfCheck = false;
+let selfCheckPayload = {
+  ranAt: "2026-09-29T00:00:00.000Z",
+  ok: true,
+  failed: 0,
+  warned: 1,
+  checks: [
+    { id: "package", label: "包内运行时文件", status: "pass", detail: "skills / templates / tools / workspace 都在" },
+    { id: "tools", label: "已登记工具路径", status: "warn", detail: "还没有登记任何工具路径" }
+  ]
+};
 /** 让下一轮预演直接拒绝,验证失败不能被静默吞掉。 */
 let rejectPreview = false;
 const fetchStub = (url, options = {}) => {
@@ -757,6 +771,14 @@ const fetchStub = (url, options = {}) => {
       return new Promise((resolve) => deferTemplate.push(() => resolve({ ok: true, json: () => Promise.resolve(data) })));
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
+  }
+  if (target.includes("/selfcheck")) {
+    selfCheckRequested += 1;
+    selfCheckUrls.push(target);
+    if (rejectSelfCheck) {
+      return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "self check offline" }) });
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(selfCheckPayload) });
   }
   if (target.includes("?")) {
     previewRequested += 1;
@@ -2030,6 +2052,93 @@ try {
   // 这一段在文件末尾:别把闸门或那份假答复留给后面的人
   deferDetect = null;
   detectPayload = { found: [] };
+}
+
+// ── 设置页「运行自检」:点了才请求,结果逐条渲染,失败要看得见 ──────────────────
+try {
+  selfCheckRequested = 0;
+  selfCheckUrls = [];
+  rejectSelfCheck = false;
+  selfCheckPayload = {
+    ranAt: "2026-09-29T00:00:00.000Z",
+    ok: true,
+    failed: 0,
+    warned: 1,
+    checks: [
+      { id: "package", label: "包内运行时文件", status: "pass", detail: "skills / templates / tools / workspace 都在" },
+      { id: "tools", label: "已登记工具路径", status: "warn", detail: "还没有登记任何工具路径" }
+    ]
+  };
+  fake.reset();
+  captured();
+  fake.runEffects();
+  await tick();
+  fake.reset();
+  const mounted = captured();
+  check(findButton(mounted, "运行自检") !== undefined, "设置页有「运行自检」按钮");
+  check(
+    selfCheckRequested === 0,
+    `挂载时**不**请求自检接口(只读自检也要用户点了才跑;实际 ${String(selfCheckRequested)} 次)`
+  );
+
+  // ① 点一次:恰好一次请求,结论逐条渲染,三档标记各按状态走
+  // 注意:替身 React 每次渲染前必须 reset 游标,否则 hook 槽位整体错位(状态写到别处)。
+  fake.reset();
+  findButton(captured(), "运行自检").props.onClick();
+  await tick();
+  check(selfCheckRequested === 1, `点一次只请求一次(实际 ${String(selfCheckRequested)} 次)`);
+  // 断言**恰好是宿主那条路径**:替身按子串命中,只数次数的话,路由写错也照样"通过"。
+  check(
+    selfCheckUrls.length === 1 && selfCheckUrls[0] === "/plugins/fpga-workbench/selfcheck",
+    `请求打到宿主那条自检路径(实际 ${selfCheckUrls.join("、") || "没发出去"})`
+  );
+  fake.reset();
+  const passed = captured();
+  const passedText = JSON.stringify(passed ?? {});
+  check(/通过:共 2 项/u.test(passedText) && /0 项失败、1 项提醒/u.test(passedText), "结论行给出总数与失败/提醒计数");
+  check(passedText.includes("包内运行时文件") && passedText.includes("skills / templates / tools / workspace 都在"), "逐条列出每项检查与详情");
+  check(passedText.includes("✓") && passedText.includes("!"), "pass 与 warn 各有标记(pass 勾、warn 叹号)");
+  check(
+    findDeep(
+      passed,
+      (node) => node.props?.className === "fpga-set-warn" && JSON.stringify(node).includes("已登记工具路径")
+    ) !== undefined,
+    "warn 那一行走 warn 样式(不是当成失败,也不是当成全绿)"
+  );
+
+  // ② 有阻塞项:结论行与标记都要变,不能仍显示"通过"
+  selfCheckPayload = {
+    ranAt: "2026-09-29T00:00:01.000Z",
+    ok: false,
+    failed: 1,
+    warned: 0,
+    checks: [{ id: "preset", label: "预设声明行", status: "fail", detail: "补丁里找不到预设声明行" }]
+  };
+  fake.reset();
+  findButton(captured(), "运行自检").props.onClick();
+  await tick();
+  fake.reset();
+  const failedText = JSON.stringify(captured() ?? {});
+  check(/有阻塞项/u.test(failedText) && /1 项失败/u.test(failedText), "有阻塞项时结论行如实写「有阻塞项」并给出失败数");
+  check(failedText.includes("✗") && failedText.includes("补丁里找不到预设声明行"), "失败项带叉号与原因");
+
+  // ③ 拉不到:说清是"没跑成",**不许**显示成通过
+  rejectSelfCheck = true;
+  selfCheckRequested = 0;
+  fake.reset();
+  findButton(captured(), "运行自检").props.onClick();
+  await tick();
+  fake.reset();
+  const errorText = JSON.stringify(captured() ?? {});
+  check(/自检没跑成/u.test(errorText) && /HTTP 500/u.test(errorText), "接口失败时显示「自检没跑成」与原因");
+  check(!/通过:共/u.test(errorText), "接口失败时不留下「通过」的假结论");
+} catch (error) {
+  check(false, "设置页自检的渲染与请求能走通", String(error));
+} finally {
+  // 别把假答复与闸门留给后面的人
+  rejectSelfCheck = false;
+  selfCheckRequested = 0;
+  selfCheckUrls = [];
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");

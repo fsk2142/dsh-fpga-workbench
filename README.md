@@ -45,6 +45,13 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 较长说明收在字段或分区标题旁的 **`?`** 中:鼠标悬停或用键盘 Tab 聚焦都会显示同一份解释。
 当前就绪状态、路径错误、`auto` / `none`、未保存标记和保存失败仍直接显示,不用打开说明才能看到。
 
+设置页最下面还有一个 **「自检」** 按钮(点一下才跑,**挂载时不请求**):它检查这份已装副本与当前设置
+——包内四棵运行时子树(skills / templates / tools / workspace)、补丁里的预设声明行、自带技能是否都有
+`SKILL.md`、设置模型版本、已登记工具路径是否存在、用户模板库目录是否存在。结论分
+`pass` / `warn` / `fail` 三档逐条列出。它是**只读**的:不写设置、不改文件、**不起任何进程**
+(真跑 verilator / vsim / vivado 属于仓库里的 `npm test` 与 `npm run test:vivado`,发布包里没有那些)。
+实现见 `lib/selfcheck.js`,路由 `GET /plugins/fpga-workbench/selfcheck`。
+
 ## 安装
 
 官方 DeepSeek Harness Desktop `0.2.0-rc.1`:在侧边栏的「插件」页安装本仓库的绝对路径
@@ -336,15 +343,17 @@ DSH 0.1.7-rc.2 的 `agent-preset-registry` 只从组合里的声明行收集预�
 `readdirSync`),而我只 grep 输出、把它当成终端的假警报,那个缺陷在仓库里躺了好几轮。
 
 ```powershell
-npm test                  # 源码级 + 环境级 + 厂商工具(缺本机 DSH / Vivado 的记 SKIP,不算失败)
+npm test                  # 源码级 + 环境级(缺本机 DSH 的记 SKIP,不算失败;不碰厂商工具)
 npm run test:installed    # 再加上已装副本比对与加载冒烟
+npm run test:vivado       # 按需:真跑一次 Vivado 模块综合(分钟级)
 npm run test:safety       # 再加上依赖安全(较慢,要跑两次 pnpm)
 node tools/check-all.mjs --list   # 看它到底跑哪些
 ```
 
-`npm test` 里有一项**真跑厂商工具**:装了 Vivado 就用插件自己的 `module-synth-new` 起脚本、
-真跑一次模块综合,断言退出码、脚本自己的 PASS 行与资源/时序报告(`check-vivado.mjs`);
-没装 Vivado 时它打印 **SKIP** 并退出 0 —— 那一行不是"通过",摘要里也照实写。
+`npm run test:vivado` 是**按需开关**,不在默认 `npm test` 里(它要真起 Vivado,分钟级):
+装了 Vivado 就用插件自己的 `module-synth-new` 起脚本、真跑一次模块综合,断言退出码、脚本自己的
+PASS 行与资源/时序报告(`check-vivado.mjs`);没装 Vivado 时它打印 **SKIP** 并退出 0 ——
+那一行不是"通过",摘要里也照实写。不跑时摘要会写"厂商工具检查未跑(--vivado)"。
 
 想单跑某一项时:
 

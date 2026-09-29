@@ -14,22 +14,109 @@
 //   · 真实客户端集成:目前**没有**自动化检查,永远记"未检",并在摘要里写清人工怎么检
 // 任一层有跳过/未跑/未检,收尾就不准说"全部通过"。
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TOOLS = dirname(fileURLToPath(import.meta.url));
 
-// 宿主解析环境:优先 `DSH_APP_DIR`;没给时按常见安装位置探测第一个真实存在的。
-// 桌面预览版把代码装在 asar 里,而宿主检查要的是**能被 Node require 到 js-yaml /
-// cordis-plugin-include 的目录**,所以 npm 全局装的 `@deepseek-ai/dsh` 也在候选里。
-// 子检查是各自独立的 Node 进程,run() 会用同一个环境变量把它传下去。
-const APP_CANDIDATES = [
+// 宿主解析环境的选择规则(按优先级):
+//   1. `DSH_APP_DIR` 显式指定 —— 尊重用户选择(版本没声明过也会跑,但结论要打折);
+//   2. 官方桌面端 `%LOCALAPPDATA%\Programs\DeepSeek Harness` —— 用户实际在跑的宿主;
+//   3. npm 全局 `@deepseek-ai/dsh` —— 本机实测可能是旧版本(0.1.1-rc.2);
+//   4. 旧桌面版默认路径。
+//
+// 两条硬要求:
+//   · 版本必须命中 dsh.compatibility.dshReleases —— 否则 `npm test` 会在旧运行时上
+//     显示"宿主检查通过",版本一升级就漏检;
+//   · 桌面端运行时装在 app.asar 里,普通 Node require 不了 —— 选中桌面端时改用它的
+//     Electron 可执行文件(ELECTRON_RUN_AS_NODE=1)跑子检查,asar 内的 js-yaml /
+//     cordis-plugin-include 就能正常解析。
+const MANIFEST = JSON.parse(readFileSync(join(TOOLS, "..", "package.json"), "utf8"));
+const COMPATIBLE_VERSIONS = new Set(Object.keys(MANIFEST.dsh?.compatibility?.dshReleases ?? {}));
+const versionOf = (dir) => {
+  try {
+    return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version;
+  } catch {
+    return undefined;
+  }
+};
+
+/** 读 asar 里某个 package.json(普通 Node 直接读字节,不依赖 Electron)。 */
+function asarJson(asarPath, entryPath) {
+  let fd;
+  try {
+    fd = openSync(asarPath, "r");
+    const head = Buffer.alloc(16);
+    readSync(fd, head, 0, 16, 0);
+    const headerSize = head.readUInt32LE(12);
+    const headerBytes = Buffer.alloc(headerSize);
+    readSync(fd, headerBytes, 0, headerSize, 16);
+    let node = JSON.parse(headerBytes.toString("utf8"));
+    for (const segment of entryPath.split("/").filter(Boolean)) node = node?.files?.[segment];
+    if (node === undefined || node.files !== undefined) return undefined;
+    const offset = Number(node.offset);
+    const pad = (4 - (offset % 4)) % 4;
+    const bytes = Buffer.alloc(Number(node.size));
+    readSync(fd, bytes, 0, bytes.length, 16 + headerSize + offset + pad);
+    return JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** 官方桌面端;存在时优先于 npm 全局安装。 */
+const DESKTOP = (() => {
+  if (process.env.LOCALAPPDATA === undefined) return undefined;
+  const root = join(process.env.LOCALAPPDATA, "Programs", "DeepSeek Harness");
+  const exe = join(root, "DeepSeek Harness.exe");
+  const asar = join(root, "resources", "app.asar");
+  if (!existsSync(exe) || !existsSync(asar)) return undefined;
+  return { exe, asar, dshDir: join(asar, "dsh"), version: asarJson(asar, "/dsh/package.json")?.version };
+})();
+
+/** 把一个候选目录变成"用哪个版本、用哪个解释器跑"的描述。 */
+const candidateOf = (dir) => {
+  if (typeof dir !== "string" || dir === "") return undefined;
+  const onDesktop = DESKTOP !== undefined && dir.startsWith(DESKTOP.asar);
+  const version = onDesktop ? DESKTOP.version : versionOf(dir);
+  return { dir, version, runner: onDesktop ? DESKTOP.exe : process.execPath, electron: onDesktop };
+};
+
+const CANDIDATES = [
   process.env.DSH_APP_DIR,
+  DESKTOP?.dshDir,
   process.env.APPDATA === undefined ? undefined : join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh"),
   "C:/Program Files/DSH Desktop/resources/app"
-].filter((candidate) => typeof candidate === "string" && candidate !== "");
-const APP = APP_CANDIDATES.find((candidate) => existsSync(join(candidate, "package.json"))) ?? APP_CANDIDATES.at(-1);
+]
+  .map(candidateOf)
+  .filter((candidate) => candidate !== undefined && candidate.version !== undefined);
+
+/** DSH_APP_DIR 是显式指定:给了就用它(哪怕版本没声明过),但结论要打折。 */
+const EXPLICIT_HOST = CANDIDATES.find((candidate) => candidate.dir === process.env.DSH_APP_DIR);
+/** 自动探测:只认兼容声明里列过的版本;候选顺序把桌面端排在 npm 全局之前。 */
+const MATCHED_HOST = CANDIDATES.find((candidate) => COMPATIBLE_VERSIONS.has(candidate.version));
+const HOST = EXPLICIT_HOST ?? MATCHED_HOST;
+const APP = HOST?.dir ?? CANDIDATES[0]?.dir ?? "C:/Program Files/DSH Desktop/resources/app";
+
+/** 宿主检查能不能跑;不能跑时给出原因(不假装通过)。 */
+const HOST_SKIP =
+  HOST !== undefined
+    ? undefined
+    : [
+        `本机没有可解析、且版本命中兼容声明的宿主(声明:${[...COMPATIBLE_VERSIONS].join("、")})`,
+        CANDIDATES.length === 0
+          ? "一个候选目录都没找到"
+          : `找到的候选:${CANDIDATES.map((candidate) => `${candidate.dir} → ${candidate.version}`).join(";")}`,
+        "用 DSH_APP_DIR 指向要验证的 DSH 环境(桌面端在 asar 里,普通 Node 读不了)"
+      ].join(";");
+/** 显式指定的版本没在声明里:照跑,但提醒结论不能当"已验证版本"用。 */
+const HOST_WARN =
+  EXPLICIT_HOST !== undefined && !COMPATIBLE_VERSIONS.has(EXPLICIT_HOST.version)
+    ? `注意:DSH_APP_DIR 指向的宿主版本 ${EXPLICIT_HOST.version} 不在兼容声明(${[...COMPATIBLE_VERSIONS].join("、")})里 —— 这次的宿主检查不能当作已验证版本的结论`
+    : undefined;
 
 /** 源码级检查:不依赖本机 DSH 安装与 profile。 */
 const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-package.mjs"];
@@ -69,10 +156,15 @@ const SAFETY_CHECK = "check-install-safety.mjs";
   ].join("\\n");
 
 const run = (file) => {
-  const result = spawnSync(process.execPath, [join(TOOLS, file)], {
+  // 选中桌面端时用它的 Electron 当 Node(ELECTRON_RUN_AS_NODE),否则 asar 里的包解析不了。
+  const result = spawnSync(HOST?.runner ?? process.execPath, [join(TOOLS, file)], {
     stdio: "inherit",
     // 子检查是独立进程:把上面解析好的宿主目录传下去,它们才和这里找的是**同一个**目录。
-    env: { ...process.env, DSH_APP_DIR: APP }
+    env: {
+      ...process.env,
+      DSH_APP_DIR: APP,
+      ...(HOST?.electron === true ? { ELECTRON_RUN_AS_NODE: "1" } : {})
+    }
   });
   return result.status === null ? 1 : result.status;
 };
@@ -107,8 +199,20 @@ function main() {
     ...(withInstalled ? INSTALLED_CHECKS.map((file) => ({ file, tier: "installed" })) : [])
   ];
 
+  if (HOST !== undefined) {
+    console.log(`宿主检查使用:${APP}(版本 ${HOST.version}${EXPLICIT_HOST === HOST ? ",DSH_APP_DIR 指定" : ""})`);
+  }
+  if (HOST_WARN !== undefined) console.log(`WARN  ${HOST_WARN}`);
+
   for (const item of plan) {
-    if (item.needs !== undefined && !existsSync(item.needs)) {
+    if (item.tier === "host" && HOST_SKIP !== undefined) {
+      console.log(`SKIP  ${item.file}(${HOST_SKIP})`);
+      tiers[item.tier].skipped.push(item.file);
+      tiers[item.tier].skipReason = HOST_SKIP;
+      continue;
+    }
+    // HOST 已经验证过候选可用;asar 里的目录 existsSync 看不到,不能再按普通路径判存在。
+    if (HOST === undefined && item.needs !== undefined && !existsSync(item.needs)) {
       // 打印**实际找过的路径** —— 装到别处时这一行就是线索(README 那种换机器场景)。
       console.log(`SKIP  ${item.file}(宿主目录不存在:${item.needs};装在别处就用 DSH_APP_DIR 指过去)`);
       tiers[item.tier].skipped.push(item.file);

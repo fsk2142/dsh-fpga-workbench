@@ -24,9 +24,11 @@
     "test:safety": "node tools/check-all.mjs --safety"
   },
   "peerDependencies": {
-    "@deepseek-ai/schemastery": "^3.18.2"
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "@deepseek-ai/dsh-settings": "^0.1.7-rc.2 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.2 || ^0.2.0-rc.1"
   },
-  "comment": "schemastery 用 peerDependencies 而不是 dependencies:宿主注册 settings 命名空间需要 schema,而 profile 里本来就有这个包(DSH 自带),peer 声明既表达了要求、又不触发安装或改动锁文件。files 必须包含 presets —— 少了它,pnpm 打 file: 依赖时不会把预设拷进 profile,失败方式是静默的(模式从列表里消失);tools/check-installed.mjs 断言这条。",
+  "comment": "schemastery 用 peerDependencies 而不是 dependencies:宿主注册 settings 命名空间需要 schema,而 profile 里本来就有这个包(DSH 自带),peer 声明既表达了要求、又不触发安装或改动锁文件。两个 @deepseek-ai/dsh-* peer 是**启动保护**:官方 dsh-app-boot 的 evaluatePluginCompatibility 只按 peerDependencies 里 @deepseek-ai/dsh / @deepseek-ai/dsh-* 的名字与版本范围拦截不兼容插件,dsh.compatibility 只是元数据、不参与拦截。files 必须包含 presets —— 少了它,pnpm 打 file: 依赖时不会把预设拷进 profile,失败方式是静默的(模式从列表里消失);tools/check-installed.mjs 断言这条。",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

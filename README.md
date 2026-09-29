@@ -359,11 +359,13 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
 状态载荷与会话提示段。"文件都对但一加载就炸"只有它能抓住,而那种情况重启后就是黑屏。
 `tools/install.mjs` 装完会自动跑它。
 
-宿主相关的检查需要一个能被普通 Node `require` 到 `js-yaml` 与
-`cordis-plugin-include` 的目录。`check-all.mjs` 按顺序探测:
-`DSH_APP_DIR` → `%APPDATA%\npm\node_modules\@deepseek-ai\dsh` → 旧桌面版默认路径;
-第一个存在 `package.json` 的候选会被用上,找不到就记 **SKIP**(不视作通过)。
-桌面预览版的代码在 `app.asar` 里,普通 Node 读不了,所以别把 `DSH_APP_DIR` 指到 asar 上。
+宿主检查需要一个能被普通 Node `require` 到 `js-yaml` 与 `cordis-plugin-include` 的目录,
+而且**版本必须命中 `dsh.compatibility.dshReleases`**。`check-all.mjs` 依次看:
+`DSH_APP_DIR` → `%APPDATA%\npm\node_modules\@deepseek-ai\dsh` → 旧桌面版默认路径,
+只接受版本在声明里的候选;都没有就记 **SKIP** 并打印每个候选的实际版本(不视作通过)。
+这条是为了防"机器上另装了一个旧全局 DSH,`npm test` 却报宿主检查通过"。
+桌面预览版的代码在 `app.asar` 里,普通 Node 读不了,所以别把 `DSH_APP_DIR` 指到 asar 上;
+显式指定时即使版本没声明过也会跑,但摘要里会带上"结论不能当作已验证版本"的警告。
 profile 用 `DSH_PROFILE_DIR` 指定。
 
 ## 现状与下一步

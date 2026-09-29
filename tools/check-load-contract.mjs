@@ -43,6 +43,17 @@ check(
   "客户端清单声明 slots 与 settings 服务模块"
 );
 check(manifest.dsh?.client?.platform === "web", "客户端清单声明 web 平台");
+// 官方启动门禁(dsh-app-boot evaluatePluginCompatibility)只读 peerDependencies 里
+// @deepseek-ai/dsh / @deepseek-ai/dsh-* 的范围;dsh.compatibility 不参与拦截。
+// 没有这条 peer,未验证的宿主版本照样会加载本插件。
+const dshPeers = Object.entries(manifest.peerDependencies ?? {}).filter(
+  ([name]) => name === "@deepseek-ai/dsh" || name.startsWith("@deepseek-ai/dsh-")
+);
+check(
+  dshPeers.length > 0 &&
+    dshPeers.every(([, range]) => range === manifest.dsh?.compatibility?.dsh),
+  "peerDependencies 声明了与 compatibility 一致的 DSH 版本范围(官方启动门禁只读 peer)"
+);
 check(manifest.icon === "icon.svg", `清单声明插件图标 icon.svg(实际 ${String(manifest.icon)})`);
 check(existsSync(join(ROOT, "icon.svg")), "插件图标文件存在");
 check((manifest.files ?? []).includes("icon.svg"), "files 白名单包含 icon.svg(否则安装副本没有图标)");

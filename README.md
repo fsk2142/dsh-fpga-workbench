@@ -336,11 +336,15 @@ DSH 0.1.7-rc.2 的 `agent-preset-registry` 只从组合里的声明行收集预�
 `readdirSync`),而我只 grep 输出、把它当成终端的假警报,那个缺陷在仓库里躺了好几轮。
 
 ```powershell
-npm test                  # 源码级 + 环境级(缺本机 DSH 的记 SKIP,不算失败)
+npm test                  # 源码级 + 环境级 + 厂商工具(缺本机 DSH / Vivado 的记 SKIP,不算失败)
 npm run test:installed    # 再加上已装副本比对与加载冒烟
 npm run test:safety       # 再加上依赖安全(较慢,要跑两次 pnpm)
 node tools/check-all.mjs --list   # 看它到底跑哪些
 ```
+
+`npm test` 里有一项**真跑厂商工具**:装了 Vivado 就用插件自己的 `module-synth-new` 起脚本、
+真跑一次模块综合,断言退出码、脚本自己的 PASS 行与资源/时序报告(`check-vivado.mjs`);
+没装 Vivado 时它打印 **SKIP** 并退出 0 —— 那一行不是"通过",摘要里也照实写。
 
 想单跑某一项时:
 
@@ -350,6 +354,7 @@ node tools/check-load-contract.mjs  # 加载契约:语法/lib 内部 import/bund
 node tools/check-fpga-tools.mjs     # 自带命令的判定正确性 + 自带模板自洽 + CLI 退出码
 node tools/check-preset-root.mjs    # 预设声明行 + 组装结构 + 模式行 + 自带技能
 node tools/check-patch-file.mjs     # 补丁字节合法 + 形状
+node tools/check-vivado.mjs         # 真跑一次 Vivado 模块综合(没装 Vivado 记 SKIP,不是通过)
 node tools/check-installed.mjs      # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)
 node tools/smoke-installed.mjs      # 已装副本在真实解析环境里能否加载(装完/重启前跑)
 node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不动既有依赖(较慢,要跑两次 pnpm)

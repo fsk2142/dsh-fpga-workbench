@@ -45,12 +45,14 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 较长说明收在字段或分区标题旁的 **`?`** 中:鼠标悬停或用键盘 Tab 聚焦都会显示同一份解释。
 当前就绪状态、路径错误、`auto` / `none`、未保存标记和保存失败仍直接显示,不用打开说明才能看到。
 
-设置页最下面还有一个 **「自检」** 按钮(点一下才跑,**挂载时不请求**):它检查这份已装副本与当前设置
-——包内四棵运行时子树(skills / templates / tools / workspace)、补丁里的预设声明行、自带技能是否都有
-`SKILL.md`、设置模型版本、已登记工具路径是否存在、用户模板库目录是否存在。结论分
-`pass` / `warn` / `fail` 三档逐条列出。它是**只读**的:不写设置、不改文件、**不起任何进程**
+设置页最下面还有一个 **「自检」** 按钮(点一下才跑,**挂载时不请求**):它**按清单逐份核对**这份已装副本
+——12 份内置模板的**文件**、7 个自带命令的**文件**、16 个技能目录及各自的 `SKILL.md`、四棵运行时子树、
+补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录,共 8 项。结论分
+`pass` / `warn` / `fail` 三档逐条列出,少哪一份文件就点名哪一份(只检查"目录在不在"会漏报)。
+它是**只读**的:不写设置、不改文件、**不起任何进程**
 (真跑 verilator / vsim / vivado 属于仓库里的 `npm test` 与 `npm run test:vivado`,发布包里没有那些)。
-实现见 `lib/selfcheck.js`,路由 `GET /plugins/fpga-workbench/selfcheck`。
+实现见 `lib/selfcheck.js`,路由 `GET /plugins/fpga-workbench/selfcheck`;
+判据本身由 `tools/check-selfcheck.mjs` 用"**故意少拷一份文件**"的夹具打靶(缺模板 / 缺技能 / 缺命令 / 缺整树都必须红)。
 
 ## 安装
 
@@ -361,6 +363,7 @@ PASS 行与资源/时序报告(`check-vivado.mjs`);没装 Vivado 时它打印 **
 node tools/check-toolchain.mjs      # 字段/存在性/警告措辞/两侧契约/提示文案三种状态
 node tools/check-load-contract.mjs  # 加载契约:语法/lib 内部 import/bundle 契约/半侧分工(重启前必跑)
 node tools/check-fpga-tools.mjs     # 自带命令的判定正确性 + 自带模板自洽 + CLI 退出码
+node tools/check-selfcheck.mjs      # 设置页自检的判据:故意少拷一份文件/技能/命令,必须报 fail
 node tools/check-preset-root.mjs    # 预设声明行 + 组装结构 + 模式行 + 自带技能
 node tools/check-patch-file.mjs     # 补丁字节合法 + 形状
 node tools/check-vivado.mjs         # 真跑一次 Vivado 模块综合(没装 Vivado 记 SKIP,不是通过)
@@ -372,22 +375,30 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
 `sync-installed.mjs`(装/同步已装副本;`--prune` 现在只**列出**已装副本里多出来的旧文件、**不删**)、
 `install.mjs`(装完自动跑 `smoke-installed`)按需跑。`tools/shipped.mjs` 是内部模块,不是命令。
 
-**自检自己收尾(零删除)**:会建 fixture 的几项(`check-toolchain` / `check-fpga-tools`)跑完
+**自检自己收尾(零删除)**:会建 fixture 的几项(`check-toolchain` / `check-fpga-tools` / `check-selfcheck`)跑完
 **不删** `.tmp/` 下的临时目录,只把残留清单打出来让人自己处置 —— 那一区会一直涨,这是零删除的代价。
+`check-selfcheck` 的夹具是**按清单少拷**出来的(不是拷完再删),所以它自己也不删任何东西。
 
 `smoke-installed` 与 `check-installed` 的关系:后者比字节,前者**真的加载一遍** ——
 在 profile 的解析环境里 import 宿主半侧、执行客户端 bundle 的工厂函数、用真实设置跑一遍
 状态载荷与会话提示段。"文件都对但一加载就炸"只有它能抓住,而那种情况重启后就是黑屏。
 `tools/install.mjs` 装完会自动跑它。
 
-宿主检查需要一个能被普通 Node `require` 到 `js-yaml` 与 `cordis-plugin-include` 的目录,
-而且**版本必须命中 `dsh.compatibility.dshReleases`**。`check-all.mjs` 依次看:
-`DSH_APP_DIR` → `%APPDATA%\npm\node_modules\@deepseek-ai\dsh` → 旧桌面版默认路径,
+宿主检查需要一个能被**当前解释器** `require` 到 `js-yaml` 与 `cordis-plugin-include` 的目录,
+而且**版本必须命中 `dsh.compatibility.dshReleases`**。`check-all.mjs` 的选择顺序:
+
+1. **`DSH_APP_DIR`(显式指定)**:给了就用它,不看版本声明(结论会打折,摘要里写明)。
+   但**指向无效目录时直接报错退出** —— 以前会悄悄退回自动探测,于是"我测的是指定版本"
+   变成假象;打错路径现在会红,不会静默换宿主。
+2. **官方桌面端** `%LOCALAPPDATA%\Programs\DeepSeek Harness`:运行时在 `app.asar` 里,
+   普通 Node 读不了,所以选中它时改用桌面端自带的 Electron(`ELECTRON_RUN_AS_NODE=1`)跑子检查;
+   版本从 asar 头部读出。
+3. **npm 全局** `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`(本机实测可能是旧版本)。
+4. 旧桌面版默认路径。
+
 只接受版本在声明里的候选;都没有就记 **SKIP** 并打印每个候选的实际版本(不视作通过)。
-这条是为了防"机器上另装了一个旧全局 DSH,`npm test` 却报宿主检查通过"。
-桌面预览版的代码在 `app.asar` 里,普通 Node 读不了,所以别把 `DSH_APP_DIR` 指到 asar 上;
-显式指定时即使版本没声明过也会跑,但摘要里会带上"结论不能当作已验证版本"的警告。
-profile 用 `DSH_PROFILE_DIR` 指定。
+这条是为了防"机器上另装了一个旧全局 DSH,`npm test` 却报宿主检查通过"。profile 用
+`DSH_PROFILE_DIR` 指定。
 
 ## 现状与下一步
 

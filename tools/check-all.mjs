@@ -98,6 +98,24 @@ const CANDIDATES = [
 
 /** DSH_APP_DIR 是显式指定:给了就用它(哪怕版本没声明过),但结论要打折。 */
 const EXPLICIT_HOST = CANDIDATES.find((candidate) => candidate.dir === process.env.DSH_APP_DIR);
+/**
+ * 显式指定却解析不出来 → **直接报错**,不许悄悄换宿主。
+ *
+ * 以前这里会退回自动探测:用户写了 `DSH_APP_DIR=<某个版本>` 却打错路径时,检查照跑、还全绿,
+ * 而实际测的是另一个版本 —— 这种"看着测了指定版本"的假象比不跑更坏。
+ */
+const EXPLICIT_PROBLEM =
+  process.env.DSH_APP_DIR === undefined || process.env.DSH_APP_DIR === ""
+    ? undefined
+    : EXPLICIT_HOST !== undefined
+      ? undefined
+      : (() => {
+          const dir = String(process.env.DSH_APP_DIR);
+          const why = existsSync(join(dir, "package.json"))
+            ? "它的 package.json 读不出 version"
+            : "这个目录下没有 package.json";
+          return `DSH_APP_DIR 指向的目录用不了:${dir}(${why})—— 它可能不是 DSH 安装目录(桌面端在 asar 里,普通 Node 读不了)`;
+        })();
 /** 自动探测:只认兼容声明里列过的版本;候选顺序把桌面端排在 npm 全局之前。 */
 const MATCHED_HOST = CANDIDATES.find((candidate) => COMPATIBLE_VERSIONS.has(candidate.version));
 const HOST = EXPLICIT_HOST ?? MATCHED_HOST;
@@ -121,7 +139,7 @@ const HOST_WARN =
     : undefined;
 
 /** 源码级检查:不依赖本机 DSH 安装与 profile。 */
-const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-package.mjs"];
+const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-selfcheck.mjs", "check-package.mjs"];
 
 /** 环境级检查:需要本机装好的 DSH(缺了就 SKIP)。
  *  check-patch-file 用的是**宿主那份** js-yaml 与 cordis-plugin-include schema,
@@ -180,6 +198,12 @@ const freshTier = () => ({ ran: 0, failed: [], skipped: [], skipReason: "" });
 
 function main() {
   const argv = process.argv.slice(2);
+  // 显式指定的宿主用不了:立刻失败。继续跑只会测到别的版本,还让人以为测的是指定版本。
+  if (EXPLICIT_PROBLEM !== undefined) {
+    console.error(`FAIL  ${EXPLICIT_PROBLEM}`);
+    console.error("      (去掉 DSH_APP_DIR 让它自动探测,或改成真正能解析的安装目录)");
+    return 1;
+  }
   if (argv.includes("--list")) {
     console.log(`源码检查:${SOURCE_CHECKS.join(", ")}`);
     console.log(`宿主检查(缺本机 DSH 就跳过):${HOST_CHECKS.map((item) => item.file).join(", ")}`);

@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { shippedFiles } from "./shipped.mjs";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REQUIRED_FILES = ["README.md", "package.json", "cordis.patch.yml"];
 const REQUIRED_PREFIXES = ["lib/"];
@@ -60,6 +62,17 @@ if (result.status === 0 && !result.error) {
   }
 }
 
+// **逐份核对清单**,不是只看前缀:模板 / 技能 / 命令少一份文件,这里必须红。
+// 清单来自 shippedFiles(与 install / check-installed 同一份口径),所以"源里有、包里没有"
+// 就是明确的打包缺失,不会因为"那棵目录还在"而漏过去。
+const expected = shippedFiles(ROOT);
+const missingFromPack = expected.filter((rel) => !files.includes(rel));
+if (missingFromPack.length > 0) {
+  const head = missingFromPack.slice(0, 8).join("、");
+  fail(
+    `打包缺少 ${missingFromPack.length} 个运行时文件:${head}${missingFromPack.length > 8 ? " 等" : ""}`
+  );
+}
 for (const required of REQUIRED_FILES) {
   if (!files.includes(required)) fail(`缺少 ${required}`);
 }
@@ -84,6 +97,7 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(`ok    npm pack --dry-run 包含运行时文件 (${files.length} 项)`);
+  console.log(`ok    清单里的 ${expected.length} 个运行时文件逐份都在包里(模板 / 技能 / 命令一个不少)`);
   console.log(`ok    包含 ${REQUIRED_FILES.join("、")}、${REQUIRED_PREFIXES.join("、")} 与预设四棵子树`);
   console.log(`ok    不含编辑源 ${FORBIDDEN_PRESET_FILES.join("、")} 与开发目录 ${FORBIDDEN_PREFIXES.join("、")}`);
   console.log("\nPASS: npm 包内容检查通过");

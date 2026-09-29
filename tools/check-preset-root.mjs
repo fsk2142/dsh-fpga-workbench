@@ -12,6 +12,8 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { BUNDLED_SKILLS } from "../lib/selfcheck.js";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),这里的默认值
 // 只为单独调用(`node tools/check-preset-root.mjs`)兜底。
@@ -240,6 +242,14 @@ const skillNames = existsSync(skillDir)
   ? readdirSync(skillDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
   : [];
 check(skillNames.length > 0, `预设带了至少一个技能(实际 ${skillNames.length} 个)`);
+// 设置页自检按 BUNDLED_SKILLS 这份期望清单核对已装副本(只数目录的话,"16 个变 15 个"照样通过)。
+// 两边必须一致:删技能就得同时改清单,漏改在这里红。
+check(
+  BUNDLED_SKILLS.length === skillNames.length && BUNDLED_SKILLS.every((name) => skillNames.includes(name)),
+  `lib/selfcheck.js 的技能期望清单与目录逐项一致(清单 ${BUNDLED_SKILLS.length} / 目录 ${skillNames.length})`,
+  `只在清单里:${BUNDLED_SKILLS.filter((name) => !skillNames.includes(name)).join("、") || "无"};` +
+    `只在目录里:${skillNames.filter((name) => !BUNDLED_SKILLS.includes(name)).join("、") || "无"}`
+);
 for (const skill of skillNames) {
   const file = join(skillDir, skill, "SKILL.md");
   if (!existsSync(file)) {

@@ -126,7 +126,7 @@ if (selfCheckModule !== undefined) {
   try {
     const report = selfCheckModule.runSelfCheck(values);
     const byId = Object.fromEntries(report.checks.map((item) => [item.id, item]));
-    check(report.checks.length === 6, `自检给出 6 项结论(实际 ${String(report.checks.length)})`);
+    check(report.checks.length === 8, `自检给出 8 项结论(实际 ${String(report.checks.length)})`);
     check(
       report.ok === true && report.failed === 0,
       `已装副本自检无阻塞项(failed=${String(report.failed)},warn=${String(report.warned)}` +
@@ -134,9 +134,18 @@ if (selfCheckModule !== undefined) {
     );
     check(byId.package?.status === "pass", `包内运行时文件检查通过(${String(byId.package?.detail)})`);
     check(byId.preset?.status === "pass", "预设声明行检查通过");
+    // 这三项是**逐份核对**:模板 / 技能 / 命令各一个清单,少一份就 fail(数字来自实际核对,不是常量打印)
     check(
-      byId.skills?.status === "pass" && /\d+ 个技能目录/u.test(String(byId.skills?.detail)),
-      `自带技能检查通过(${String(byId.skills?.detail)})`
+      byId.templates?.status === "pass" && /份内置模板全在/u.test(String(byId.templates?.detail)),
+      `内置模板逐份核对通过(${String(byId.templates?.detail)})`
+    );
+    check(
+      byId.commands?.status === "pass" && /个自带命令都在/u.test(String(byId.commands?.detail)),
+      `自带命令逐份核对通过(${String(byId.commands?.detail)})`
+    );
+    check(
+      byId.skills?.status === "pass" && /个技能都在,每个都有 SKILL\.md/u.test(String(byId.skills?.detail)),
+      `自带技能逐项核对通过(${String(byId.skills?.detail)})`
     );
     check(
       report.checks.every(

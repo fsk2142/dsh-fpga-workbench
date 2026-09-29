@@ -1,6 +1,6 @@
 ---
 name: fpga-project-syssim
-description: 验证 FPGA 工程的模块接口、背压、跨时钟或整机行为时用:复用可信模块证据,再按当前任务补充单元、子系统或顶层仿真。使用已配置仿真器,结果写 doc/syssim.md。
+description: 验证 FPGA 工程的模块接口、背压、跨时钟或整机行为时用;正式结论须有根 sim/ 实跑。
 ---
 
 # project-syssim:工程内仿真验证
@@ -13,7 +13,7 @@ description: 验证 FPGA 工程的模块接口、背压、跨时钟或整机行�
   (Vivado XSim / ModelSim·QuestaSim 那条线),**不得另挑一个**
 - 结论:**`doc/syssim.md`**
 
-**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
+其余工程技能按需并列或回跳,见 `fpga-project-spec`。
 
 ## 前置
 
@@ -64,8 +64,8 @@ description: 验证 FPGA 工程的模块接口、背压、跨时钟或整机行�
 
 ## 判据
 
-- **PASS**:当前任务需要的覆盖已由可复用证据或本次实跑充分证明,无明显问题;
-  复用与新跑的边界、未覆盖项及原因都写清楚
+- **PASS**:正式工程级 `PASS` 至少一次根 `sim/` 实跑,并执行独立判据且覆盖当前验收范围;
+  模块级证据不能单独产出正式 `PASS`,只做证据盘点或局部覆盖时记 `UNVERIFIED`
 - **FAIL**:有 tb 跑挂、数据明显不对、握手卡死、断言触发
 - **BLOCKED**:仿真器没就绪 / 关键 tb 或激励缺失且补不了
 - **UNVERIFIED**:只做了部分级别、或 tb 在但没跑完

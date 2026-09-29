@@ -1,6 +1,6 @@
 ---
 name: fpga-module-synth
-description: 综合 FPGA 模块并检查综合门禁与综合后时序时用:运行综合、解释报错,查看资源、时钟、未约束路径、CDC 与 WNS/TNS。模块级止于 post_synth;布局布线和板级签核用工程技能。
+description: 综合 FPGA 模块并检查资源、约束、CDC 与 post_synth 时序时用;布局布线转工程技能。
 ---
 
 # module-synth:综合与综合后时序
@@ -77,32 +77,20 @@ node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> 
 顶层名没写就按**模块名**填(本模式约定 `rtl/<模块名>.sv` 就是顶层)。
 已存在不覆盖(`--force` 才覆盖);换自己的脚本用 `--template`。
 
-**再跑综合**(全程批处理,不弹界面):
+**再跑综合**(全程批处理,不弹界面)。Vivado 启动统一设 `XILINX_LOCAL_USER_DATA=NO`，
+避免 Tcl Store 写 `%APPDATA%\Xilinx`；这是工作区规则的唯一口径，不得重定向 `APPDATA`：
 
 ```powershell
-# ① 先把 Vivado 的**用户目录**重定向进本模块(见下)"为什么":这一步让综合不再需要更宽的沙箱权限
-$oldAppData = $env:APPDATA
-$env:APPDATA = "<模块根>\synth\.vivado-user"
-New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
-# ② 再跑综合;**跑完必须还原**(第四轮 Q4-09:环境变量会留在这个 PowerShell 会话里,
-#    不还原的话后续命令会继续用上一个模块的用户目录)
+$oldLocalUserData = $env:XILINX_LOCAL_USER_DATA
 try {
+  $env:XILINX_LOCAL_USER_DATA = "NO"
   & "<综合器路径>" -mode batch -source <综合脚本.tcl> -log <日志路径> -journal <记录路径>
 } finally {
-  $env:APPDATA = $oldAppData
+  if ($null -eq $oldLocalUserData) { Remove-Item Env:XILINX_LOCAL_USER_DATA -ErrorAction SilentlyContinue }
+  else { $env:XILINX_LOCAL_USER_DATA = $oldLocalUserData }
 }
 ```
 
-**为什么要重定向 `$env:APPDATA`(实测,2026-09-22)**:Vivado 每次启动都要往 `%APPDATA%\Xilinx`
-写它自己的用户数据 —— Tcl App Store(`Vivado\tclapp\`、`Common\<版本>\webtalk_info\tclstore.wpc`)、
-`xsim\`、崩溃日志。那全在**工作区外面**,而受限沙箱只允许写工作区,于是综合一开始就报
-`[Common 17-354]` 或 `tclapp::load_apps` 失败 —— 表现就是"每次都要放行一次"。
-把 `APPDATA` 指到模块里之后,这些写入全落在工作区内:实测 `vivado -mode batch` 退 0、
-`<模块根>\synth\.vivado-user\Xilinx\` 里建出了完整用户数据,而真实的 `%APPDATA%\Xilinx` **一个字节没动**。
-
-- 这个目录是**可再生的**,别提交(和 `synth/` 下的 Vivado 工程一样)
-- **例外**:如果你要用**全局**的 Tcl Store 自定义 / `Vivado_init.tcl`,就别重定向 —— 那种情况向用户说明
-  "综合需要写 `%APPDATA%\Xilinx`,请放行一次更宽的权限",并说清原因(别让报错自己冒出来)
 - **`-mode batch` 必须加** —— 不加会拉起图形界面等人操作,无人值守就跑不下去
 - **别手抄**:用上面那条 `--kind synth-script` 起一份,再按工程改(器件预检、失败判定都固化在里面了)
 - 流程:建模块本地工程 → 加 `rtl/`(含 `rtl/ip/` 下的 IP 与 `.xci`)→ 跑 `synth_design` → 写报告

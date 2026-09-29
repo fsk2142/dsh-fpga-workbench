@@ -1,6 +1,6 @@
 ---
 name: fpga-project-synth
-description: 对 prj/ 中的 FPGA 工程执行综合时用:检查能否综合、资源占用和综合后时序摘要。只负责 synthesis;布局布线与 bitstream 交给 fpga-project-impl,结果写 doc/synth.md。
+description: 对 prj/ 工程执行综合、查看资源和综合后时序摘要时用;实现与 bitstream 转 fpga-project-impl。
 ---
 
 # project-synth:工程综合
@@ -14,7 +14,7 @@ description: 对 prj/ 中的 FPGA 工程执行综合时用:检查能否综合、
 | 结论 | `doc/synth.md` |
 | 与谁并列 | `rtl` / `sim` / `lint` / `constraints`(综合前尽量都完好,次序不限) |
 
-**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
+其余工程技能按需并列或回跳,见 `fpga-project-spec`。
 
 ## 前置(正式综合前尽量齐)
 

@@ -1,6 +1,6 @@
 ---
 name: fpga-project-lint
-description: 对 FPGA 工程做机械规范检查或厂商 lint、定位编译告警时用。只检查并记录 doc/lint.md;缺失 RTL 交给 fpga-project-rtl,综合交给 fpga-project-synth。
+description: 检查 FPGA 工程机械规范、厂商 lint 或编译告警时用;只检查,不修改设计。
 ---
 
 # project-lint:工程内 lint / 静态检查

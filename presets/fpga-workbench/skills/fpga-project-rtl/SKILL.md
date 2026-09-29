@@ -1,6 +1,6 @@
 ---
 name: fpga-project-rtl
-description: 编写 FPGA 工程缺少的专用 RTL、顶层、IP/BD 与简单 tb_* 时用,源码放 src/rtl、src/sim 和 ip/。可复用模块只从库拷入;集成只接已有源,缺失 RTL 归本技能。
+description: 编写工程缺少的专用 RTL、顶层、IP/BD 或简单 tb 时用;可复用模块只从库拷入。
 ---
 
 # project-rtl:工程内 RTL 编写
@@ -33,7 +33,7 @@ description: 编写 FPGA 工程缺少的专用 RTL、顶层、IP/BD 与简单 tb
 **不能动的只有这些**:清单表里的**对外接口**、spec 的**时钟/复位约定**、模板的**写法格式**。
 要改接口或约定 → 先回 `doc/spec.md` 改并让用户确认,再动手。
 
-**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
+其余工程技能按需并列或回跳,见 `fpga-project-spec`。
 
 ## 前置
 
@@ -72,7 +72,8 @@ description: 编写 FPGA 工程缺少的专用 RTL、顶层、IP/BD 与简单 tb
    (时序卡按 `ip/<ip-name>/timing.json` 找)。自建单一 `.xci` IP 可只保留 `.xci`,工程里引用原文件。
    **Block Design** 可用 Vivado Tcl 或写清 GUI 步骤创建;保留 `.bd`、wrapper、器件与 Vivado 版本,
    并优先用 `write_bd_tcl` 把复现脚本放进 `prj/`。无法自动生成或连接时,在 `doc/rtl.md` 标记
-   `manual integration required` 并列出操作。BD 与 wrapper 加入工程并成功 elaborate 前,结论只能是 `UNVERIFIED`。
+   `manual integration required` 并列出操作。elaborate 由 `fpga-project-integrate` 执行并记录在
+   `doc/integrate.md`;project-rtl 的 `PASS` 不以 elaborate 为条件。
 5. **简单 sim**:`src/sim/tb_*.sv` 或 `tb_*.v`,**跑过一次**、确认没啥大问题即可
    —— **不算正式证据**;顶层不要求简单自测
 6. **记清单**:新文件写进 `doc/files.md`(**位置 + 来源=手写**;IP 记来源=自建)
@@ -102,7 +103,7 @@ description: 编写 FPGA 工程缺少的专用 RTL、顶层、IP/BD 与简单 tb
 
 - **PASS**:清单里本该由工程写的专用 RTL 与顶层都在位;接口与 `doc/spec.md` / `flow.md` 一致;
   格式与模板一致(或差异已说明);专用模块各有 `src/sim/tb_*` 且跑过一次(顶层除外);
-  机械检查无阻塞项(或差异已说明);使用 BD 时已成功 elaborate 且复现/人工步骤已记录
+  机械检查无阻塞项(或差异已说明);使用 BD 时文件、wrapper 与复现/人工步骤已记录
 - **FAIL**:接口与 spec 不符、格式检查有阻塞项且说不清、文件名撞了却覆盖了
 - **BLOCKED**:还缺可复用模块(等人工)、器件/协议等关键问题问了还没得到答复
 - **UNVERIFIED**:RTL 写了但简单 sim / 检查没跑 —— 如实记,不要写成 PASS

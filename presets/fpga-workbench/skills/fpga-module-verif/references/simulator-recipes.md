@@ -54,18 +54,16 @@ cd <模块根>/verif
 **Vivado XSim**(选了它就用 Vivado bin 目录下的这三个命令)
 
 ```powershell
-# Vivado 系的工具同样要写用户目录(%APPDATA%\Xilinx\xsim 等,在工作区外):
-# 先重定向再跑,省掉"每次都要放行一次"(原理与实测证据见 fpga-module-synth 的「为什么」)
-$oldAppData = $env:APPDATA
-$env:APPDATA = "<模块根>\verif\.xsim-user"
-New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
-cd <模块根>/verif
+$oldLocalUserData = $env:XILINX_LOCAL_USER_DATA
 try {
+  $env:XILINX_LOCAL_USER_DATA = "NO" # 工作区规则的唯一口径:XILINX_LOCAL_USER_DATA=NO
+  cd <模块根>/verif
   xvlog -sv ../rtl/<源码...> tb_<snake>.sv
   xelab -debug typical tb_<模块名> -s tb_sim
   xsim tb_sim -runall
 } finally {
-  $env:APPDATA = $oldAppData   # 跑完立刻还原(第四轮 Q4-09):三条命令在同一隔离上下文里跑完就还回去
+  if ($null -eq $oldLocalUserData) { Remove-Item Env:XILINX_LOCAL_USER_DATA -ErrorAction SilentlyContinue }
+  else { $env:XILINX_LOCAL_USER_DATA = $oldLocalUserData }
 }
 ```
 

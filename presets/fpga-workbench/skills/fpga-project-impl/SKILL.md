@@ -1,6 +1,6 @@
 ---
 name: fpga-project-impl
-description: 综合完成后做 FPGA 工程实现时用:先跑到 route_design 并执行 DRC;用户需要 bitstream 时,再从同一 impl_1 继续生成并归档到 bit/。结果写 doc/impl.md。
+description: 工程综合后运行到 route_design 时用;用户需要 bitstream 时继续同一 impl_1 并归档 bit/。
 ---
 
 # project-impl:布局布线与按需 bitstream
@@ -26,7 +26,7 @@ description: 综合完成后做 FPGA 工程实现时用:先跑到 route_design �
 
 只要求布局布线、DRC 或实现报告时用 `route`;明确要求 bit、ltx、上板或发布产物时用 `bitstream`。
 
-**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
+其余工程技能按需并列或回跳,见 `fpga-project-spec`。
 
 ## 前置
 

@@ -1,6 +1,6 @@
 ---
 name: fpga-project-timing
-description: 判断 FPGA 工程 post-route 时序是否收敛时用:检查 WNS/TNS、违例路径和未约束路径,区分设计与约束问题。只做时序判定,结果写 doc/timing.md。
+description: 判断 FPGA 工程 post-route 时序、未约束路径或违例归属时用。
 ---
 
 # project-timing:工程级时序
@@ -10,7 +10,7 @@ description: 判断 FPGA 工程 post-route 时序是否收敛时用:检查 WNS/T
 
 结论写 **`doc/timing.md`**。
 
-**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
+其余工程技能按需并列或回跳,见 `fpga-project-spec`。
 
 ## 前置
 

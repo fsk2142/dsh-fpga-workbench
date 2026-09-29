@@ -1,13 +1,13 @@
 ---
 name: fpga-project-release
-description: 只在用户明确要求交付或发布 FPGA 工程时用:核对上游结论与 doc/files.md,归档 bit/、源码、约束、IP、报告和可复现步骤;结果写 doc/release.md。
+description: 只在用户明确要求交付或发布 FPGA 工程时用;核对上游证据、文件清单与归档完整性。
 ---
 
 # project-release:发布归档
 
 **只在用户明确要交付/发布时做** —— 实现跑完不等于要发布,不得自动收尾归档。
 
-**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
+其余工程技能按需并列或回跳,见 `fpga-project-spec`。
 
 ## 前置
 

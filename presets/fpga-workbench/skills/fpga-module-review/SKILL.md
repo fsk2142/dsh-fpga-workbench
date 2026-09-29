@@ -1,6 +1,6 @@
 ---
 name: fpga-module-review
-description: 审 FPGA 模块的代码、方案或结论时用:核对规格、RTL、CDC、接口、断言、验证证据与约束,支持局部、早期风险和整体审查;给出 APPROVED / CHANGES_REQUESTED / BLOCKED。只审不改。
+description: 审查 FPGA 模块代码、方案、CDC 或验证结论时用;支持局部、早期与整体审查,只审不改。
 ---
 
 # module-review:代码审查

@@ -1,6 +1,6 @@
 ---
 name: fpga-project-integrate
-description: 把已有 RTL/IP 接进 FPGA 工程顶层时用:分配时钟复位、对接接口、加入 Vivado 工程并检查连通性。只接已有源;缺少专用 RTL 交给 fpga-project-rtl,可复用模块缺失则停止并报告。支持早期接线与正式集成验收。
+description: 把已有 RTL/IP 接入 FPGA 工程顶层并检查连通性时用;只接已有源,缺专用 RTL 转 fpga-project-rtl。
 ---
 
 # project-integrate:顶层集成
@@ -12,7 +12,7 @@ description: 把已有 RTL/IP 接进 FPGA 工程顶层时用:分配时钟复位�
 - 工程:**`prj/`** (Vivado 建在这里;报告不进 `prj/`)
 - 结论:**`doc/integrate.md`**
 
-**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
+其余工程技能按需并列或回跳,见 `fpga-project-spec`。
 
 ## 前置(区分早期集成与正式验收)
 

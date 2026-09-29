@@ -379,10 +379,21 @@ for (const skill of skillNames) {
   }
 }
 
+// 入口技能是按需整份加载的运行时上下文。给总量设预算，防止修一条规则就继续堆一段解释。
+const SKILL_ENTRY_BYTES_LIMIT = 100_000;
+const skillEntryBytes = skillNames.reduce(
+  (total, skill) => total + statSync(join(skillDir, skill, "SKILL.md")).size,
+  0
+);
+check(
+  skillEntryBytes <= SKILL_ENTRY_BYTES_LIMIT,
+  `16 个入口 SKILL.md 总计不超过 ${String(SKILL_ENTRY_BYTES_LIMIT)} B(实际 ${String(skillEntryBytes)} B)`
+);
+
 // 技能目录会把全部 description 放进模型可见的能力目录。description 只负责触发、边界与移交，
 // 详细步骤留在按需加载的 SKILL.md；否则 16 个技能会在每轮都占用不必要的上下文。
 const SKILL_DESCRIPTION_CODEPOINT_LIMIT = 220;
-const SKILL_CATALOG_CODEPOINT_LIMIT = 2100;
+const SKILL_CATALOG_CODEPOINT_LIMIT = 1300;
 const descriptionCodepoints = [...skillDescriptions.entries()].map(([skill, description]) => [
   skill,
   Array.from(description).length,
@@ -437,6 +448,11 @@ check(
   "syssim 复用可信既有证据,再按当前任务补覆盖"
 );
 check(!/单模块仿真\(先做完这个\)/u.test(syssimScopeText), "syssim 不强制每次先重跑全部单模块仿真");
+check(
+  /正式工程级 `PASS`[\s\S]{0,120}至少一次根 `sim\/` 实跑/u.test(syssimScopeText) &&
+    /模块级证据不能单独产出正式 `PASS`/u.test(syssimScopeText),
+  "syssim 的正式 PASS 必须有根 sim/ 实跑,模块证据只能作为前置证据"
+);
 
 const projectRtlScopeText = readSkillBundle("fpga-project-rtl");
 check(
@@ -444,8 +460,9 @@ check(
   "project-rtl 写明 Block Design 的复现脚本与人工集成边界"
 );
 check(
-  /Block Design[\s\S]{0,240}elaborate[\s\S]{0,80}`UNVERIFIED`/u.test(projectRtlScopeText),
-  "project-rtl 写明 Block Design 在成功 elaborate 前只能记 UNVERIFIED"
+  /elaborate 由 `fpga-project-integrate`/u.test(projectRtlScopeText) &&
+    /project-rtl 的 `PASS` 不以 elaborate 为条件/u.test(projectRtlScopeText),
+  "project-rtl 只判 BD 文件与复现步骤,elaborate 结论归 project-integrate"
 );
 
 // ── 级别划分清楚:模块 5 个 / 工程 11 个 ─────────────────────────────────────
@@ -1055,20 +1072,19 @@ check(
   /别自己另造后缀/u.test(lintText) && /_reg/u.test(lintText) && /_ff/u.test(lintText),
   "rtl 技能写明:别自己另造后缀(`_reg` / `_ff` / `_next` 这类)"
 );
-// Vivado 系工具要写工作区外的用户目录(%APPDATA%\Xilinx):两个技能都要写明"先重定向再跑",
-// 否则综合/仿真每次都撞 `[Common 17-354]` / `tclapp::load_apps`,表现成"总要放行一次"(实测 2026-09-22)
-const synthSkillForAppData = readSkillBundle("fpga-module-synth");
+// Vivado/XSim 统一继承工作区规则的单一策略。不得再保留重定向 APPDATA 的旧配方，
+// 否则同一次会话会收到两套相反指令。
+const synthSkillForVivadoEnv = readSkillBundle("fpga-module-synth");
 check(
-  /\$env:APPDATA\s*=\s*"<模块根>\\synth\\\.vivado-user"/u.test(synthSkillForAppData) &&
-    /为什么要重定向/u.test(synthSkillForAppData) && /例外/u.test(synthSkillForAppData) && /Tcl Store/u.test(synthSkillForAppData) &&
-    /\$oldAppData = \$env:APPDATA/u.test(synthSkillForAppData) && /\} finally \{/u.test(synthSkillForAppData),
-  "综合技能写明:跑 Vivado 前把 `$env:APPDATA` 重定向进模块(附为什么 / 例外 / 全局 Tcl Store 那条)"
+  /XILINX_LOCAL_USER_DATA\s*=\s*NO/u.test(synthSkillForVivadoEnv) &&
+    !/\$env:APPDATA\s*=/u.test(synthSkillForVivadoEnv),
+  "综合技能只保留 XILINX_LOCAL_USER_DATA=NO,不再重定向 APPDATA"
 );
 const verifSkillText2 = readSkillBundle("fpga-module-verif");
 check(
-  /\$env:APPDATA\s*=\s*"<模块根>\\verif\\\.xsim-user"/u.test(verifSkillText2) &&
-    /\$oldAppData = \$env:APPDATA/u.test(verifSkillText2) && /\} finally \{/u.test(verifSkillText2),
-  "验证技能写明:XSim 同样先重定向 `$env:APPDATA`(指向 fpga-module-synth 的原理说明)"
+  /XILINX_LOCAL_USER_DATA\s*=\s*NO/u.test(verifSkillText2) &&
+    !/\$env:APPDATA\s*=/u.test(verifSkillText2),
+  "XSim 配方只保留 XILINX_LOCAL_USER_DATA=NO,不再重定向 APPDATA"
 );
 // IP 卡的四栏之外,检查器还会查"能不能复核"(N-12):技能里必须写明这几条,不然口径又变成两处
 check(

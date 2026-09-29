@@ -1,6 +1,6 @@
 ---
 name: fpga-project-constraints
-description: 编写或核对 FPGA 工程的时钟、I/O 管脚、电平标准和时序例外时用。管脚以 sch/ 为依据,上板前逐条核对;约束放 xdc/,结果写 doc/constraints.md。
+description: 编写或核对 FPGA 工程时钟、管脚、电平和时序例外时用;管脚以 sch/ 为准。
 ---
 
 # project-constraints:约束与管脚
@@ -23,7 +23,7 @@ description: 编写或核对 FPGA 工程的时钟、I/O 管脚、电平标准和
 - **真正要上板之前**,对着 `sch/` 与器件规格把受影响的管脚、电压、IO 标准再核一遍(见
   `fpga-project-board`)。
 
-**spec 定下之后没有固定流程**:本技能与其它工程级技能都是**按需取用**,可并列、可回跳、可只做其中几样;见 `fpga-project-spec`。
+其余工程技能按需并列或回跳,见 `fpga-project-spec`。
 
 ## 前置
 

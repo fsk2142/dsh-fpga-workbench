@@ -24,3 +24,6 @@ package-lock.json
 Thumbs.db
 .vscode/
 .idea/
+
+# 会话交接笔记(只给本机下一个接手的人看,含本机路径与已装副本位置)
+HANDOFF.md

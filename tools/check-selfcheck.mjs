@@ -171,11 +171,18 @@ const clean = makeFixture("clean", new Set());
     "missing-rules",
     new Set(["presets/fpga-workbench/workspace/AGENTS.fpga.md"])
   );
+  // 目录得**真的在**(workspace 整棵树只有这一个文件,不建目录的话这一条会退化成 ⑧ 的"缺整树",
+  // 红灯就说明不了"按名字读的文件没了"这件事)
+  mkdirSync(join(fixture.root, "presets", "fpga-workbench", "workspace"), { recursive: true });
   const report = runSelfCheck({}, fixture.root);
   const item = statusOf(report, "package");
   check(
-    report.ok === false && item?.status === "fail" && String(item?.detail).includes("AGENTS.fpga.md"),
-    `缺模式规则文件 → package 报 fail 并点名(实际:${String(item?.detail)})`
+    report.ok === false &&
+      item?.status === "fail" &&
+      String(item?.detail).includes("AGENTS.fpga.md") &&
+      // 缺失清单只能有这一个文件(若含整棵 workspace,开头会是"缺少 workspace、")
+      String(item?.detail).startsWith("缺少 workspace/"),
+    `缺模式规则文件 → package 报 fail 且只点名这一个文件(实际:${String(item?.detail)})`
   );
 }
 

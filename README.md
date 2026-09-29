@@ -54,7 +54,8 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 (真跑 verilator / vsim / vivado 属于仓库里的 `npm test` 与 `npm run test:vivado`,发布包里没有那些)。
 实现见 `lib/selfcheck.js`,路由 `GET /plugins/fpga-workbench/selfcheck`;
 判据本身由 `tools/check-selfcheck.mjs` 用"**故意少造一份文件**"的夹具打靶(缺模板 / 缺技能 / 缺命令 /
-缺辅助模块 / 缺模式规则文件 / 缺整树都必须红;夹具里 skills、templates 放空文件,一轮只占几百 KB)。
+缺辅助模块 / 缺模式规则文件 / 缺整树都必须红;夹具里 skills、templates 放空文件,一轮 8 份约 1.4 MB,
+落在 `.tmp/` 下并已 gitignore,不进发布包,跑完不删、由人自行处置)。
 
 ## 安装
 

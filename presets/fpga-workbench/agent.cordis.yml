@@ -167,10 +167,12 @@
 # carries whatever the deployment registered globally (repository plugins).
 #
 # 本预设自己还带一份技能目录(presets/fpga-workbench/skills/):它只在本模式可见,
-# 因为下面那行把**预设目录下**的 skills/ 追加进 customSkillDirs。!!js 里的 baseUrl
-# 是组装文件自己的目录,所以预设被 ensureUserPreset 复制到用户预设目录之后依然指得对
-# —— 这是官方 cordis 预设的写法,照抄。(includeDefaultRoots 保持默认的 true:
+# 因为下面那行把它追加进 customSkillDirs。(includeDefaultRoots 保持默认的 true:
 # 你的工作区技能与用户技能在本模式下照常可见,这里是"追加"而不是"替换"。)
+#
+# 这里用相对 `skills/` 是因为**这份文件**的 baseUrl 就是预设目录。cordis.patch.yml 里内联的
+# 同一行不能照抄相对路径:那份补丁在包根,且预设挂载时还会用 registry 的 baseUrl 重新求值,
+# 相对路径会指到不存在的目录、技能静默消失(见 tools/check-preset-root.mjs 的两上下文断言)。
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
   config:

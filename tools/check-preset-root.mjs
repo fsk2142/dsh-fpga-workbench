@@ -73,6 +73,68 @@ if (existsSync(compositionPath)) {
   }
 }
 
+// 2b. 技能目录是 !!js 表达式,求值基准决定它指向哪里。补丁在**包根**,而声明行在预设挂载时
+//     又可能用 registry 的 baseUrl 重新求值(实测 dsh-agent-preset 的 mountPreset 传 ctx.baseUrl)
+//     —— 所以相对 `skills/` 在两种上下文里都指不到包内技能。这里用宿主同一个求值器按两种
+//     上下文各算一次,必须都落在包内 presets/fpga-workbench/skills/ 上。
+{
+  const findRow = (list, id) => {
+    for (const row of Array.isArray(list) ? list : []) {
+      if (row === null || typeof row !== "object") continue;
+      if (row.id === id) return row;
+      if (row.group === true) {
+        const hit = findRow(row.config, id);
+        if (hit !== undefined) return hit;
+      }
+    }
+    return undefined;
+  };
+  let patchSkill;
+  let fileSkill;
+  try {
+    patchSkill = findRow(presetRow?.config?.plugins, "skill-filesystem");
+    fileSkill = findRow(
+      yaml.load(readFileSync(compositionPath, "utf8"), { schema: entryListSchema }),
+      "skill-filesystem"
+    );
+  } catch (error) {
+    check(false, "读取 skill-filesystem 行", error.message);
+  }
+  const dirExpr = (row) => row?.config?.customSkillDirs?.[0];
+  check(isJsExpr(dirExpr(patchSkill)), "补丁里的技能目录是 !!js 表达式");
+  check(isJsExpr(dirExpr(fileSkill)), "预设文件里的技能目录是 !!js 表达式");
+
+  const skillsDir = join(presetDir, "skills");
+  const strip = (value) => String(value).replace(/[\\/]+$/u, "");
+  if (isJsExpr(dirExpr(fileSkill))) {
+    // 预设文件自己的基准就是预设目录。
+    const fileCtx = { baseUrl: pathToFileURL(`${presetDir}/`).href, loader: {}, get: () => undefined };
+    check(
+      strip(evaluate(fileCtx, dirExpr(fileSkill).__jsExpr)) === skillsDir,
+      "agent.cordis.yml 的技能目录在预设目录基准下指向包内 skills/"
+    );
+  }
+  if (isJsExpr(dirExpr(patchSkill))) {
+    // 补丁会被两种上下文求值:补丁加载时(baseUrl = 包根)与预设挂载时(registry 的 baseUrl)。
+    const bootCtx = { baseUrl: pathToFileURL(`${ROOT}/`).href, loader: {}, get: () => undefined };
+    const fakeProfile = join(ROOT, ".tmp", "fake-profile");
+    const registryCtx = {
+      baseUrl: "file:///X/app.asar/dsh/node_modules/@deepseek-ai/dsh-web-app/",
+      loader: {},
+      get: (name) => (name === "profileContext" ? { dir: fakeProfile } : undefined)
+    };
+    check(
+      strip(evaluate(bootCtx, dirExpr(patchSkill).__jsExpr)) === skillsDir,
+      "补丁的技能目录在包根基准下指向包内 skills/"
+    );
+    check(
+      strip(evaluate(registryCtx, dirExpr(patchSkill).__jsExpr)) ===
+        join(fakeProfile, "node_modules", "dsh-fpga-workbench", "presets", "fpga-workbench", "skills"),
+      "补丁的技能目录在 registry 基准下仍指向已装包的 skills/(不随 baseUrl 漂)"
+    );
+  }
+}
+
 // 3. 可见性只来自组合里的 @deepseek-ai/dsh-agent-preset 行;宿主不再往用户预设目录写副本。
 const hostSource = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
 const codeOnly = hostSource

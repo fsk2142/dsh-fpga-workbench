@@ -182,15 +182,18 @@
           # carries whatever the deployment registered globally (repository plugins).
           #
           # 本预设自己还带一份技能目录(presets/fpga-workbench/skills/):它只在本模式可见,
-          # 因为下面那行把**预设目录下**的 skills/ 追加进 customSkillDirs。!!js 里的 baseUrl
-          # 是组装文件自己的目录,所以预设被 ensureUserPreset 复制到用户预设目录之后依然指得对
-          # —— 这是官方 cordis 预设的写法,照抄。(includeDefaultRoots 保持默认的 true:
+          # 因为下面那行把它追加进 customSkillDirs。(includeDefaultRoots 保持默认的 true:
           # 你的工作区技能与用户技能在本模式下照常可见,这里是"追加"而不是"替换"。)
+          #
+          # ⚠ 路径不能写成相对 `skills/`:这份声明在补丁里(包根),而 @deepseek-ai/dsh-agent-preset
+          # 在挂载时还会用 registry 的 baseUrl 重新求值 —— 相对路径在两种上下文里都指不到包内技能
+          # (实测:包根基准 → <包>/skills,registry 基准 → dsh-web-app/skills,两个目录都不存在,
+          # 技能静默消失)。所以优先按 profileContext.dir 拼到已装包,取不到才退回"包根 + 完整相对路径"。
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
             config:
               customSkillDirs:
-                - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+                - !!js "(() => { const pc = typeof get === 'function' ? get('profileContext') : undefined; const p = process.getBuiltinModule('node:path'); const u = process.getBuiltinModule('node:url'); return pc && pc.dir ? p.join(pc.dir, 'node_modules', 'dsh-fpga-workbench', 'presets', 'fpga-workbench', 'skills') : u.fileURLToPath(new URL('presets/fpga-workbench/skills/', baseUrl)); })()"
 
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'

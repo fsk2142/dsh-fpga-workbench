@@ -5,7 +5,19 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REQUIRED_FILES = ["README.md", "package.json", "cordis.patch.yml"];
-const REQUIRED_PREFIXES = ["lib/", "presets/"];
+const REQUIRED_PREFIXES = ["lib/"];
+/** 运行时真正会读的四棵预设子树(发布包必须全带上)。 */
+const REQUIRED_PRESET_PREFIXES = [
+  "presets/fpga-workbench/skills/",
+  "presets/fpga-workbench/templates/",
+  "presets/fpga-workbench/tools/",
+  "presets/fpga-workbench/workspace/"
+];
+/** 只用于编辑与一致性检查的源文件,不进发布包(预设由补丁内联声明提供)。 */
+const FORBIDDEN_PRESET_FILES = [
+  "presets/fpga-workbench/agent.cordis.yml",
+  "presets/fpga-workbench/preset.yml"
+];
 const FORBIDDEN_PREFIXES = ["tools/"];
 
 const npmExecPath = process.env.npm_execpath ?? (() => {
@@ -54,6 +66,12 @@ for (const required of REQUIRED_FILES) {
 for (const prefix of REQUIRED_PREFIXES) {
   if (!files.some((file) => file.startsWith(prefix))) fail(`缺少 ${prefix} 内容`);
 }
+for (const prefix of REQUIRED_PRESET_PREFIXES) {
+  if (!files.some((file) => file.startsWith(prefix))) fail(`缺少运行时子树 ${prefix} 内容`);
+}
+for (const file of FORBIDDEN_PRESET_FILES) {
+  if (files.includes(file)) fail(`包内混入只用于编辑的源文件 ${file}`);
+}
 for (const prefix of FORBIDDEN_PREFIXES) {
   const leaked = files.filter((file) => file.startsWith(prefix));
   if (leaked.length > 0) fail(`包内混入开发目录 ${prefix}:${leaked.join("、")}`);
@@ -66,7 +84,7 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(`ok    npm pack --dry-run 包含运行时文件 (${files.length} 项)`);
-  console.log(`ok    包含 ${REQUIRED_FILES.join("、")} 与 ${REQUIRED_PREFIXES.join("、")}`);
-  console.log(`ok    不含 ${FORBIDDEN_PREFIXES.join("、")}`);
+  console.log(`ok    包含 ${REQUIRED_FILES.join("、")}、${REQUIRED_PREFIXES.join("、")} 与预设四棵子树`);
+  console.log(`ok    不含编辑源 ${FORBIDDEN_PRESET_FILES.join("、")} 与开发目录 ${FORBIDDEN_PREFIXES.join("、")}`);
   console.log("\nPASS: npm 包内容检查通过");
 }

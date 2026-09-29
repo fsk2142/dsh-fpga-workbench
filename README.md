@@ -282,11 +282,18 @@ README 不再兼任运行时模板源。(规则只有这一处,改了它骨架�
 
 ## 三条必须知道的约束
 
-**一、`files` 白名单必须包含 `lib` 与 `presets`。**
+**一、`files` 白名单必须包含 `lib` 与预设的四棵运行时子树。**
 
 pnpm 安装 `file:` 依赖时按 `files` 打包,白名单外的东西**不会被拷进 profile**。踩过这个坑:
 `presets/` 没写进 `files` → 安装副本缺预设目录 → **预设列表里永远看不到这个模式,而且没有
-任何报错**。`tools/check-installed.mjs` 会断言这条,并逐字节比对整个 `presets/` 树。
+任何报错**。所以白名单精确到 `presets/fpga-workbench/{skills,templates,tools,workspace}`
+这四棵:技能、模板、自带命令、骨架规则各一棵,少哪棵就静默少一项能力。
+
+`presets/fpga-workbench/agent.cordis.yml` 与 `preset.yml` **故意不进发布包** —— 预设由
+`cordis.patch.yml` 内联的 `@deepseek-ai/dsh-agent-preset` 声明提供(名字、描述、`plugins`
+都在那份声明里),运行时两份都不读;它们留在仓库里继续做编辑与一致性检查
+(`preset.yml` 的显示名与 `lib/client.js` 的 `LABEL` 对齐,`agent.cordis.yml` 与补丁声明逐行对齐)。
+`tools/check-installed.mjs` 与 `tools/check-package.mjs` 会断言"四棵都在、两份编辑源不在"。
 
 **二、预设必须在组合里有 `@deepseek-ai/dsh-agent-preset` 声明行。**
 

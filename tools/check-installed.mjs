@@ -41,14 +41,25 @@ if (!existsSync(INSTALLED)) {
   check(drift.length === 0, `已装副本与源逐字节一致(共 ${String(shippedFiles(ROOT).length)} 个文件)`, drift.slice(0, 12).join("\n        "));
   if (drift.length > 12) console.log(`        …另有 ${drift.length - 12} 项`);
 
-  // 2. `files` 白名单必须覆盖预设目录。
+  // 2. `files` 白名单必须覆盖运行时真正读取的四棵预设子树。
   //
   // pnpm 装 file: 依赖时按 files 打包,白名单外的东西**不会被拷进 profile**。
-  // 踩过的坑:presets/ 没写进 files → 安装副本缺预设目录 → 补丁里的 agent-presets
-  // roots 指向空目录 → 预设列表里永远看不到「FPGA 开发模式」,而且没有任何报错。
+  // 踩过的坑:presets/ 没写进 files → 安装副本缺预设目录 → 预设列表里永远看不到
+  // 「FPGA 开发模式」,而且没有任何报错。所以这里逐棵子树断言,而不是只看 "presets"。
   const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  check((manifest.files ?? []).includes("presets"), "files 白名单包含 presets(否则预设不会被装进去)");
-  check((manifest.files ?? []).includes("lib"), "files 白名单包含 lib(否则两半代码不会被装进去)");
+  const files = manifest.files ?? [];
+  for (const subdir of ["skills", "templates", "tools", "workspace"]) {
+    check(
+      files.includes(`presets/fpga-workbench/${subdir}`),
+      `files 白名单包含 presets/fpga-workbench/${subdir}(否则安装副本缺这棵运行时子树)`
+    );
+  }
+  // 两份 YAML 只是编辑源:预设由 cordis.patch.yml 内联声明提供,运行时读不到也不需要它们。
+  check(
+    !files.some((entry) => /\/(?:agent\.cordis|preset)\.ya?ml$/u.test(String(entry))),
+    "files 白名单不含 agent.cordis.yml / preset.yml(编辑源不进发布包)"
+  );
+  check(files.includes("lib"), "files 白名单包含 lib(否则两半代码不会被装进去)");
   check(manifest.dsh?.bundle?.patch !== undefined, "清单声明了 dsh.bundle.patch(否则补丁不会进组合)");
   // 设置页在客户端半侧,所以这里必须有 dsh.client
   check(manifest.dsh?.client?.platform === "web", "清单声明了 dsh.client.platform = web(设置页要靠它)");

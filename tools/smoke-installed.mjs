@@ -140,8 +140,8 @@ if (selfCheckModule !== undefined) {
       `内置模板逐份核对通过(${String(byId.templates?.detail)})`
     );
     check(
-      byId.commands?.status === "pass" && /个自带命令都在/u.test(String(byId.commands?.detail)),
-      `自带命令逐份核对通过(${String(byId.commands?.detail)})`
+      byId.commands?.status === "pass" && /个自带命令与 \d+ 个依赖模块都在/u.test(String(byId.commands?.detail)),
+      `自带命令(含辅助模块)核对通过(${String(byId.commands?.detail)})`
     );
     check(
       byId.skills?.status === "pass" && /个技能都在,每个都有 SKILL\.md/u.test(String(byId.skills?.detail)),

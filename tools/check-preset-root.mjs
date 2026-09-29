@@ -12,7 +12,8 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { BUNDLED_SKILLS } from "../lib/selfcheck.js";
+import { BUNDLED_SKILLS, REQUIRED_PRESET_FILES } from "../lib/selfcheck.js";
+import { INSTRUCTION_FILE } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),这里的默认值
@@ -433,6 +434,13 @@ check(existsSync(join(presetDir, "tools", "setup-scaffold.mjs")), "自带 setup-
 // 规则正文现在独立成 preset 内的模板文件(不再是 README 兼职当运行时源)。
 const rulesSource = join(ROOT, "presets", "fpga-workbench", "workspace", "AGENTS.fpga.md");
 check(existsSync(rulesSource), `模式规则模板存在:${rulesSource}`);
+// 设置页自检按 REQUIRED_PRESET_FILES 核对"按名字读的固定文件"。这份清单必须与 setup-scaffold
+// 真正读的那个文件对得上(名字来自它导出的 INSTRUCTION_FILE),否则自检会保护错文件。
+check(
+  REQUIRED_PRESET_FILES.map((rel) => rel.split("/").at(-1)).includes(INSTRUCTION_FILE) &&
+    REQUIRED_PRESET_FILES.includes(`workspace/${INSTRUCTION_FILE}`),
+  `自检的固定文件清单与 setup-scaffold 读的文件一致(清单:${REQUIRED_PRESET_FILES.join("、")};INSTRUCTION_FILE:${INSTRUCTION_FILE})`
+);
 const rulesBody = existsSync(rulesSource) ? readFileSync(rulesSource, "utf8") : "";
 check(rulesBody.includes("FPGA 开发模式的工作区规则"), "规则区块里有正文(不是空壳)");
 check(rulesBody.split("\n").length >= 10, `规则区块够实(${rulesBody.split("\n").length} 行)`);

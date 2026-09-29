@@ -24,7 +24,8 @@
   "scripts": {
     "test": "node tools/check-all.mjs",
     "test:installed": "node tools/check-all.mjs --installed",
-    "test:safety": "node tools/check-all.mjs --safety"
+    "test:safety": "node tools/check-all.mjs --safety",
+    "test:vivado": "node tools/check-all.mjs --vivado"
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",

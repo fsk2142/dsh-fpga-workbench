@@ -10,8 +10,8 @@
 //   · 源码检查:只依赖本仓库 + Node,任何机器上都该跑(跑不了就是真问题)
 //   · 宿主检查:依赖本机装好的 DSH(安装目录的 loader 与 @deepseek-ai/* 包、profile 的 node_modules)
 //     —— 缺环境记 SKIP 而不是 FAIL,否则换台机器就一片红,红了就没人看了
-//   · 厂商工具检查:装了 Vivado 就真跑一次模块综合;没装时**由脚本自己**打印 SKIP 并退 0
-//     —— 摘要照实写"脚本内部 SKIP 不是通过",免得被读成"厂商工具验过了"
+//   · 厂商工具检查(--vivado,按需):装了 Vivado 就真跑一次模块综合;没装时**由脚本自己**
+//     打印 SKIP 并退 0 —— 摘要照实写"脚本内部 SKIP 不是通过",免得被读成"厂商工具验过了"
 //   · 安装副本检查(--installed):profile 里那份已装副本与源是否逐字节一致、能否加载
 //   · 真实客户端集成:目前**没有**自动化检查,永远记"未检",并在摘要里写清人工怎么检
 // 任一层有跳过/未跑/未检,收尾就不准说"全部通过"。
@@ -135,7 +135,8 @@ const HOST_CHECKS = [
 /** 需要本机 profile(只在 --installed 时跑)。 */
 const INSTALLED_CHECKS = ["check-installed.mjs", "smoke-installed.mjs"];
 
-/** 厂商工具真跑:默认就跑,但脚本自己在"没装工具"时记 SKIP(不是通过、也不算失败)。 */
+/** 厂商工具真跑:默认**不跑**(要真起 Vivado,分钟级),用 `--vivado` / `npm run test:vivado` 打开;
+ *  脚本自己在"没装工具"时记 SKIP(不是通过、也不算失败)。 */
 const VENDOR_CHECKS = ["check-vivado.mjs"];
 
 /** 依赖安装实测,要联网跑两次 pnpm,慢 —— 单独一个开关。 */
@@ -182,7 +183,7 @@ function main() {
   if (argv.includes("--list")) {
     console.log(`源码检查:${SOURCE_CHECKS.join(", ")}`);
     console.log(`宿主检查(缺本机 DSH 就跳过):${HOST_CHECKS.map((item) => item.file).join(", ")}`);
-    console.log(`厂商工具检查(没装工具时脚本内部 SKIP):${VENDOR_CHECKS.join(", ")}`);
+    console.log(`厂商工具检查(--vivado,慢;没装工具时脚本内部 SKIP):${VENDOR_CHECKS.join(", ")}`);
     console.log(`安装副本检查(--installed):${INSTALLED_CHECKS.join(", ")}`);
     console.log(`安装实测(--safety,慢):${SAFETY_CHECK}`);
     return 0;
@@ -190,6 +191,7 @@ function main() {
 
   const withInstalled = argv.includes("--installed");
   const withSafety = argv.includes("--safety");
+  const withVivado = argv.includes("--vivado");
   const failures = [];
 
   const tiers = {
@@ -203,7 +205,7 @@ function main() {
   const plan = [
     ...SOURCE_CHECKS.map((file) => ({ file, tier: "source" })),
     ...HOST_CHECKS.map((item) => ({ ...item, tier: "host" })),
-    ...VENDOR_CHECKS.map((file) => ({ file, tier: "vendor" })),
+    ...(withVivado ? VENDOR_CHECKS.map((file) => ({ file, tier: "vendor" })) : []),
     ...(withInstalled ? INSTALLED_CHECKS.map((file) => ({ file, tier: "installed" })) : [])
   ];
 
@@ -261,8 +263,10 @@ function main() {
   );
   console.log(`宿主检查:已检 ${tiers.host.ran} 项 / ${skippedIn(tiers.host)}${failedIn(tiers.host)}`);
   console.log(
-    `厂商工具检查(Vivado 真综合):已检 ${tiers.vendor.ran} 项 / ${skippedIn(tiers.vendor)}${failedIn(tiers.vendor)}` +
-      "(脚本内部在没装工具时记 SKIP —— 那一行不是通过)"
+    withVivado
+      ? `厂商工具检查(Vivado 真综合):已检 ${tiers.vendor.ran} 项 / ${skippedIn(tiers.vendor)}${failedIn(tiers.vendor)}` +
+          "(脚本内部在没装工具时记 SKIP —— 那一行不是通过)"
+      : "厂商工具检查:跳过(未加 --vivado;要跑用 npm run test:vivado)"
   );
   console.log(
     withInstalled
@@ -293,6 +297,7 @@ function main() {
     if (tier.skipped.length > 0) notRun.push(`${label}跳过 ${tier.skipped.length} 项`);
   }
   if (!withInstalled) notRun.push("安装副本检查未跑(--installed)");
+  if (!withVivado) notRun.push("厂商工具检查未跑(--vivado)");
   if (!withSafety) notRun.push("安装实测未跑(--safety)");
   notRun.push("真实客户端集成未检");
 

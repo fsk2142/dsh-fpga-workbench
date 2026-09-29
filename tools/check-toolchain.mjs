@@ -116,6 +116,19 @@ check(
     BUILTIN_TEMPLATES.some((item) => item.id === "builtin:programming/vivado-program.tcl"),
   "内置模板使用稳定的分类 id"
 );
+// S7(2026-09-24 用户口径):仿真卡只剩**一个**槽位 —— 编译与运行是同一份脚本,按模式调用。
+// 数据层断言这里一次钉死:module-simulation / project-simulation 各恰好一个 category=sim-run 槽,
+// 且不再出现旧的 sim-compile 分类槽;另一侧(分类 id 与内置文件)由上面 12 类与 builtin id 覆盖。
+for (const key of ["module-simulation", "project-simulation"]) {
+  const capability = CAPABILITIES.find((entry) => entry.key === key);
+  const simRun = (capability?.templates ?? []).filter((template) => template.category === "sim-run");
+  const simCompile = (capability?.templates ?? []).filter((template) => template.category === "sim-compile");
+  check(
+    simRun.length === 1 && simCompile.length === 0 && simRun[0].label === "仿真脚本",
+    `${key} 只有一个「仿真脚本」槽位(实际 sim-run ${simRun.length} / sim-compile ${simCompile.length})`
+  );
+}
+
 const bundledRootScan = scanTemplates({
   capability: "module-rtl",
   capabilities: CAPABILITIES,

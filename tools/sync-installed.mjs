@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { cleanupEntry, formatCleanup } from "../lib/toolchain.js";
+import { cleanupEntry, formatCleanup } from "./lib/cleanup.mjs";
 import { compareTree, hashOf, shippedFiles } from "./shipped.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");

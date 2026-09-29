@@ -47,7 +47,7 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 
 设置页最下面还有一个 **「自检」** 按钮(点一下才跑,**挂载时不请求**):它**按清单逐份核对**这份已装副本
 ——12 份内置模板的**文件**、7 个自带命令入口**及它们相对 import 的 4 个辅助模块**、16 个技能目录及各自的
-`SKILL.md`、四棵运行时子树**与按名字读的 `workspace/AGENTS.fpga.md`**、补丁里的预设声明行、设置模型版本、
+`SKILL.md` 与显式引用的 `references/*.md`、四棵运行时子树**与按名字读的 `workspace/AGENTS.fpga.md`**、补丁里的预设声明行、设置模型版本、
 已登记工具路径、用户模板库目录,共 8 项。结论分 `pass` / `warn` / `fail` 三档逐条列出,少哪一份文件就点名
 哪一份(只检查"目录在不在"会漏报:辅助模块与模式规则文件都属于这一类)。
 它是**只读**的:不写设置、不改文件、**不起任何进程**
@@ -59,9 +59,9 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 
 ## 安装
 
-官方 DeepSeek Harness Desktop `0.2.0-rc.1`:在侧边栏的「插件」页安装本仓库的绝对路径
+官方 DeepSeek Harness Desktop `0.2.0-rc.2`:在侧边栏的「插件」页安装本仓库的绝对路径
 `C:\Work\dsh-fpga-workbench`，更新后重启桌面端，再新建会话选择「FPGA 开发模式」。
-插件声明同时保留对 DSH `0.1.7-rc.2` 的兼容。插件自身的 `0.4.0` 是独立版本号，
+插件声明同时保留对 DSH `0.2.0-rc.1` 与 `0.1.7-rc.2` 的兼容。插件自身的 `0.4.1` 是独立版本号，
 不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本，
 不要用旧的全局命令更新官方桌面端的 profile。
 
@@ -81,13 +81,12 @@ dsh plugin --profile desktop add git+ssh://git@github.com/fsk2142/dsh-fpga-workb
 **git 装法要知道的三件事**:
 
 1. **不需要构建步骤**。`lib/` 里是可执行的 JS,没有编译产物 —— 包直接就能跑,
-   所以仓库里没有 `prepare` / `dist`。git 装法取的是**仓库检出**(不是 `pnpm pack` 的产物),
-   因此开发自检目录 `tools/` 与 `.tmp/` 也会被一起取下来;前者只是开发用的守卫脚本、
-   不参与加载(`exports` 只暴露 `lib/*` 与 `cordis.patch.yml`),不影响运行。
-2. **要指定分支或标签时**在地址后面加 `#`:`...#v0.4.0` 或 `...#main`。
+   所以仓库里没有 `prepare` / `dist`。git 装法取的是仓库中的**已跟踪内容**；`tools/` 会带上,
+   本地且已忽略的 `.tmp/` 不会带上。`tools/` 只用于开发自检,不参与插件加载。
+2. **要指定分支或标签时**在地址后面加 `#`:`...#v0.4.1` 或 `...#main`。
    不打标签就跟着 `main` 走,升级时重新 `add` 一次即可。
-3. `pnpm pack` 打出来的 tarball **只含** `lib` / `presets` / `cordis.patch.yml` / `package.json` /
-   `README.md`(`files` 白名单),发布用与 git 装法的内容差异就在这里。
+3. `pnpm pack` 打出来的 tarball包含 `files` 白名单中的 `lib` / `presets` / `cordis.patch.yml` /
+   `icon.svg`,以及 npm 自动加入的 `package.json` / `README.md`；发布包不带仓库根 `tools/` 与 `docs/`。
 
 > 刷新安装用 `node C:\Work\dsh-fpga-workbench\tools\install.mjs`(先校验、不一致才重装、
 > 并逐字节校验结果)。**绝不先删**:旧副本先**改名**成备份再重装,装成了备份**保留**
@@ -282,15 +281,9 @@ DSH 0.1.7-rc.2 的 `agent-preset-registry` 只从组合里收集声明,**不扫�
 
 本模式把 `AGENTS.fpga.md` 排在候选名最前(见 `agent.cordis.yml`,**候选名必须给全** ——
 给了就以给的为准,漏掉 `AGENTS.md` 就等于不再加载它)。于是项目里可以放一份**本模式专用**的
-工作区规则,不必挤进用户的 `AGENTS.md`。骨架(`setup-scaffold.mjs`)建模块 / 工程时会把下面
-这段抽出来落成 `<根>/AGENTS.fpga.md`,**已存在就跳过**(`--force` 才覆盖)。
-
-规则正文只维护**这一处**:骨架从 README 抽,不另外维护一份模板。
-
-<!-- fpga-mode-rules:start -->
-模式规则正文已独立成 `presets/fpga-workbench/workspace/AGENTS.fpga.md` —— 建工程骨架时**原样复制**它;
-README 不再兼任运行时模板源。(规则只有这一处,改了它骨架就跟着变。)
-<!-- fpga-mode-rules:end -->
+工作区规则,不必挤进用户的 `AGENTS.md`。规则正文的唯一包内来源是
+`presets/fpga-workbench/workspace/AGENTS.fpga.md`；骨架(`setup-scaffold.mjs`)建模块 / 工程时会把
+它**原样复制**为 `<根>/AGENTS.fpga.md`,已存在就跳过(`--force` 才覆盖)。
 
 ## 三条必须知道的约束
 
@@ -343,65 +336,9 @@ DSH 0.1.7-rc.2 的 `agent-preset-registry` 只从组合里的声明行收集预�
 
 ## 自检
 
-**唯一入口是 `npm test`** —— 它按固定顺序跑源码级与环境级检查,并且**看退出码**,不是看输出里的
-`PASS` 字样。这一点有来由:曾经某个 check 打印完 `PASS` 之后又崩了(用了没导入的
-`readdirSync`),而我只 grep 输出、把它当成终端的假警报,那个缺陷在仓库里躺了好几轮。
-
-```powershell
-npm test                  # 源码级 + 环境级(缺本机 DSH 的记 SKIP,不算失败;不碰厂商工具)
-npm run test:installed    # 再加上已装副本比对与加载冒烟
-npm run test:vivado       # 按需:真跑一次 Vivado 模块综合(分钟级)
-npm run test:safety       # 再加上依赖安全(较慢,要跑两次 pnpm)
-node tools/check-all.mjs --list   # 看它到底跑哪些
-```
-
-`npm run test:vivado` 是**按需开关**,不在默认 `npm test` 里(它要真起 Vivado,分钟级):
-装了 Vivado 就用插件自己的 `module-synth-new` 起脚本、真跑一次模块综合,断言退出码、脚本自己的
-PASS 行与资源/时序报告(`check-vivado.mjs`);没装 Vivado 时它打印 **SKIP** 并退出 0 ——
-那一行不是"通过",摘要里也照实写。不跑时摘要会写"厂商工具检查未跑(--vivado)"。
-
-想单跑某一项时:
-
-```powershell
-node tools/check-toolchain.mjs      # 字段/存在性/警告措辞/两侧契约/提示文案三种状态
-node tools/check-load-contract.mjs  # 加载契约:语法/lib 内部 import/bundle 契约/半侧分工(重启前必跑)
-node tools/check-fpga-tools.mjs     # 自带命令的判定正确性 + 自带模板自洽 + CLI 退出码
-node tools/check-selfcheck.mjs      # 设置页自检的判据:故意少拷一份文件/技能/命令,必须报 fail
-node tools/check-preset-root.mjs    # 预设声明行 + 组装结构 + 模式行 + 自带技能
-node tools/check-patch-file.mjs     # 补丁字节合法 + 形状
-node tools/check-vivado.mjs         # 真跑一次 Vivado 模块综合(没装 Vivado 记 SKIP,不是通过)
-node tools/check-installed.mjs      # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)
-node tools/smoke-installed.mjs      # 已装副本在真实解析环境里能否加载(装完/重启前跑)
-node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不动既有依赖(较慢,要跑两次 pnpm)
-```
-
-`sync-installed.mjs`(装/同步已装副本;`--prune` 现在只**列出**已装副本里多出来的旧文件、**不删**)、
-`install.mjs`(装完自动跑 `smoke-installed`)按需跑。`tools/shipped.mjs` 是内部模块,不是命令。
-
-**自检自己收尾(零删除)**:会建 fixture 的几项(`check-toolchain` / `check-fpga-tools` / `check-selfcheck`)跑完
-**不删** `.tmp/` 下的临时目录,只把残留清单打出来让人自己处置 —— 那一区会一直涨,这是零删除的代价。
-`check-selfcheck` 的夹具是**按清单少拷**出来的(不是拷完再删),所以它自己也不删任何东西。
-
-`smoke-installed` 与 `check-installed` 的关系:后者比字节,前者**真的加载一遍** ——
-在 profile 的解析环境里 import 宿主半侧、执行客户端 bundle 的工厂函数、用真实设置跑一遍
-状态载荷与会话提示段。"文件都对但一加载就炸"只有它能抓住,而那种情况重启后就是黑屏。
-`tools/install.mjs` 装完会自动跑它。
-
-宿主检查需要一个能被**当前解释器** `require` 到 `js-yaml` 与 `cordis-plugin-include` 的目录,
-而且**版本必须命中 `dsh.compatibility.dshReleases`**。`check-all.mjs` 的选择顺序:
-
-1. **`DSH_APP_DIR`(显式指定)**:给了就用它,不看版本声明(结论会打折,摘要里写明)。
-   但**指向无效目录时直接报错退出** —— 以前会悄悄退回自动探测,于是"我测的是指定版本"
-   变成假象;打错路径现在会红,不会静默换宿主。
-2. **官方桌面端** `%LOCALAPPDATA%\Programs\DeepSeek Harness`:运行时在 `app.asar` 里,
-   普通 Node 读不了,所以选中它时改用桌面端自带的 Electron(`ELECTRON_RUN_AS_NODE=1`)跑子检查;
-   版本从 asar 头部读出。
-3. **npm 全局** `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`(本机实测可能是旧版本)。
-4. 旧桌面版默认路径。
-
-只接受版本在声明里的候选;都没有就记 **SKIP** 并打印每个候选的实际版本(不视作通过)。
-这条是为了防"机器上另装了一个旧全局 DSH,`npm test` 却报宿主检查通过"。profile 用
-`DSH_PROFILE_DIR` 指定。
+开发与发布的统一入口是 `npm test`；核对已装副本用 `npm run test:installed`，真实 Vivado 综合与依赖
+安全检查分别按需运行 `npm run test:vivado`、`npm run test:safety`。各子检查、宿主选择顺序、零删除
+fixture 规则与历史原因见 [`docs/DEVELOPMENT.md`](https://github.com/fsk2142/dsh-fpga-workbench/blob/main/docs/DEVELOPMENT.md)。
 
 ## 现状与下一步
 
@@ -420,7 +357,7 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
   五个阶段是**按需取用**,不是自动流水线:写一个模块时通常会在 spec、rtl、verif、synth 之间
   反复来回,review 则可在任何需要复核的时点调用；任一步都可以单独使用,不必补齐整条链。
 
-  **"先画图确认"的门槛按任务风险定**(唯一出处:`fpga-mode-rules` 第 2 条):重大架构 / 公共接口 /
+  **"先画图确认"的门槛按任务风险定**(唯一出处:`presets/fpga-workbench/workspace/AGENTS.fpga.md` 第 2 条):重大架构 / 公共接口 /
   跨时钟方案 / 关键数据通路 / 用户可见的算法决策**尚未确定** → 先出图确认;已有批准方案里的普通
   实现与**局部修复**(语法错、单条 lint 告警、已有模块局部 Bug)→ 直接动手 + 聚焦验证。
 
@@ -470,16 +407,3 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
   现在命令仍由 agent 用 shell 工具跑 —— 走沙箱、可见、可中断;真做成工具就得接 subprocess
   服务并自己处理超时与日志
 - ⬜ 待清理:旧雏形技能、以及旧工具包里已经带进来的东西的收尾
-
-## 关于界面(已放弃的方案,留作记录)
-
-早期版本尝试过在 UI 上加东西:侧边栏入口行、主区域面板、甚至替换官方会话区。
-结论:
-
-- **入口行 / 面板**能做,但对"FPGA 工作模式"这个目标来说是多余的
-- **替换官方会话区**做过一版,实机效果远不如官方(要追上得复刻它的 CSS 与交互),
-  而且必然改掉官方列表的样子 —— 已回退
-- **替换整个侧边栏**机制上做不到:声明一个已被声明的子槽会直接抛错
-  (`slot "x" is already declared`),那个错发生在插件加载阶段,**会让桌面端起不来**
-
-那些实现都在 git 历史里(`b3781ff` 是替换版,`7560643` 是回退)。

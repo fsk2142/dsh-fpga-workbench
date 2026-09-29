@@ -35,7 +35,7 @@ import {
 } from "../presets/fpga-workbench/tools/module/module-report-check.mjs";
 import { INSTRUCTION_FILE, applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
 import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
-import { TEMP_GRACE_MS, listTempLeftovers } from "../lib/toolchain.js";
+import { TEMP_GRACE_MS, listTempLeftovers } from "./lib/cleanup.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
@@ -548,17 +548,17 @@ check(
   "锚点与环节文件夹都建出来了"
 );
 
-// 工作区指令(用户口径 2026-09-19):骨架顺带落一份 AGENTS.fpga.md,正文从 README 的规则区块抽
+// 工作区指令(用户口径 2026-09-19):骨架顺带落一份 AGENTS.fpga.md,正文从包内 workspace 模板原样复制
 const instructionPath = join(scaffoldMod, "AGENTS.fpga.md");
 check(modulePlan.instruction === instructionPath, `plan 里给的是 <根>/AGENTS.fpga.md(实际 ${String(modulePlan.instruction)})`);
 const rulesText = readModeRules();
 check(
   rulesText.includes("FPGA 开发模式的工作区规则") && rulesText.split("\n").length >= 8,
-  `规则正文抽出来了(${rulesText.split("\n").length} 行)`
+  `规则源读取成功(${rulesText.split("\n").length} 行)`
 );
-check(!rulesText.includes("<!--"), "抽出来的正文不含 HTML 标记(落盘给人读的)");
+check(!rulesText.includes("<!--"), "规则源不含 HTML 标记(落盘给人读的)");
 const written = readFileSync(instructionPath, "utf8");
-check(written === rulesText, "落盘的正文与抽取结果逐字节一致");
+check(written === rulesText, "落盘的正文与包内规则源逐字节一致");
 check(!written.startsWith("\uFEFF"), "落盘的指令文件不带 BOM");
 
 // 幂等 + 不覆盖已有锚点(用户可能在锚点里加了字段)

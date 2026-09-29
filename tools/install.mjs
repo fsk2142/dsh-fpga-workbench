@@ -20,7 +20,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { cleanupEntry, formatCleanup } from "../lib/toolchain.js";
+import { cleanupEntry, formatCleanup } from "./lib/cleanup.mjs";
 import { compareTree } from "./shipped.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");

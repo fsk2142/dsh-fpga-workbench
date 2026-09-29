@@ -21,7 +21,6 @@ import {
   NS,
   SETTINGS_SECTIONS,
   STAGES,
-  TEMP_GRACE_MS,
   DETECT_TARGETS,
   TEMPLATE_FIELDS,
   TOOL_CATALOG,
@@ -33,7 +32,6 @@ import {
   isMissing,
   legacyMigrationPatch,
   listDirectory,
-  listTempLeftovers,
   probeFilesystem,
   queryVersion,
   readdirNames,
@@ -47,6 +45,7 @@ import {
   toolLevelPrefix,
   toolPath
 } from "../lib/toolchain.js";
+import { TEMP_GRACE_MS, listTempLeftovers } from "./lib/cleanup.mjs";
 import {
   BUNDLED_TEMPLATE_ROOT,
   BUILTIN_TEMPLATES,
@@ -74,6 +73,26 @@ const check = (ok, label, detail) => {
   console.log(`${ok ? "ok  " : "FAIL"}  ${label}${detail === undefined ? "" : `\n        ${detail}`}`);
   if (!ok) failures.push(label);
 };
+
+// 发布边界与人工验收提示也属于契约：这些问题不会由纯逻辑用例自然覆盖。
+const checkAllSource = readFileSync(join(ROOT, "tools", "check-all.mjs"), "utf8");
+check(
+  checkAllSource.includes("do run.do compile") && checkAllSource.includes("do run.do run") &&
+    !checkAllSource.includes("compile.do 再 run.do"),
+  "ModelSim / Questa 人工验收提示使用单一 run.do 的 compile/run 两种模式"
+);
+check(
+  checkAllSource.includes('].join("\\n");') && !checkAllSource.includes('].join("\\\\n");'),
+  "人工验收清单用真实换行拼接"
+);
+const packageManifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+check(packageManifest.comment === undefined, "package.json 不携带非标准 comment 字段");
+const runtimeToolchainSource = readFileSync(join(ROOT, "lib", "toolchain.js"), "utf8");
+check(
+  !/export (?:const|function) (?:CLEANUP_KINDS|cleanupEntry|formatCleanup|TEMP_GRACE_MS|listTempLeftovers)\b/u.test(runtimeToolchainSource),
+  "仅开发脚本使用的清理报告逻辑不进入运行时 lib/toolchain.js"
+);
+check(existsSync(join(ROOT, "tools", "lib", "cleanup.mjs")), "开发侧清理报告逻辑放在 tools/lib/cleanup.mjs");
 
 // ── 分类模板库:扫描边界、稳定 id 与“缺失不回退” ─────────────────────────────
 //
@@ -1733,7 +1752,7 @@ check(
 //
 // 为什么用静态守卫而不是行为测试:这是一条**全局**约束,而行为测试只能覆盖被走到的那几条路径
 // —— 以后有人在一条新路径里加回删除调用,行为测试照样全绿。这里扫生产代码的源码文本
-// (`lib/**`、`presets/*/tools/**`、`tools/install.mjs`、`tools/sync-installed.mjs`),
+// (`lib/**`、`presets/*/tools/**`、`tools/lib/**`、`tools/install.mjs`、`tools/sync-installed.mjs`),
 // 出现删除类调用就红。
 //
 // 注释会被剥掉(注释里解释"不再删除"不该把自己扫红),字符串里的调用仍会被扫到 —— 那正是
@@ -1781,6 +1800,8 @@ function guardedFiles() {
     const toolsDir = join(presetsDir, preset.name, "tools");
     if (preset.isDirectory() && existsSync(toolsDir)) walk(toolsDir);
   }
+  const devLibDir = join(ROOT, "tools", "lib");
+  if (existsSync(devLibDir)) walk(devLibDir);
   for (const file of ["install.mjs", "sync-installed.mjs"]) {
     const full = join(ROOT, "tools", file);
     if (existsSync(full)) out.push(full);
@@ -1808,10 +1829,11 @@ check(
 );
 check(
   guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "lib/toolchain.js") &&
+    guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "tools/lib/cleanup.mjs") &&
     guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "tools/install.mjs") &&
     guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "tools/sync-installed.mjs") &&
     guarded.some((file) => relative(ROOT, file).split(sep).join("/") === "presets/fpga-workbench/tools/lib/stamp.mjs"),
-  `守卫真扫到了那四个关键文件(守卫本身不许空转:实际 ${guarded.map((file) => relative(ROOT, file).split(sep).join("/")).join("、")})`
+  `守卫真扫到了五个关键文件(守卫本身不许空转:实际 ${guarded.map((file) => relative(ROOT, file).split(sep).join("/")).join("、")})`
 );
 check(
   DELETION_ALLOWLIST.every((rule) => existsSync(join(ROOT, rule.file))),

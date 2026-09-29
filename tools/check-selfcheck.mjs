@@ -5,7 +5,7 @@
 // 这里用"按清单拷贝、故意漏掉一项"的夹具打靶,证明每一档判据真的会红。
 //
 // 零删除:夹具是**按清单拷出来的**(不是拷完再删),跑完留在 .tmp/ 下并打印路径,由人处置。
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,8 +41,8 @@ const listFiles = (root, current = root, out = []) => {
  * 按清单造一份夹具:四棵子树 + 补丁。`skip` 里的相对路径(**相对包根**)不造 —— 用"少造"而不是
  * "造完再删"模拟缺文件,这样这条自检自己也不删除任何东西。
  *
- * 体积:**skills / templates 里放空文件**(自检只核对"文件在不在",不看内容),
- * tools / workspace 原样拷(要真读它们的 import 图,而且它们本来就小)。
+ * 体积:templates 放空文件；skills 原样拷(自检要从 SKILL.md 解析显式引用),
+ * tools / workspace 也原样拷(要真读它们的 import 图与规则源)。
  * @param skip - 要故意漏掉的相对路径集合。
  * @returns 夹具包根。
  */
@@ -54,7 +54,7 @@ const makeFixture = (label, skip) => {
   cpSync(join(ROOT, "cordis.patch.yml"), join(root, "cordis.patch.yml"));
   for (const tree of ["skills", "templates", "tools", "workspace"]) {
     const source = join(PRESET, tree);
-    const empty = tree === "skills" || tree === "templates";
+    const empty = tree === "templates";
     for (const rel of listFiles(source)) {
       const target = `presets/fpga-workbench/${tree}/${rel}`;
       if (skip.has(target)) continue;
@@ -139,7 +139,25 @@ const clean = makeFixture("clean", new Set());
   );
 }
 
-// ⑤ 缺一个自带命令 → commands 必须 fail 并点名
+// ⑤ 缺一份 SKILL.md 显式引用的参考文件 → skills 必须 fail 并点名
+{
+  const skill = "fpga-module-rtl";
+  const core = readFileSync(join(PRESET, "skills", skill, "SKILL.md"), "utf8");
+  const relativePath = /\[[^\]]+\]\((references\/[^)\s]+\.md)\)/u.exec(core)?.[1];
+  const victim = `${skill}/${String(relativePath)}`;
+  const fixture = makeFixture(
+    "missing-skill-reference",
+    new Set([`presets/fpga-workbench/skills/${victim}`])
+  );
+  const report = runSelfCheck({}, fixture.root);
+  const item = statusOf(report, "skills");
+  check(
+    relativePath !== undefined && report.ok === false && item?.status === "fail" && String(item?.detail).includes(victim),
+    `技能引用资源缺失 → 报 fail 并点名(实际:${String(item?.detail)})`
+  );
+}
+
+// ⑥ 缺一个自带命令 → commands 必须 fail 并点名
 {
   const tool = TOOLS[0];
   const relative = join(LEVEL_DIRS[tool.level] ?? "", tool.file).split("\\").join("/");
@@ -152,7 +170,7 @@ const clean = makeFixture("clean", new Set());
   );
 }
 
-// ⑥ 缺一个**辅助模块**(入口都在,只是它 import 的 lib/*.mjs 少一个)→ commands 必须 fail
+// ⑦ 缺一个**辅助模块**(入口都在,只是它 import 的 lib/*.mjs 少一个)→ commands 必须 fail
 {
   const victim = "lib/rtl-coverage.mjs";
   const fixture = makeFixture("missing-helper", new Set([`presets/fpga-workbench/tools/${victim}`]));
@@ -164,7 +182,7 @@ const clean = makeFixture("clean", new Set());
   );
 }
 
-// ⑦ 缺"按名字读"的固定文件(workspace/AGENTS.fpga.md)→ package 必须 fail
+// ⑧ 缺"按名字读"的固定文件(workspace/AGENTS.fpga.md)→ package 必须 fail
 //    (旧实现只看 workspace 目录在不在,这个文件没了照样全绿)
 {
   const fixture = makeFixture(
@@ -186,7 +204,7 @@ const clean = makeFixture("clean", new Set());
   );
 }
 
-// ⑧ 缺一棵整树(workspace 整个不造)→ package 必须 fail
+// ⑨ 缺一棵整树(workspace 整个不造)→ package 必须 fail
 {
   const fixture = makeFixture("missing-tree", new Set(listFiles(join(PRESET, "workspace")).map((rel) => `presets/fpga-workbench/workspace/${rel}`)));
   const report = runSelfCheck({}, fixture.root);
@@ -197,7 +215,7 @@ const clean = makeFixture("clean", new Set());
   );
 }
 
-// ⑨ 设置模型版本没写 → warn(不是 fail:保存一次设置就会迁移)
+// ⑩ 设置模型版本没写 → warn(不是 fail:保存一次设置就会迁移)
 {
   const report = runSelfCheck({}, clean.root);
   const item = statusOf(report, "settings");
@@ -211,6 +229,6 @@ check(existsSync(clean.root) && statSync(clean.root).isDirectory(), "完整夹�
 console.log(
   failures.length > 0
     ? `\nFAIL (${String(failures.length)}): ${failures.join(" | ")}`
-    : "\nPASS: 设置页自检的判据成立(缺模板 / 缺技能 / 缺命令 / 缺辅助模块 / 缺模式规则文件 / 缺整树都会红)"
+    : "\nPASS: 设置页自检的判据成立(缺模板 / 缺技能 / 缺技能引用 / 缺命令 / 缺辅助模块 / 缺模式规则文件 / 缺整树都会红)"
 );
 if (failures.length > 0) process.exitCode = 1;

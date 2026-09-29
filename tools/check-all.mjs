@@ -58,9 +58,10 @@ function asarJson(asarPath, entryPath) {
     for (const segment of entryPath.split("/").filter(Boolean)) node = node?.files?.[segment];
     if (node === undefined || node.files !== undefined) return undefined;
     const offset = Number(node.offset);
-    const pad = (4 - (offset % 4)) % 4;
     const bytes = Buffer.alloc(Number(node.size));
-    readSync(fd, bytes, 0, bytes.length, 16 + headerSize + offset + pad);
+    // ASAR entry offsets are exact byte offsets from the end of the header. Entries are
+    // concatenated and need not start on a four-byte boundary (the current host's dsh/package.json is one example).
+    readSync(fd, bytes, 0, bytes.length, 16 + headerSize + offset);
     return JSON.parse(bytes.toString("utf8"));
   } catch {
     return undefined;
@@ -78,6 +79,10 @@ const DESKTOP = (() => {
   if (!existsSync(exe) || !existsSync(asar)) return undefined;
   return { exe, asar, dshDir: join(asar, "dsh"), version: asarJson(asar, "/dsh/package.json")?.version };
 })();
+const DESKTOP_PROBLEM =
+  DESKTOP !== undefined && DESKTOP.version === undefined
+    ? `检测到官方桌面端,但无法从 ${DESKTOP.asar} 读取内置 DSH 版本 —— 不允许静默跳过宿主检查`
+    : undefined;
 
 /** 把一个候选目录变成"用哪个版本、用哪个解释器跑"的描述。 */
 const candidateOf = (dir) => {
@@ -175,9 +180,9 @@ const SAFETY_CHECK = "check-install-safety.mjs";
     "  4) 技能按需加载:让它读一个技能,内容与 presets/ 下的一致",
     "  5) 起文件:module-rtl-new / module-verif-new / module-synth-new 各跑一次,落点正确",
     "  6) 退出码与错误状态:故意让检查失败(删掉一个被引用的证据文件),确认退非零且点名",
-    "  7) 有厂商工具时:综合与仿真各跑一次真实夹具；ModelSim / QuestaSim 先 compile.do 再 run.do,不能用 Node 单测替代",
+    "  7) 有厂商工具时:综合与仿真各跑一次真实夹具；ModelSim / QuestaSim 依次执行 do run.do compile、do run.do run,不能用 Node 单测替代",
     "  8) 工程骨架:对一个空目录跑 setup-scaffold.mjs <目录> --kind project(目录本身就是工程根;三个 module-*-new.mjs 都不支持 --kind project),核对只生成 .fpga-workbench.json、AGENTS.fpga.md 与 doc/sch/prj/src/{rtl,sim}/ip/sim/xdc/bit"
-  ].join("\\n");
+  ].join("\n");
 
 const run = (file) => {
   // 选中桌面端时用它的 Electron 当 Node(ELECTRON_RUN_AS_NODE),否则 asar 里的包解析不了。
@@ -198,6 +203,10 @@ const freshTier = () => ({ ran: 0, failed: [], skipped: [], skipReason: "" });
 
 function main() {
   const argv = process.argv.slice(2);
+  if (DESKTOP_PROBLEM !== undefined) {
+    console.error(`FAIL  ${DESKTOP_PROBLEM}`);
+    return 1;
+  }
   // 显式指定的宿主用不了:立刻失败。继续跑只会测到别的版本,还让人以为测的是指定版本。
   if (EXPLICIT_PROBLEM !== undefined) {
     console.error(`FAIL  ${EXPLICIT_PROBLEM}`);

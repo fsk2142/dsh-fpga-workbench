@@ -144,7 +144,8 @@ if (selfCheckModule !== undefined) {
       `自带命令(含辅助模块)核对通过(${String(byId.commands?.detail)})`
     );
     check(
-      byId.skills?.status === "pass" && /个技能都在,每个都有 SKILL\.md/u.test(String(byId.skills?.detail)),
+      byId.skills?.status === "pass" &&
+        /个技能及 \d+ 份显式引用的参考文件都在/u.test(String(byId.skills?.detail)),
       `自带技能逐项核对通过(${String(byId.skills?.detail)})`
     );
     check(

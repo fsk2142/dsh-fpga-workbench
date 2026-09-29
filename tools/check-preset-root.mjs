@@ -7,7 +7,7 @@
 //   this.ctx.baseUrl = new URL(".", pathToFileURL(this.filename)).href
 // 也就是说 !!js 在**补丁文件所在目录**的上下文里求值。本包把补丁放在包根,
 // 所以 'presets/' 就够了(官方示例写 '../presets/' 是因为它的补丁在下一层)。
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -52,24 +52,44 @@ const presetDir = join(ROOT, "presets", "fpga-workbench");
 check(existsSync(presetDir), "包内 FPGA 预设目录存在");
 const compositionPath = join(presetDir, "agent.cordis.yml");
 check(existsSync(compositionPath), "fpga-workbench 有 agent.cordis.yml");
-const flattenRows = (list, out = []) => {
-  for (const row of Array.isArray(list) ? list : []) {
-    if (!row || typeof row !== "object") continue;
-    if (row.group === true) flattenRows(row.config, out);
-    else out.push(`${String(row.id)}:${String(row.name)}`);
-  }
-  return out;
+const normalizeValue = (value) => {
+  if (isJsExpr(value)) return { __jsExpr: value.__jsExpr };
+  if (Array.isArray(value)) return value.map(normalizeValue);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, normalizeValue(value[key])])
+  );
 };
+const normalizeRows = (list) =>
+  (Array.isArray(list) ? list : []).map((row) => {
+    if (row === null || typeof row !== "object") return normalizeValue(row);
+    const normalized = { ...row };
+    if (row.group === true) normalized.config = normalizeRows(row.config);
+    if (row.id === "skill-filesystem" && row.config !== null && typeof row.config === "object") {
+      normalized.config = { ...row.config, customSkillDirs: ["<已单独验证的上下文技能目录>"] };
+    }
+    return normalizeValue(normalized);
+  });
+const serializeRows = (list) => JSON.stringify(normalizeRows(list));
 if (existsSync(compositionPath)) {
   try {
     const entries = yaml.load(readFileSync(compositionPath, "utf8"), { schema: entryListSchema });
     check(Array.isArray(entries) && entries.length > 0, "FPGA 预设组装是可解析的非空 entry list");
-    const sourceRows = flattenRows(entries);
-    const patchRows = flattenRows(presetRow?.config?.plugins);
+    const sourceRows = serializeRows(entries);
+    const patchRows = serializeRows(presetRow?.config?.plugins);
+    const driftProbe = structuredClone(entries);
+    const driftRow = driftProbe.find((row) => row?.group !== true && row?.config !== undefined);
+    if (driftRow !== undefined) driftRow.config.__comparison_probe__ = true;
     check(
-      sourceRows.join("\n") === patchRows.join("\n"),
-      "补丁里的预设行与 agent.cordis.yml 完全一致(防止两边漂移)",
-      `源 ${sourceRows.length} 行 / 补丁 ${patchRows.length} 行`
+      driftRow !== undefined && serializeRows(entries) !== serializeRows(driftProbe),
+      "完整一致检查能捕获叶子 config 漂移"
+    );
+    check(
+      sourceRows === patchRows,
+      "补丁里的完整预设配置与 agent.cordis.yml 一致(技能目录表达式另行验证)",
+      `源 ${entries.length} 个顶层项 / 补丁 ${presetRow?.config?.plugins?.length ?? 0} 个顶层项`
     );
   } catch (error) {
     check(false, "FPGA 预设组装解析失败", error.message);
@@ -202,6 +222,34 @@ check(
   `技能目录就是预设自己的 skills/(实际 ${String(skillDir)})`
 );
 
+// dsh-skill-filesystem 首次加载只返回 SKILL.md；内容过长时会先经过 8192 字符的工具结果裁剪。
+// 核心说明因此要留出渲染包装余量，细节拆进 SKILL.md 显式链接的 references/*.md，按需再读。
+const SKILL_BODY_CODEPOINT_LIMIT = 7000;
+const readSkillCore = (skill) => readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+const linkedSkillReferences = (text) => [
+  ...new Set(
+    [...text.matchAll(/\[[^\]]+\]\((references\/[^)\s]+\.md)\)/gu)].map((match) => match[1])
+  )
+];
+const listReferenceMarkdown = (dir, prefix = "references", out = []) => {
+  if (!existsSync(dir)) return out;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const relativePath = `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) listReferenceMarkdown(join(dir, entry.name), relativePath, out);
+    else if (entry.isFile() && entry.name.endsWith(".md")) out.push(relativePath);
+  }
+  return out.sort();
+};
+const readSkillBundle = (skill) => {
+  const core = readSkillCore(skill);
+  const references = linkedSkillReferences(core)
+    .filter((relativePath) => !relativePath.includes("..") && !relativePath.includes("\\"))
+    .map((relativePath) => join(skillDir, skill, ...relativePath.split("/")))
+    .filter((file) => existsSync(file) && statSync(file).isFile())
+    .map((file) => readFileSync(file, "utf8"));
+  return [core, ...references].join("\n\n");
+};
+
 // ── 作用域:这些东西只在 FPGA 模式下生效,别的模式一点都别沾 ──────────────────
 //
 // 用户的原话:"一定是开发模式采用这些东西,不是开发模式不要用这些"。
@@ -257,7 +305,9 @@ for (const skill of skillNames) {
     check(false, `${skill} 缺 SKILL.md`);
     continue;
   }
-  const block = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(readFileSync(file, "utf8"))?.[1];
+  const core = readSkillCore(skill);
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/u.exec(core);
+  const block = frontmatter?.[1];
   if (block === undefined) {
     check(false, `${skill} 缺 YAML frontmatter(会被静默忽略)`);
     continue;
@@ -277,7 +327,7 @@ for (const skill of skillNames) {
     /^fpga-(module|project)-/u.test(skill),
     `${skill} 带级别前缀(module- 或 project-)`
   );
-  const heading = /^# ([a-z-]+):/mu.exec(readFileSync(file, "utf8"))?.[1];
+  const heading = /^# ([a-z-]+):/mu.exec(core)?.[1];
   check(heading === skill.replace(/^fpga-/u, ""), `${skill} 的一级标题与技能名一致(实际 ${String(heading)})`);
   check(typeof meta?.description === "string" && meta.description.length > 0, `${skill} 写了 description(否则加载器直接忽略)`);
   // 触发场景要写在 description 里(那张能力地图靠它选技能),不能只写"某阶段之后使用"
@@ -288,9 +338,43 @@ for (const skill of skillNames) {
   check(
     // `阶段 ?[0-9]` 收的是"阶段 0 / 阶段 2"这种编号标题 —— 它暗示存在一条编号流水线,
     // 而技能是按需取用的能力(各技能的一级标题统一写成 `名字:做什么`)。
-    !/第一阶段|第二阶段|阶段 ?[0-9]|下一阶段|一口气写完|这一关过了才进|流程必须跑完并通过确认|OBSERVE_ONLY/u.test(readFileSync(file, "utf8")),
+    !/第一阶段|第二阶段|阶段 ?[0-9]|下一阶段|一口气写完|这一关过了才进|流程必须跑完并通过确认|OBSERVE_ONLY/u.test(core),
     `${skill} 里没有残留的"阶段链/硬门禁"口气`
   );
+  const bodyCodepoints = Array.from(core.slice(frontmatter?.[0].length ?? 0)).length;
+  check(
+    bodyCodepoints <= SKILL_BODY_CODEPOINT_LIMIT,
+    `${skill} 的核心正文不超过 ${String(SKILL_BODY_CODEPOINT_LIMIT)} 个 Unicode 字符(实际 ${String(bodyCodepoints)})`
+  );
+  const references = linkedSkillReferences(core);
+  if (skill === "fpga-module-rtl" || skill === "fpga-module-verif") {
+    check(references.length >= 2, `${skill} 把大段细节拆到至少 2 份显式引用的 references/*.md`);
+  }
+  const invalidReferences = references.filter(
+    (relativePath) =>
+      relativePath.includes("..") ||
+      relativePath.includes("\\") ||
+      !existsSync(join(skillDir, skill, ...relativePath.split("/"))) ||
+      !statSync(join(skillDir, skill, ...relativePath.split("/"))).isFile()
+  );
+  check(
+    invalidReferences.length === 0,
+    `${skill} 显式链接的参考文件都存在且是普通文件(异常:${invalidReferences.join("、") || "无"})`
+  );
+  const orphanReferences = listReferenceMarkdown(join(skillDir, skill, "references")).filter(
+    (relativePath) => !references.includes(relativePath)
+  );
+  check(
+    orphanReferences.length === 0,
+    `${skill} 的 references/*.md 都能从 SKILL.md 到达(孤儿:${orphanReferences.join("、") || "无"})`
+  );
+  for (const relativePath of references.filter((item) => !invalidReferences.includes(item))) {
+    const size = Array.from(readFileSync(join(skillDir, skill, ...relativePath.split("/")), "utf8")).length;
+    check(
+      size <= SKILL_BODY_CODEPOINT_LIMIT,
+      `${skill}/${relativePath} 不超过 ${String(SKILL_BODY_CODEPOINT_LIMIT)} 个 Unicode 字符(实际 ${String(size)})`
+    );
+  }
 }
 
 // ── 级别划分清楚:模块 5 个 / 工程 11 个 ─────────────────────────────────────
@@ -306,7 +390,7 @@ check(projectSkills.length === 11, `工程级 11 个(实际 ${projectSkills.leng
 // 工程级各篇都要有「前置」与「产物」两节:前置条件不该散在正文里,
 // 产物是这一环节的交付物。审计那一篇按用户口径删掉了(验证已经覆盖它),所以不在这里。
 for (const skill of projectSkills) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   check(/^## 前置/mu.test(text), `${skill} 有「前置」一节`);
   check(/^## 产物/mu.test(text), `${skill} 有「产物」一节`);
   // `module-*` 命令的参数是**模块根**,不是用户指定工程根 —— 两类根各有独立锚点与目录树,
@@ -319,7 +403,7 @@ for (const skill of projectSkills) {
 // (verify_hw_devices 是给 eFUSE 器件做掩码比对的,不是通用回读)。
 // 所以这里钉一条:那条不存在的写法不许再出现在任何技能里。
 for (const skill of skillNames) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   // 允许在同一行里**否定**它(说明"没有这个选项"),所以要求它不出现在肯定语境里:
   // 出现的行若带"没有/不是/错"等否定词,视为纠正性说明,放行。
   const lines = text.split("\n").filter((line) => /program_hw_devices\s+-verify/u.test(line));
@@ -337,7 +421,7 @@ for (const skill of skillNames) {
 // 原来是六步(测试平台与数据 / 比对各一步);仿真与比对合成 verif 环节后合并成第五步 ——
 // 两件事本来是一件事,分两步问会出现"没有比对对象却先定了测试平台"这种半截结论。
 // 顺序错了等于第一句话就问偏(比如先问功能、把方向与器件留到最后),所以按位置钉住。
-const specSkill = readFileSync(join(skillDir, "fpga-module-spec", "SKILL.md"), "utf8");
+const specSkill = readSkillBundle("fpga-module-spec");
 const STEPS = ["第一步", "第二步", "第三步", "第四步", "第五步"];
 const stepAt = STEPS.map((step) => specSkill.indexOf(`## ${step}:`));
 check(
@@ -398,7 +482,7 @@ check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
 
 // 编写要有依据:接口照 spec、路径照 flow.md 的图、参数照参考资料 —— 少哪一条,写出来的东西
 // 就没人能对着图复核(用户指出过:原来这一环根本没写"照着什么写")
-const rtlText = readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8");
+const rtlText = readSkillBundle("fpga-module-rtl");
 check(/flow\.md/u.test(rtlText), "rtl 技能写明实现路径照 spec/flow.md(不是凭想象写)");
 check(/参考资料/u.test(rtlText), "rtl 技能写明参数与算法照 spec 的「参考资料」");
 check(
@@ -411,7 +495,7 @@ check(
 );
 for (const reader of ["fpga-module-rtl", "fpga-module-verif"]) {
   check(
-    /参考资料/u.test(readFileSync(join(skillDir, reader, "SKILL.md"), "utf8")),
+    /参考资料/u.test(readSkillBundle(reader)),
     `${reader} 会去 spec 的「参考资料」取参照(参考链不能断)`
   );
 }
@@ -420,7 +504,7 @@ for (const reader of ["fpga-module-rtl", "fpga-module-verif"]) {
 check(/flow\.md/u.test(specSkill), "模块级写明流程图单独存成 spec/flow.md(不只塞在 spec.md 里)");
 check(/setup-scaffold\.mjs/u.test(specSkill), "模块级写明用自带脚本一次性建骨架");
 check(/--dry-run/u.test(specSkill), "模块级提示先 --dry-run 看一眼");
-const projectSpec = readFileSync(join(skillDir, "fpga-project-spec", "SKILL.md"), "utf8");
+const projectSpec = readSkillBundle("fpga-project-spec");
 check(/doc\/flow\.md/u.test(projectSpec), "工程级写明框图单独存成 doc/flow.md");
 check(/setup-scaffold\.mjs/u.test(projectSpec), "工程级写明用自带脚本建骨架");
 check(
@@ -429,9 +513,7 @@ check(
   "工程级把用户指定目录直接作为根,带 --kind project,并明确拒绝旧 --modules"
 );
 check(existsSync(join(presetDir, "tools", "setup-scaffold.mjs")), "自带 setup-scaffold.mjs 确实在包里");
-// 模式规则的**唯一真相源**是包根 README 里标记的那一段:骨架(建模块/工程时)从那里抽出来落成
-// `<根>/AGENTS.fpga.md`。标记没了或正文空了,落盘出来就是空的 —— 必须在这里拦住。
-// 规则正文现在独立成 preset 内的模板文件(不再是 README 兼职当运行时源)。
+// 模式规则的唯一真相源是 preset 内的模板文件；骨架直接复制它。
 const rulesSource = join(ROOT, "presets", "fpga-workbench", "workspace", "AGENTS.fpga.md");
 check(existsSync(rulesSource), `模式规则模板存在:${rulesSource}`);
 // 设置页自检按 REQUIRED_PRESET_FILES 核对"按名字读的固定文件"。这份清单必须与 setup-scaffold
@@ -444,6 +526,33 @@ check(
 const rulesBody = existsSync(rulesSource) ? readFileSync(rulesSource, "utf8") : "";
 check(rulesBody.includes("FPGA 开发模式的工作区规则"), "规则区块里有正文(不是空壳)");
 check(rulesBody.split("\n").length >= 10, `规则区块够实(${rulesBody.split("\n").length} 行)`);
+const readmeText = readFileSync(join(ROOT, "README.md"), "utf8");
+const compositionText = readFileSync(compositionPath, "utf8");
+const patchText = readFileSync(patchPath, "utf8");
+const ruleConsumers = [readmeText, compositionText, patchText, readSkillCore("fpga-module-rtl"), readSkillCore("fpga-module-spec")];
+check(
+  ruleConsumers.every((text) => !text.includes("fpga-mode-rules")),
+  "README、人设与技能不再引用已废弃的 fpga-mode-rules 标记"
+);
+check(
+  compositionText.includes("presets/fpga-workbench/workspace/AGENTS.fpga.md") &&
+    patchText.includes("presets/fpga-workbench/workspace/AGENTS.fpga.md"),
+  "编辑源与运行时补丁都点名唯一规则源 workspace/AGENTS.fpga.md"
+);
+check(
+  /原样复制/u.test(rulesBody) && !/抽出来|抽取/u.test(rulesBody),
+  "规则源说明骨架会原样复制文件"
+);
+check(
+  !/开发自检目录 `tools\/` 与 `\.tmp\/` 也会被一起取下来/u.test(readmeText) &&
+    !/`README\.md`\(`files` 白名单\)/u.test(readmeText),
+  "README 准确描述 git 安装内容与 npm 自动包含 README 的行为"
+);
+check(
+  readmeText.includes("docs/DEVELOPMENT.md") && !readmeText.includes("## 关于界面(已放弃的方案,留作记录)"),
+  "README 把开发自检细节与历史方案移到 docs/DEVELOPMENT.md"
+);
+check(!/^\s*#/mu.test(patchText), "运行时 cordis.patch.yml 不含只供维护者阅读的注释行");
 
 // 原型是 RTL 与验证共同的参考(用户明确要求):写 RTL 照它,验证拿它当 golden 来源与参考模型。
 // 仿真与比对合成 verif 之后,这两处落点没变,只是"测试平台"与"比对"归了同一篇。
@@ -455,7 +564,7 @@ check(
 );
 for (const downstream of ["fpga-module-verif"]) {
   check(
-    /原型/u.test(readFileSync(join(skillDir, downstream, "SKILL.md"), "utf8")),
+    /原型/u.test(readSkillBundle(downstream)),
     `${downstream} 去到 spec 里的原型拿参考(不然这条参考链是断的)`
   );
 }
@@ -477,20 +586,20 @@ check(!scaffoldStages.includes("timing"), "模块级不单设 timing/ 目录(综
 check(!scaffoldStages.includes("review"), "骨架不建 review/ 目录(审查是按需能力,不占目录)");
 check(!scaffoldStages.includes("sim"), "骨架不建 sim/ 目录(仿真与比对合成 verif/,测试平台不再单占一个目录)");
 check(
-  /rtl\/lint\.md/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
+  /rtl\/lint\.md/u.test(readSkillBundle("fpga-module-rtl")),
   "机械检查报告写在 rtl/lint.md"
 );
 check(
-  /<模块根>\/review\.md/u.test(readFileSync(join(skillDir, "fpga-module-review", "SKILL.md"), "utf8")),
+  /<模块根>\/review\.md/u.test(readSkillBundle("fpga-module-review")),
   "审查报告写在 <模块根>/review.md"
 );
 // 综合环节要同时管门禁与时序(用户口径);验证环节的产物落 verif/
-const synthSkillText = readFileSync(join(skillDir, "fpga-module-synth", "SKILL.md"), "utf8");
+const synthSkillText = readSkillBundle("fpga-module-synth");
 check(
   /综合门禁/.test(synthSkillText) && /时序/.test(synthSkillText),
   "综合环节同时管综合门禁与综合后时序"
 );
-const verifSkillText = readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8");
+const verifSkillText = readSkillBundle("fpga-module-verif");
 check(
   /<模块根>\/verif\/verif\.md/u.test(verifSkillText),
   "验证报告写在 verif/verif.md"
@@ -540,7 +649,7 @@ check(
 //   · 技能必须写明"跑法用设置里选中的那个仿真器走",并把调用姿势指回会话提示的已就绪段;
 //   · `vsim` 与 `-c -do` 只许出现在条件语境里(= 写的是 ModelSim/Questa 那一支)。
 //     两个方言并列写是允许的(这是脚本格式的差别),把 ModelSim 当成唯一跑法不行。
-const syssimText = readFileSync(join(skillDir, "fpga-project-syssim", "SKILL.md"), "utf8");
+const syssimText = readSkillBundle("fpga-project-syssim");
 check(/跑法用设置里选中的/u.test(syssimText), "syssim 技能写明跑法用设置里选中的那个仿真器(不写死某一个)");
 check(
   /已就绪/u.test(syssimText) && /调用姿势/u.test(syssimText),
@@ -654,7 +763,7 @@ check(
 );
 
 check(
-  /VHDL/u.test(readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8")),
+  /VHDL/u.test(readSkillBundle("fpga-module-rtl")),
   "检查技能写明 VHDL 源码不覆盖(记 NOT_APPLICABLE)"
 );
 // 判定词是给"接手的人"读的,所以文件里宣称的判定词集合必须真的覆盖所有会出现的结论 ——
@@ -683,7 +792,7 @@ const VERDICT_SETS = {
   "fpga-project-synth": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
 };
 for (const [skill, allowed] of Object.entries(VERDICT_SETS)) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   // 取的是"把判定词列得最全"的那一处:大多数写成 `结论(PASS / FAIL / …)`,
   // rtl/review 写成 `- **结论**:`PASS` / `FAIL` / …`。
   // **不能取"第一个含 ≥2 个词的候选"** —— 正文里解释某两个词的句子(PASS/BLOCKED、UNVERIFIED
@@ -706,12 +815,12 @@ for (const [skill, allowed] of Object.entries(VERDICT_SETS)) {
 }
 // 工程级**每篇都要有自己的判定词清单**(审计那一篇 2026-09-19 按用户口径删掉了:验证已经覆盖它)
 for (const skill of skillNames.filter((name) => name.startsWith("fpga-project-"))) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   check(/结论\(`PASS`/u.test(text), `${skill} 的产物写明了结论取值`);
 }
 // 集成时"模块从哪来"也要先问用户(与 rtl 的现成子模块同一条口径):用户已有一律直接用,
 // 不要集成时自己另写一个顶上 —— 那样模块自己那边的结论就对不上了。
-const integrateText = readFileSync(join(skillDir, "fpga-project-integrate", "SKILL.md"), "utf8");
+const integrateText = readSkillBundle("fpga-project-integrate");
 check(
   /模块从哪来|模块来源/u.test(integrateText) &&
     /停止并报告/u.test(integrateText) &&
@@ -730,7 +839,7 @@ check(
 const shippedTexts = [
   ["README.md", readFileSync(join(ROOT, "README.md"), "utf8")],
   ["agent.cordis.yml", readFileSync(join(presetDir, "agent.cordis.yml"), "utf8")],
-  ...skillNames.map((skill) => [`${skill}/SKILL.md`, readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")]),
+  ...skillNames.map((skill) => [`${skill}/SKILL.md`, readSkillBundle(skill)]),
 ];
 for (const [name, text] of shippedTexts) {
   const dead = ["stage-status", "汇总命令"].filter((word) => text.includes(word));
@@ -742,7 +851,7 @@ for (const [name, text] of shippedTexts) {
 // 时还不知道**跑什么** —— 真正的命令在两步之后。用户指出过这一点,所以钉两件事:
 //   · 有一节专讲"跑哪些命令、什么时候跑";
 //   · 那一节里同时出现"写完之后"与两条命令(run 名),即命令在"跑什么"这一节里被点名。
-const lintText = readFileSync(join(skillDir, "fpga-module-rtl", "SKILL.md"), "utf8");
+const lintText = readSkillBundle("fpga-module-rtl");
 check(
   /写完[\s\S]{0,16}检查/u.test(lintText) && !/随时可跑/u.test(lintText),
   "检查技能按用户节奏:写完再统一检查(不是'随时可跑'/'边写边跑')"
@@ -877,14 +986,14 @@ check(
 );
 // Vivado 系工具要写工作区外的用户目录(%APPDATA%\Xilinx):两个技能都要写明"先重定向再跑",
 // 否则综合/仿真每次都撞 `[Common 17-354]` / `tclapp::load_apps`,表现成"总要放行一次"(实测 2026-09-22)
-const synthSkillForAppData = readFileSync(join(skillDir, "fpga-module-synth", "SKILL.md"), "utf8");
+const synthSkillForAppData = readSkillBundle("fpga-module-synth");
 check(
   /\$env:APPDATA\s*=\s*"<模块根>\\synth\\\.vivado-user"/u.test(synthSkillForAppData) &&
     /为什么要重定向/u.test(synthSkillForAppData) && /例外/u.test(synthSkillForAppData) && /Tcl Store/u.test(synthSkillForAppData) &&
     /\$oldAppData = \$env:APPDATA/u.test(synthSkillForAppData) && /\} finally \{/u.test(synthSkillForAppData),
   "综合技能写明:跑 Vivado 前把 `$env:APPDATA` 重定向进模块(附为什么 / 例外 / 全局 Tcl Store 那条)"
 );
-const verifSkillText2 = readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8");
+const verifSkillText2 = readSkillBundle("fpga-module-verif");
 check(
   /\$env:APPDATA\s*=\s*"<模块根>\\verif\\\.xsim-user"/u.test(verifSkillText2) &&
     /\$oldAppData = \$env:APPDATA/u.test(verifSkillText2) && /\} finally \{/u.test(verifSkillText2),
@@ -899,7 +1008,7 @@ check(
 // XPM 的**仿真侧**要跟上:上面那几条把大家推向 XPM,那 verif 技能就得说清 `-L xpm`,
 // 以及"先用 modelsim.ini 里已编好的那份、别重编;真不行才拿原厂源码自编"——
 // 否则照着"优先 XPM"改完 RTL,第一次跑仿真就撞上未定义,而技能里只有 unisims 那一档。
-const verifText = readFileSync(join(skillDir, "fpga-module-verif", "SKILL.md"), "utf8");
+const verifText = readSkillBundle("fpga-module-verif");
 check(
   /xpm/u.test(verifText) && /-L xpm/u.test(verifText),
   "verif 技能写明 XPM 仿真要 -L xpm(与 unisims 那档同一套做法)"
@@ -925,7 +1034,7 @@ check(
   /摘要/u.test(verifText) && /--record/u.test(verifText),
   "verif 技能写明:检查也看「依据的摘要变没变」,以及 --record 怎么记"
 );
-const reviewText = readFileSync(join(skillDir, "fpga-module-review", "SKILL.md"), "utf8");
+const reviewText = readSkillBundle("fpga-module-review");
 check(
   /module-report-check\.mjs/u.test(reviewText),
   "review 技能把证据路径校验收进审查清单"
@@ -955,7 +1064,7 @@ check(
   "rtl 技能写明用 module-rtl-new.mjs 复制模板,且只替模块名"
 );
 // 路径口径统一:IP 实体写 rtl/ip/、仿真模型写 verif/ —— 不许再出现裸的 `ip/` 路径
-const bareIp = moduleSkills.filter((skill) => /`ip\//u.test(readFileSync(join(skillDir, skill, "SKILL.md"), "utf8")));
+const bareIp = moduleSkills.filter((skill) => /`ip\//u.test(readSkillBundle(skill)));
 check(bareIp.length === 0, `模块技能里没有裸的 \`ip/\` 路径(应写 rtl/ip/ 或 verif/;实际 ${bareIp.join("、") || "无"})`);
 // 技能里写的命令**名字必须自带级别前缀**(module- / project-),两级共用的不加 ——
 // 用户口径:靠名字防误用,而不是靠路径(只抄命令、没抄路径时也抄不错)。
@@ -968,7 +1077,7 @@ const projectTools = readdirSync(join(presetDir, "tools", "project"), { withFile
 const knownTools = new Set([...moduleTools, ...projectTools, "setup-scaffold.mjs"]);
 const levelProblems = [];
 for (const skill of skillNames) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   for (const match of text.matchAll(/自带命令目录>\\(?:(module|project)\\)?([a-z-]+\.mjs)/gu)) {
     const [, dir, file] = match;
     if (!knownTools.has(file)) {
@@ -995,7 +1104,7 @@ check(
 // 三个"跑命令"的模块级环节(rtl / verif / synth)结构一致:都要有「前置」与
 // 「本环节要跑的命令」两节 —— 用命令的人该在同一处找得到,而不是满篇翻。
 for (const skill of ["fpga-module-rtl", "fpga-module-verif", "fpga-module-synth"]) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   check(/^## 前置$/mu.test(text), `${skill} 有「前置」一节`);
   check(/^## 本环节要跑的命令$/mu.test(text), `${skill} 把要跑的命令集中成一节`);
 }
@@ -1021,7 +1130,7 @@ check(/流程图/u.test(persona) && /确认/u.test(persona), "提示词要求'�
 
 // 两个 spec 技能都要真的要求画图(不是只在提示词里提一句)
 for (const skill of ["fpga-module-spec", "fpga-project-spec"]) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   check(/^```mermaid$/mu.test(text), `${skill} 里有**独立的** Mermaid 围栏块(不是只在句子里提了句 mermaid)`);
   check(/流程图|框图/u.test(text), `${skill} 要求把实现思路画出来`);
   // 确认必须与"图"绑在一起(只说"确认"可能是确认别的);措辞不限,断言的是这条关系
@@ -1039,8 +1148,8 @@ for (const skill of ["fpga-module-spec", "fpga-project-spec"]) {
 // 方案 / 关键数据通路 / 用户可见的算法决策且尚未确定才要先确认图);已有批准方案里的普通实现与
 // **局部修复**直接动手,只要求读相关代码与项目约束 + 改完做聚焦验证。
 //
-// 这几条同时也把 R-09 的"唯一权威"钉住:动手规则只维护在工作区规则(README 的 fpga-mode-rules
-// 区块,骨架抽成 AGENTS.fpga.md)一处,人设与技能只引用 —— 免得「人设放宽了、技能还强制」。
+// 这几条同时也把 R-09 的"唯一权威"钉住:动手规则只维护在 workspace/AGENTS.fpga.md
+// (骨架原样复制为 AGENTS.fpga.md)一处,人设与技能只引用 —— 免得「人设放宽了、技能还强制」。
 check(/任务风险/u.test(rulesBody), "工作区规则写明门槛按任务风险判");
 // 判据必须写成**否定旧口径**的样子:"按是否新增功能判"这种正向写法才是要防的那条
 check(/不是按"是否新增功能"/u.test(rulesBody), "工作区规则写明判据不是'是否新增功能'");
@@ -1096,9 +1205,9 @@ check(
   "rtl 技能写明局部路径不要求先建 spec/flow.md、也不要求先批准流程图"
 );
 for (const skill of ["fpga-module-spec", "fpga-module-rtl"]) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   check(
-    /工作区规则第 2 条|fpga-mode-rules/u.test(text),
+    /workspace\/AGENTS\.fpga\.md[^。\n]{0,24}第 2 条|工作区规则第 2 条/u.test(text),
     `${skill} 把'先确认图'的判据指回唯一出处(不自己另立)`
   );
 }
@@ -1131,7 +1240,7 @@ check(
 );
 // 唯一权威:这张表全仓只有一份,其余技能只引用
 const tableCopies = skillNames.filter((skill) =>
-  readFileSync(join(skillDir, skill, "SKILL.md"), "utf8").includes(STATUS_HEADER)
+  readSkillBundle(skill).includes(STATUS_HEADER)
 );
 check(
   tableCopies.length === 1 && tableCopies[0] === "fpga-module-verif",
@@ -1142,7 +1251,7 @@ const verdictRefSkills = Object.keys(VERDICT_SETS).filter(
   (skill) => skill !== "fpga-module-verif" && skill !== "fpga-module-review"
 );
 for (const skill of verdictRefSkills) {
-  const text = readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
+  const text = readSkillBundle(skill);
   check(
     /fpga-module-verif[^。\n]{0,12}状态表|状态表[^。\n]{0,24}唯一权威/u.test(text),
     `${skill} 提到判定词时引用唯一权威状态表(不各自复述定义)`
@@ -1170,7 +1279,7 @@ check(
 
 // F-08:发布的准入与集成的正式验收是同一条口径 —— 上游"都是 PASS,或是有依据的 NOT_APPLICABLE"。
 // 旧文案"上游都有结论、而且不是 FAIL"把 BLOCKED / UNVERIFIED 也放进了"有结论",比集成那篇松。
-const releaseText2 = readFileSync(join(skillDir, "fpga-project-release", "SKILL.md"), "utf8");
+const releaseText2 = readSkillBundle("fpga-project-release");
 check(
   /都是 `PASS`[\s\S]{0,40}有依据的 `NOT_APPLICABLE`/u.test(releaseText2),
   "发布技能的前置与集成同口径(上游都是 PASS,或是有依据的 NOT_APPLICABLE)"

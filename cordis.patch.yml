@@ -1,6 +1,3 @@
-# 本插件的 profile 层补丁：挂载宿主半侧，并按 DSH 0.1.7-rc.2 的
-# @deepseek-ai/dsh-agent-preset 行格式把「FPGA 开发模式」注册进 agent-preset-registry。
-# 官方 registry 不扫描 .agent-presets 目录；预设必须在组合里有声明行。
 
 - insert:
     - id: fpga-workbench
@@ -13,34 +10,8 @@
         description: 'FPGA 模块与工程开发会话:规格、RTL、验证、综合、集成、实现、时序、上板与证据归档。能力按需使用、可反复回跳,不自动推进流程。'
         order: 50
         plugins:
-          # The `standard` agent preset: the full coding agent, mounted once per process.
-          #
-          # This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
-          # standing scope; every session naming it joins by scope parentage, so the
-          # tools and prompt sections registered here cover each joined agent while a
-          # session's own state stays keyed per Session/Agent inside the plugins. The
-          # host composition (`base.cordis.yml` + `web.cordis.yml`) keeps everything a
-          # preset must not own: the registries themselves, the sandbox and approval
-          # stack, persistence, and the model route.
-          #
-          # A service row here MUST sit inside a group carrying an `isolate` realm.
-          # Without one it publishes into the root realm, where it is process-global —
-          # another preset publishing the same name collides, and a host reader would
-          # resolve one preset's instance for every session; `dsh-agent-presets` rejects
-          # that at mount. `true` means an entry-local realm: this standing mount's own
-          # private instance, apart from every other preset's. (A shared label does NOT
-          # pool instances — `provide()` throws on the second registration under the
-          # same realm symbol; labels join REALMS, and are not what this file needs.)
 
-          # ── identity ────────────────────────────────────────────────────────────────
 
-          # The preset's own persona, shadowing the deployment default for this agent.
-          # `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
-          #
-          # 本文件其余部分是从官方 standard 预设复制来的组装(工具行、子代理、工作流等),
-          # 目的只是让 FPGA 开发模式会话拿到与常规会话相同的能力底座 —— 预设之间不继承,
-          # 不复制就会缺工具。DSH 升级后 standard 若增删行,这份与 cordis.patch.yml 内联的
-          # 行集合都要同步;tools/check-preset-root.mjs 会逐行比对两者并报出差异。
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
@@ -75,7 +46,7 @@
 
                 - **动手规则的唯一出处是本模式工作区规则**:动手前先看清现状、方案要不要先出图确认、局部
                   问题怎么闭环、结论与证据怎么留 —— 都写在骨架落下的 `<用户指定工程目录>/AGENTS.fpga.md` 里(正文
-                  来自包内 README 的 `fpga-mode-rules` 区块)。**下面几条只是它的引用与摘要,不要在这里另立
+                  原样复制自包内 `presets/fpga-workbench/workspace/AGENTS.fpga.md`)。**下面几条只是它的引用与摘要,不要在这里另立
                   一套**;项目里还没有那份文件时,按 `fpga-module-spec` / `fpga-module-rtl` 等技能里各自那条
                   判据办。
                 - **要不要先出图确认,按任务风险判**(不是按"有没有新功能";工作区规则第 2 条):重大架构 /
@@ -100,12 +71,6 @@
                   那一行,接手时长任务的人读这一行就知道上个环节停在哪;判定词的含意见验证技能
                   `fpga-module-verif` 的**状态表**(唯一权威,别处只引用、不各自复述);短任务不必。
 
-          # 工作区指令:宿主按候选名发现 AGENTS.md 一类文件并注入。
-          #
-          # 本模式把 `AGENTS.fpga.md` 排在最前(用户口径,2026-09-19):它是**本模式自有**的工作区指令,
-          # 只在本模式下被加载 —— 这样项目里那份"按项目改的模式规则"不用挤进用户的 AGENTS.md。
-          # 候选名给全(不合并默认值,给了就以给的为准),否则 AGENTS.md / CLAUDE.md 会**不再被加载**。
-          # `.local.md` 叠加层没动,仍走默认。
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
@@ -115,32 +80,11 @@
                 - AGENTS.md
                 - CLAUDE.md
 
-          # ── 本机工具链(仅本模式) ───────────────────────────────────────────────────
 
-          # 「用户填的那些路径真的被用起来」的落点:注册一段**会话作用域**的提示,把设置页里
-          # 已核对过存在性的工具路径与调用姿势交给本模式的 agent,它就不必去 where/PATH 猜。
-          #
-          # 为什么挂在这里而不是插件行(profile 层):那层作用域是全局,普通会话也会看到 FPGA
-          # 工具链信息 —— 与"不影响正常会话"冲突。预设行只在命名了本预设的会话里挂载。
-          #
-          # name 是"包名 + 子路径":预设行里的裸名从 profile 解析(dsh-agent-presets 的
-          # PresetTree.import 用 harnessBase 覆盖预设目录作为解析基准),本包就装在 profile 的
-          # node_modules 下,子路径 ./mode 在 package.json 的 exports 里声明。
-          #
-          # ⚠️ 名字写错不会报错,只会让 discovery 把本预设判成 broken、在选择器里整个消失 ——
-          # tools/check-preset-root.mjs 断言这一行能被解析到。
           - id: fpga-workbench-mode
             name: 'dsh-fpga-workbench/mode'
 
-          # ── shell ───────────────────────────────────────────────────────────────────
 
-          # `shell-env` stays in the HOST composition: `apps/cli/src/web.ts` injects it to
-          # publish `DSH_WEB_URL`/`DSH_WEB_MODE`, and a host row that injects a service is
-          # the criterion for host-plane ownership — injection resolves before any session
-          # exists, so there is no agent to key by. Behind a preset realm those variables
-          # never reached the model's shell at all. Both shell tools consume the host
-          # registry from here; their executors (`bash-sandbox`/`pwsh-sandbox`) are
-          # host-plane too.
           - id: tool-bash
             name: '@deepseek-ai/dsh-tool-bash'
             disabled: !!js process.platform === 'win32'
@@ -149,10 +93,7 @@
             name: '@deepseek-ai/dsh-tool-pwsh'
             disabled: !!js process.platform !== 'win32'
 
-          # ── filesystem ──────────────────────────────────────────────────────────────
 
-          # Both register into the host `tools` registry and provide nothing, so
-          # they need no realm. The `fs` service and its policy stay in the host.
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
 
@@ -161,34 +102,11 @@
             config:
               sampleOverCapGlobResults: false
 
-          # ── background jobs ────────────────────────────────────────────────────────
 
-          # Only the model-facing controls. The task REGISTRY stays on the host plane:
-          # its producers sit outside any realm this file could put it in — `tool-bash`
-          # above resolves it with `ctx.get`, and an entry-local realm here is invisible
-          # to every sibling row, so `run_in_background` would answer "background jobs
-          # unavailable" while these controls sat in the catalog. The registry is keyed by
-          # owning agent anyway, so one host instance serves every session. What a preset
-          # chooses is whether its agent can collect and stop background work at all.
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
 
-          # ── skills ──────────────────────────────────────────────────────────────────
 
-          # The skill REGISTRY lives in the host composition and is layered per scope:
-          # these rows register into THIS preset's layer of it, so they need no realm.
-          # `skill-filesystem` contributes local-root discovery for agents on this preset, and
-          # `tool-skill` gives them the catalog and loader; the merged catalog also
-          # carries whatever the deployment registered globally (repository plugins).
-          #
-          # 本预设自己还带一份技能目录(presets/fpga-workbench/skills/):它只在本模式可见,
-          # 因为下面那行把它追加进 customSkillDirs。(includeDefaultRoots 保持默认的 true:
-          # 你的工作区技能与用户技能在本模式下照常可见,这里是"追加"而不是"替换"。)
-          #
-          # ⚠ 路径不能写成相对 `skills/`:这份声明在补丁里(包根),而 @deepseek-ai/dsh-agent-preset
-          # 在挂载时还会用 registry 的 baseUrl 重新求值 —— 相对路径在两种上下文里都指不到包内技能
-          # (实测:包根基准 → <包>/skills,registry 基准 → dsh-web-app/skills,两个目录都不存在,
-          # 技能静默消失)。所以优先按 profileContext.dir 拼到已装包,取不到才退回"包根 + 完整相对路径"。
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
             config:
@@ -198,21 +116,14 @@
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
 
-          # ── goals ───────────────────────────────────────────────────────────────────
 
-          # The goal service and session driver stay on the host plane, where the Gateway
-          # can resolve them. The human command and model-facing tool register into this
-          # preset's scoped layers.
           - id: command-goal
             name: '@deepseek-ai/dsh-command-goal'
 
           - id: tool-goal
             name: '@deepseek-ai/dsh-tool-goal'
 
-          # ── plan mode ───────────────────────────────────────────────────────────────
 
-          # Plan state is per-agent by nature, so an entry-local realm is not a
-          # workaround here — it is the correct lifetime.
           - id: planning
             name: cordis:group
             group: true
@@ -235,17 +146,7 @@
 
                         When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
 
-          # ── compaction ──────────────────────────────────────────────────────────────
 
-          # `compaction-basic` reads `toolResultPrune` through `ctx.get`, so the pruner must
-          # share this realm rather than sit outside it.
-          #
-          # `tokenMeter` is deliberately NOT in this realm: the meter stays on the HOST
-          # plane, and the rows here resolve that one instance. It takes no configuration,
-          # keys every fold by Session, and owns the context-meter projection units the
-          # browser reads for every session — behind a realm those units would come and go
-          # with whichever presets happen to be mounted. What a preset chooses is whether
-          # its agent compacts at all, which is `compaction-basic` below.
           - id: compaction
             name: cordis:group
             group: true
@@ -266,17 +167,7 @@
                   headChars: 4096
                   tailChars: 1024
 
-          # ── delegation and workflows ────────────────────────────────────────────────
 
-          # The `subagents` registry and its spawn/fork backends live in the HOST
-          # composition: the registry is a process singleton whose cross-session queries
-          # the api-proxy serves to the browser, and a provider name may only be
-          # registered once. This preset contributes the delegation TOOLS, which resolve
-          # that host registry.
-          #
-          # `workflows` is different — nothing outside an agent reads it — so every row
-          # that reaches it shares one entry-local realm here, and a consumer left
-          # outside would resolve a host registry this preset does not populate.
           - id: delegation
             name: cordis:group
             group: true
@@ -297,10 +188,6 @@
                   modelSelectionSettings: true
                   backgroundMode: continuable
 
-              # Fork omits model selection so provider/model stay equal to the parent and
-              # the inherited history remains eligible for KV Cache reuse. This preset
-              # keeps fork continuable; parent and child inherit the same messaging tool,
-              # while the parent id and return guidance follow the inherited history.
               - id: tool-subagent-fork
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
@@ -308,10 +195,6 @@
                   toolName: subagent_fork
                   backgroundMode: continuable
 
-              # Production dsh does not install these optional providers. Install the
-              # matching Bundle in this Profile and restart the Host, then copy this
-              # preset and remove `disabled` from the matching tool row. Host availability
-              # alone grants no tool.
               - id: tool-subagent-codex
                 name: '@deepseek-ai/dsh-tool-subagent'
                 disabled: true
@@ -345,7 +228,6 @@
                   subagentProvider: spawn
                   maxRounds: 64
 
-          # ── remaining model-facing rows ─────────────────────────────────────────────
 
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
@@ -355,8 +237,6 @@
             config:
               allowParallelInProgress: true
 
-          # The `web` service and its search provider stay in the host composition; only
-          # the model-facing tool is per-session.
           - id: tool-web
             name: '@deepseek-ai/dsh-tool-web'
             config:
@@ -366,7 +246,6 @@
           - id: present
             name: '@deepseek-ai/dsh-tool-present'
 
-          # 当前 standard 预设保留插件管理器工具行,但默认关闭,由用户在预设层显式启用。
           - id: tool-plugin-manager
             name: '@deepseek-ai/dsh-plugin-manager/tools'
             disabled: true

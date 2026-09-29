@@ -1,6 +1,6 @@
 // 检查补丁文件的字节是否真的是合法 UTF-8,以及形状是否是纯模式插件该有的样子。
 //
-// 起因一:pwsh 打印 cordis.patch.yml 时中文注释全是乱码。若文件里真有坏字节,合并补丁时
+// 起因一:pwsh 打印 cordis.patch.yml 时中文内容全是乱码。若文件里真有坏字节,合并补丁时
 // YAML 解析会失败,而「空文件或坏文件会让启动失败」是 DSH 的明确行为。
 //
 // 起因二(更实际):DSH 0.1.7-rc.2 已移除 `agent-presets` 补丁行,由宿主的新 preset registry
@@ -37,7 +37,7 @@ try {
 
 if (text !== null) {
   check(!text.includes("\uFFFD"), "没有替换字符 U+FFFD(乱码的标志)");
-  check(text.includes("本插件"), "中文注释可正确解码");
+  check(text.includes("FPGA 开发模式"), "中文配置内容可正确解码");
   console.log(`文件 ${bytes.length} 字节,${text.split("\n").length} 行`);
 }
 

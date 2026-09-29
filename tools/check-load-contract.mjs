@@ -33,8 +33,9 @@ check(manifest.dsh?.manifestVersion === 1, `清单声明 dsh.manifestVersion = 1
 check(
   manifest.dsh?.compatibility?.dsh === "^0.1.7-rc.2 || ^0.2.0-rc.1" &&
     manifest.dsh?.compatibility?.dshReleases?.["0.1.7-rc.2"] === "compatible" &&
-    manifest.dsh?.compatibility?.dshReleases?.["0.2.0-rc.1"] === "compatible",
-  "清单声明兼容 DSH 0.1.7-rc.2 与 0.2.0-rc.1"
+    manifest.dsh?.compatibility?.dshReleases?.["0.2.0-rc.1"] === "compatible" &&
+    manifest.dsh?.compatibility?.dshReleases?.["0.2.0-rc.2"] === "compatible",
+  "清单声明兼容 DSH 0.1.7-rc.2、0.2.0-rc.1 与 0.2.0-rc.2"
 );
 check(
   Array.isArray(manifest.dsh?.client?.inject) &&

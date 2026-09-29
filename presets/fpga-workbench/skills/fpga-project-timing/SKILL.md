@@ -1,6 +1,6 @@
 ---
 name: fpga-project-timing
-description: 判断 FPGA 工程时序是否收敛时用:读布局布线后(post-route)时序,看 WNS/TNS/违例与未约束路径;满足且有裕量时在底线之上再提高一些。与模块级综合后估计不同。结果写 doc/timing.md。
+description: 判断 FPGA 工程 post-route 时序是否收敛时用:检查 WNS/TNS、违例路径和未约束路径,区分设计与约束问题。只做时序判定,结果写 doc/timing.md。
 ---
 
 # project-timing:工程级时序

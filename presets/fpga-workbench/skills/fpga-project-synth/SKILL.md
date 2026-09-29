@@ -1,6 +1,6 @@
 ---
 name: fpga-project-synth
-description: 在 FPGA 工程里跑综合时用:在 prj/ 下 Vivado 工程做 synthesis,看能否综合过、资源与时序摘要;综合后先看时序,满足要求再在底线之上提高一些。布局布线见 fpga-project-impl。结果写 doc/synth.md。
+description: 对 prj/ 中的 FPGA 工程执行综合时用:检查能否综合、资源占用和综合后时序摘要。只负责 synthesis;布局布线与 bitstream 交给 fpga-project-impl,结果写 doc/synth.md。
 ---
 
 # project-synth:工程综合

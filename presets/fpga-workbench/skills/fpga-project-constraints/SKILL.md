@@ -1,6 +1,6 @@
 ---
 name: fpga-project-constraints
-description: 在给 FPGA 工程写或核对约束与管脚时用:时钟约束、I/O 管脚分配(对着 sch/ 里的原理图逐条核)、IO 标准与电平、时序例外(false path / multicycle 并写明理由)。约束文件放 xdc/,报告写 doc/constraints.md。管脚或电平出错会损伤板子,故必须逐条核过才允许上板。
+description: 编写或核对 FPGA 工程的时钟、I/O 管脚、电平标准和时序例外时用。管脚以 sch/ 为依据,上板前逐条核对;约束放 xdc/,结果写 doc/constraints.md。
 ---
 
 # project-constraints:约束与管脚

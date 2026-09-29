@@ -61,7 +61,7 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 
 官方 DeepSeek Harness Desktop `0.2.0-rc.2`:在侧边栏的「插件」页安装本仓库的绝对路径
 `C:\Work\dsh-fpga-workbench`，更新后重启桌面端，再新建会话选择「FPGA 开发模式」。
-插件声明同时保留对 DSH `0.2.0-rc.1` 与 `0.1.7-rc.2` 的兼容。插件自身的 `0.4.1` 是独立版本号，
+插件声明同时保留对 DSH `0.2.0-rc.1` 与 `0.1.7-rc.2` 的兼容。插件自身的 `0.4.2` 是独立版本号，
 不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本，
 不要用旧的全局命令更新官方桌面端的 profile。
 
@@ -83,7 +83,7 @@ dsh plugin --profile desktop add git+ssh://git@github.com/fsk2142/dsh-fpga-workb
 1. **不需要构建步骤**。`lib/` 里是可执行的 JS,没有编译产物 —— 包直接就能跑,
    所以仓库里没有 `prepare` / `dist`。git 装法取的是仓库中的**已跟踪内容**；`tools/` 会带上,
    本地且已忽略的 `.tmp/` 不会带上。`tools/` 只用于开发自检,不参与插件加载。
-2. **要指定分支或标签时**在地址后面加 `#`:`...#v0.4.1` 或 `...#main`。
+2. **要指定分支或标签时**在地址后面加 `#`：例如 `...#main`；仓库发布 tag 后也可写 `...#<tag>`。
    不打标签就跟着 `main` 走,升级时重新 `add` 一次即可。
 3. `pnpm pack` 打出来的 tarball包含 `files` 白名单中的 `lib` / `presets` / `cordis.patch.yml` /
    `icon.svg`,以及 npm 自动加入的 `package.json` / `README.md`；发布包不带仓库根 `tools/` 与 `docs/`。
@@ -389,16 +389,16 @@ fixture 规则与历史原因见 [`docs/DEVELOPMENT.md`](https://github.com/fsk2
   | 技能 | 干什么 | 结果落在哪 |
   |---|---|---|
   | `fpga-project-spec` | 工程需求 + 架构 + 模块清单表 + 器件工程选择 + IP 策略 | `doc/spec.md` + `doc/flow.md` |
-  | `fpga-project-rtl` | 工程专用 RTL、顶层、IP/BD 与简单 sim | `src/rtl/`、`ip/`、`src/sim/`；结论 `doc/rtl.md` |
+  | `fpga-project-rtl` | 工程专用 RTL、顶层、IP/BD 与简单 sim；BD 保留复现脚本或人工集成步骤 | `src/rtl/`、`ip/`、`src/sim/`；结论 `doc/rtl.md` |
   | `fpga-project-lint` | 工程 RTL 与仿真文件的机械/厂商静态检查 | `doc/lint.md` |
-  | `fpga-project-integrate` | 顶层集成:时钟复位分配、接口对接、加入厂商工程 | `doc/integrate.md` |
+  | `fpga-project-integrate` | 只把已有源接进顶层:时钟复位分配、接口对接、加入厂商工程 | `doc/integrate.md` |
   | `fpga-project-constraints` | 约束与管脚:对原理图逐条核、IO 电平、时序例外写理由 | `xdc/` + `doc/constraints.md` |
-  | `fpga-project-syssim` | 工程级仿真；只从已就绪工具中使用设置所选仿真器 | `sim/` + `doc/syssim.md` |
+  | `fpga-project-syssim` | 工程级仿真；复用可信证据后按任务补覆盖，使用设置所选仿真器 | `sim/` + `doc/syssim.md` |
   | `fpga-project-synth` | 工程综合、资源与综合后时序摘要 | `prj/` + `doc/synth.md` |
-  | `fpga-project-impl` | 布局布线 + DRC + bitstream | `prj/`、`bit/` + `doc/impl.md` |
+  | `fpga-project-impl` | `route_design` + DRC；用户需要时再生成并归档 bitstream | `prj/`、按需 `bit/` + `doc/impl.md` |
   | `fpga-project-timing` | **post-route** 时序(与模块级 post-synth 不同) | `doc/timing.md` |
   | `fpga-project-board` | 上板:下载、ILA/VIO、回读数据比对、固化 Flash | `bit/` + `doc/board.md` |
-  | `fpga-project-release` | 发布归档:判据是"照着归档能重建同一版设计" | `doc/release.md` |
+  | `fpga-project-release` | 仅在用户明确要求时发布归档；判据是"照着归档能重建同一版设计" | `doc/release.md` |
 
   这些是可反复跳转的工程能力,不是编号流水线；工程报告平铺在 `doc/`,工具生成内容留在 `prj/`。
 - ✅ 模板:分类模板共用一座可选模板库(**逻辑分类数 ≠ 用户目录数**:工程综合/工程约束与模块版共享目录),模块与工程能力卡可以分别选择其中不同的一份；旧六份平面模板已移除

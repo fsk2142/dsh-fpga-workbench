@@ -1,6 +1,6 @@
 ---
 name: fpga-module-synth
-description: 综合 FPGA 模块并判定"综合门禁 + 综合后时序"能否通过时用:建模块工程、跑综合、解释综合报错、看资源占用与估时、判断综合后时序是否干净(constraint_status、missing_clock / unconstrained_path / no_clock 计数、CDC 计数)、解释 WNS/TNS 或"没有时钟"。支持探索性评估(只记录、不当门禁);模块级只到综合,布局布线与板级签核属工程级。
+description: 综合 FPGA 模块并检查综合门禁与综合后时序时用:运行综合、解释报错,查看资源、时钟、未约束路径、CDC 与 WNS/TNS。模块级止于 post_synth;布局布线和板级签核用工程技能。
 ---
 
 # module-synth:综合与综合后时序

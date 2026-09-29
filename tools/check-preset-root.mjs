@@ -290,6 +290,7 @@ check(
 const skillNames = existsSync(skillDir)
   ? readdirSync(skillDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
   : [];
+const skillDescriptions = new Map();
 check(skillNames.length > 0, `预设带了至少一个技能(实际 ${skillNames.length} 个)`);
 // 设置页自检按 BUNDLED_SKILLS 这份期望清单核对已装副本(只数目录的话,"16 个变 15 个"照样通过)。
 // 两边必须一致:删技能就得同时改清单,漏改在这里红。
@@ -319,6 +320,7 @@ for (const skill of skillNames) {
     check(false, `${skill} 的 frontmatter 不是合法 YAML`, error.message);
     continue;
   }
+  skillDescriptions.set(skill, String(meta?.description ?? ""));
   check(meta?.name === skill, `${skill} 的 frontmatter name 与目录名一致(实际 ${JSON.stringify(meta?.name)})`);
   check(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(String(meta?.name)), `${skill} 的名字是 kebab-case(技能名的合法字符集)`);
   // 命名统一:模块类 fpga-module-*、工程类 fpga-project-*(用户要求对称);
@@ -376,6 +378,75 @@ for (const skill of skillNames) {
     );
   }
 }
+
+// 技能目录会把全部 description 放进模型可见的能力目录。description 只负责触发、边界与移交，
+// 详细步骤留在按需加载的 SKILL.md；否则 16 个技能会在每轮都占用不必要的上下文。
+const SKILL_DESCRIPTION_CODEPOINT_LIMIT = 220;
+const SKILL_CATALOG_CODEPOINT_LIMIT = 2100;
+const descriptionCodepoints = [...skillDescriptions.entries()].map(([skill, description]) => [
+  skill,
+  Array.from(description).length,
+]);
+const longDescriptions = descriptionCodepoints.filter(([, size]) => size > SKILL_DESCRIPTION_CODEPOINT_LIMIT);
+const catalogCodepoints = descriptionCodepoints.reduce((total, [, size]) => total + size, 0);
+check(
+  longDescriptions.length === 0,
+  `每个技能 description 不超过 ${String(SKILL_DESCRIPTION_CODEPOINT_LIMIT)} 个 Unicode 字符`,
+  `超限:${longDescriptions.map(([skill, size]) => `${skill}=${String(size)}`).join("、") || "无"}`
+);
+check(
+  catalogCodepoints <= SKILL_CATALOG_CODEPOINT_LIMIT,
+  `技能 description 目录总长不超过 ${String(SKILL_CATALOG_CODEPOINT_LIMIT)} 个 Unicode 字符(实际 ${String(catalogCodepoints)})`
+);
+
+const reviewDescription = skillDescriptions.get("fpga-module-review") ?? "";
+check(/只审不改/u.test(reviewDescription), "review 的 description 直接声明只审不改");
+const releaseDescription = skillDescriptions.get("fpga-project-release") ?? "";
+check(
+  /只在用户明确[\s\S]{0,20}(交付|发布)/u.test(releaseDescription),
+  "release 的 description 直接声明只在用户明确要求交付或发布时使用"
+);
+const integrateDescription = skillDescriptions.get("fpga-project-integrate") ?? "";
+check(
+  /只接已有源/u.test(integrateDescription) && /fpga-project-rtl/u.test(integrateDescription) &&
+    !/专用模块在 src\/rtl 直接写/u.test(integrateDescription),
+  "integrate 的 description 写明只接已有源,缺失专用 RTL 移交 project-rtl"
+);
+
+const implDescription = skillDescriptions.get("fpga-project-impl") ?? "";
+const implScopeText = readSkillBundle("fpga-project-impl");
+check(
+  /route_design/u.test(implDescription) && /需要 bitstream/u.test(implDescription),
+  "impl 的 description 区分 route_design 与按需 bitstream"
+);
+check(
+  /请求范围[\s\S]{0,160}`route`[\s\S]{0,160}`bitstream`/u.test(implScopeText),
+  "impl 正文先记录 route / bitstream 请求范围"
+);
+check(
+  /`route` 范围[\s\S]{0,160}`PASS`/u.test(implScopeText) &&
+    /`bitstream` 范围[\s\S]{0,160}`PASS`/u.test(implScopeText),
+  "impl 的 PASS 按 route / bitstream 范围分别判定"
+);
+check(!/NOT_APPLICABLE[^\n]*不需要 bitstream/u.test(implScopeText), "route-only 成功不会被误记为 NOT_APPLICABLE");
+
+const syssimScopeText = readSkillBundle("fpga-project-syssim");
+check(
+  /复用[\s\S]{0,50}(可信|已有|现有)[\s\S]{0,20}证据/u.test(syssimScopeText) &&
+    /当前任务|任务需要/u.test(syssimScopeText),
+  "syssim 复用可信既有证据,再按当前任务补覆盖"
+);
+check(!/单模块仿真\(先做完这个\)/u.test(syssimScopeText), "syssim 不强制每次先重跑全部单模块仿真");
+
+const projectRtlScopeText = readSkillBundle("fpga-project-rtl");
+check(
+  /write_bd_tcl/u.test(projectRtlScopeText) && /manual integration required/u.test(projectRtlScopeText),
+  "project-rtl 写明 Block Design 的复现脚本与人工集成边界"
+);
+check(
+  /Block Design[\s\S]{0,240}elaborate[\s\S]{0,80}`UNVERIFIED`/u.test(projectRtlScopeText),
+  "project-rtl 写明 Block Design 在成功 elaborate 前只能记 UNVERIFIED"
+);
 
 // ── 级别划分清楚:模块 5 个 / 工程 11 个 ─────────────────────────────────────
 // 模块级五个 = 四个环节(spec/rtl/verif/synth)+ 审查(按需能力,不占目录)

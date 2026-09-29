@@ -1,6 +1,6 @@
 ---
 name: fpga-project-rtl
-description: 在 FPGA 工程里编写还缺的 RTL 时用:按 doc/spec.md 的模块清单,在 src/rtl/ 平铺补写专用模块与顶层;需要 IP 自己建,需要 Block Design 自己搭;src/sim/ 里放专用模块的简单 tb_*。给 AI 最大实现自由度,格式照模板,不确定随时问用户。可复用模块不写、只从库拷;集成只接已有源,缺的 RTL 归本技能。
+description: 编写 FPGA 工程缺少的专用 RTL、顶层、IP/BD 与简单 tb_* 时用,源码放 src/rtl、src/sim 和 ip/。可复用模块只从库拷入;集成只接已有源,缺失 RTL 归本技能。
 ---
 
 # project-rtl:工程内 RTL 编写
@@ -25,7 +25,7 @@ description: 在 FPGA 工程里编写还缺的 RTL 时用:按 doc/spec.md 的模
 - **需要 IP 就自己建**(厂商 IP / 原语 / XPM / 自写核均可),不必先请示「用不用 IP」
 - **复杂 IP 不会写就先看例程**:打不开思路时直接打开该 IP 的**参考例程 / 厂商自带参考工程**照着接;
   **没有参考例程就去搜开源实现**作参照。例程只当老师,接口仍以 `doc/spec.md` 为准,不要整包照抄了事
-- **需要 Block Design 就自己搭**(Vivado BD / 自己写的子系统均可),与手写 RTL 同等对待
+- **需要 Block Design 就自己搭**(Vivado BD / 自己写的子系统均可),同时留下可复现步骤与集成状态
 - 拆不拆文件、分几个子模块 —— 按功能块判,不为「模块化」硬拆
 - **有问题随时问用户**(器件能力、资源预算、协议细节、拿不准的取舍)——问清再写,
   不要猜关键参数后硬做
@@ -68,9 +68,11 @@ description: 在 FPGA 工程里编写还缺的 RTL 时用:按 doc/spec.md 的模
    抄改到 `src/rtl/<模块名>.<扩展名>`(模板路径见会话提示的模板来源;**不要用 `module-rtl-new`**,
    那条默认落模块库的 `rtl/`,不是工程的 `src/rtl/`),或按模板结构手写 —— 以模板格式为准即可
 4. **IP / Block Design**:按上面「自由度」自建。**一 IP 一目录**:`ip/<ip-name>/` 放 `.xci`、
-   Block Design 的 `.bd`(含 wrapper)、`.coe` 等;生成脚本有就放 `prj/`。
-   **不要**把 `.xci` 平铺在 `ip/` 根下(时序卡按 `ip/<ip-name>/timing.json` 找)。
-   **自建 IP 只保留 `.xci` 即可**,不强制补生成脚本。工程里**引用**这些文件,不要复制第二份。
+   `.bd`、wrapper、`.coe` 等;**不要**把 `.xci` 平铺在 `ip/` 根下
+   (时序卡按 `ip/<ip-name>/timing.json` 找)。自建单一 `.xci` IP 可只保留 `.xci`,工程里引用原文件。
+   **Block Design** 可用 Vivado Tcl 或写清 GUI 步骤创建;保留 `.bd`、wrapper、器件与 Vivado 版本,
+   并优先用 `write_bd_tcl` 把复现脚本放进 `prj/`。无法自动生成或连接时,在 `doc/rtl.md` 标记
+   `manual integration required` 并列出操作。BD 与 wrapper 加入工程并成功 elaborate 前,结论只能是 `UNVERIFIED`。
 5. **简单 sim**:`src/sim/tb_*.sv` 或 `tb_*.v`,**跑过一次**、确认没啥大问题即可
    —— **不算正式证据**;顶层不要求简单自测
 6. **记清单**:新文件写进 `doc/files.md`(**位置 + 来源=手写**;IP 记来源=自建)
@@ -100,7 +102,7 @@ description: 在 FPGA 工程里编写还缺的 RTL 时用:按 doc/spec.md 的模
 
 - **PASS**:清单里本该由工程写的专用 RTL 与顶层都在位;接口与 `doc/spec.md` / `flow.md` 一致;
   格式与模板一致(或差异已说明);专用模块各有 `src/sim/tb_*` 且跑过一次(顶层除外);
-  机械检查无阻塞项(或差异已说明)
+  机械检查无阻塞项(或差异已说明);使用 BD 时已成功 elaborate 且复现/人工步骤已记录
 - **FAIL**:接口与 spec 不符、格式检查有阻塞项且说不清、文件名撞了却覆盖了
 - **BLOCKED**:还缺可复用模块(等人工)、器件/协议等关键问题问了还没得到答复
 - **UNVERIFIED**:RTL 写了但简单 sim / 检查没跑 —— 如实记,不要写成 PASS
@@ -111,10 +113,11 @@ description: 在 FPGA 工程里编写还缺的 RTL 时用:按 doc/spec.md 的模
 ## 产物
 
 - RTL:`src/rtl/`、顶层 `src/rtl/`
-- IP / BD / 初始化文件:**`ip/<ip-name>/`**(`.xci` `.bd` `.coe` + `timing.json`);工程脚本有则放 `prj/`
+- IP / BD / 初始化文件:**`ip/<ip-name>/`**(`.xci` `.bd` wrapper `.coe` + `timing.json`);
+  BD 的 `write_bd_tcl` 或明确 GUI 步骤放 `prj/` / `doc/rtl.md`
 - 简单 sim:`src/sim/tb_*`(顶层可不写)
 - 要求留档时写 `doc/rtl.md`:结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)
-  + 缺谁写了谁 + IP/BD 自建了什么 + 跑过的命令 + 简单 sim 一次结果
+  + 缺谁写了谁 + IP/BD 自建了什么 + 复现或 `manual integration required` 步骤 + 跑过的命令 + 简单 sim 一次结果
 - 同步 `doc/files.md`
 
 ## 必须停下来问用户的时候

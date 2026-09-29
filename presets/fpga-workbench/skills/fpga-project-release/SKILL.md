@@ -1,6 +1,6 @@
 ---
 name: fpga-project-release
-description: 在给 FPGA 工程做发布归档时用:对照 doc/files.md 完整对账,归档 bit/ 产物、报告、xdc/ 约束、可复现脚本与源码清单。判据是照着归档能重建同一版设计。结果写 doc/release.md。
+description: 只在用户明确要求交付或发布 FPGA 工程时用:核对上游结论与 doc/files.md,归档 bit/、源码、约束、IP、报告和可复现步骤;结果写 doc/release.md。
 ---
 
 # project-release:发布归档

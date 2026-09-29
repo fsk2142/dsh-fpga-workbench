@@ -1,6 +1,6 @@
 ---
 name: fpga-project-integrate
-description: 把模块接进 FPGA 工程顶层时用:从 src/rtl 取源、分配时钟与复位、对接接口(位宽/协议/时钟域)、把源与 IP 加进 prj/ 下的 Vivado 工程、跑 elaborate 或综合确认连通性。报告写 doc/integrate.md。可复用模块从库拷入(只搬 RTL/.xci/tb_*)、专用模块在 src/rtl 直接写;支持早期集成,正式集成验收才要求可复用模块的模块级结论齐。
+description: 把已有 RTL/IP 接进 FPGA 工程顶层时用:分配时钟复位、对接接口、加入 Vivado 工程并检查连通性。只接已有源;缺少专用 RTL 交给 fpga-project-rtl,可复用模块缺失则停止并报告。支持早期接线与正式集成验收。
 ---
 
 # project-integrate:顶层集成
@@ -55,7 +55,7 @@ description: 把模块接进 FPGA 工程顶层时用:从 src/rtl 取源、分配
 |---|---|
 | 可复用,已拷入 | `src/rtl/`、`ip/`、`src/sim/` 里已有,直接用 |
 | 可复用,待人工 | **停止该模块的集成**,报告用户;拷入后再接 |
-| 专用 | 在 `src/rtl/` 写(或已有);不写模块需求 |
+| 专用,已有 | 使用 `src/rtl/` 已有源;缺失时转 `fpga-project-rtl` 补齐后再接 |
 
 **从库拷什么**(细则见 `fpga-project-spec`,这里接线时用同一口径):
 

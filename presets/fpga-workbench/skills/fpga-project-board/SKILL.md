@@ -1,6 +1,6 @@
 ---
 name: fpga-project-board
-description: 把 bitstream 下载到板子上实测时用:用 bit/ 归档的 bit/ltx 下载与回读、ILA/VIO、回读数据与 golden 比对、必要时固化 Flash。管脚依据 sch/。下载与固化须先确认,结果写 doc/board.md。
+description: 把已归档 bitstream 下载到 FPGA 板卡实测时用:配置回读、ILA/VIO、与 golden 比对,必要时固化 Flash。使用 bit/ 中与当前代码对应的 bit/ltx,管脚以 sch/ 为准;结果写 doc/board.md。
 ---
 
 # project-board:上板验证

@@ -72,21 +72,34 @@ if (mode !== undefined) {
 
 // ── 3. 真设置跑一遍:设置页载荷 + 会话提示段 ─────────────────────────────────
 //
-// js-yaml 只用来读测试夹具里的 settings.yaml,不是插件运行时的依赖。宿主安装目录
-// 可能不存在(桌面版是 asar),或者没有把 js-yaml 暴露在宿主 package 的解析根下;
-// 那时跳过"读真实设置"这一步,继续用空设置验证导出与载荷,不能因此让安装回滚。
+// 0.2.0 把设置写在 profile 的 cordis.patch.yml;旧版 settings.yaml 只作回退。
+// 这里只读取配置,不借用插件运行时的设置服务。
 const require = createRequire(`${APP}/package.json`);
 let values = {};
 let settingsRead = false;
 try {
   const yaml = require("js-yaml");
+  const { entryListSchema } = require("@deepseek-ai/cordis-plugin-include");
   try {
-    values = yaml.load(readFileSync(`${PROFILE}\\..\\..\\settings.yaml`, "utf8"))?.["fpga-workbench"] ?? {};
-    settingsRead = true;
-    check(true, `读到真实设置(${Object.keys(values).length} 项)`);
+    const rows = yaml.load(readFileSync(`${PROFILE}\\cordis.patch.yml`, "utf8"), { schema: entryListSchema });
+    const row = rows?.find((entry) => entry?.id === "fpga-workbench");
+    if (row !== undefined) {
+      values = row.config ?? {};
+      settingsRead = true;
+      check(true, `从 profile 补丁读到真实设置(${Object.keys(values).length} 项)`);
+    } else {
+      console.log("      profile 补丁没有 FPGA 设置行,用默认值检查");
+    }
   } catch (error) {
     if (error?.code === "ENOENT") {
-      console.log("      跳过读取真实设置(没有 settings.yaml;它只用于测试,不属于插件运行时)");
+      try {
+        values = yaml.load(readFileSync(`${PROFILE}\\..\\..\\settings.yaml`, "utf8"))?.["fpga-workbench"] ?? {};
+        settingsRead = true;
+        check(true, `从旧 settings.yaml 读到真实设置(${Object.keys(values).length} 项)`);
+      } catch (legacyError) {
+        if (legacyError?.code === "ENOENT") console.log("      未找到已保存的 FPGA 设置,用默认值检查");
+        else check(false, "读到旧 settings.yaml", String(legacyError));
+      }
     } else {
       check(false, "读到真实设置", String(error));
     }
@@ -188,6 +201,15 @@ if (mode !== undefined) {
     check(text.includes("语言与标准"), "提示段含「语言与标准」一节");
     check(text.includes("模板库:"), "提示段说明模板库来源与按需扫描规则");
     check(text.includes("自带的命令"), "提示段含「自带的命令」一节");
+    let render;
+    mode.apply({
+      get: (name) => name === "settings"
+        ? { describe: () => [{ ns: "fpga-workbench", value: { ...values, pythonPath: process.execPath } }] }
+        : undefined,
+      effect: (register) => register(),
+      systemPrompt: { section: ({ text: sectionText }) => { render = sectionText; } }
+    });
+    check(render().includes(process.execPath), "已装模式从 0.2.0 settings descriptor 生成带工具路径的会话提示");
   } catch (error) {
     check(false, "提示段能组装", String(error));
   }

@@ -1052,16 +1052,58 @@ check(
   /只查"带没带"宽度与基|判不了这个信号是数据类还是信号类/u.test(lintText),
   "rtl 技能写明:机械检查只查有没有带宽度与基(数据/信号靠读代码判)"
 );
-// 信号名后缀口径(用户 2026-09-21 定,后一条把 `_q` 去掉):`_r` 寄存后的值 / `_d` 数据类 —— 只这两种,
-// 不许自己另造(`_reg`/`_ff`/`_next` 之类)。断言钉在"后缀 + 含义 + 例子"三件一起,而不是挑关键词 ——
-// 否则注释里出现过这几个词就能把断言喂饱(这类教训本仓库已经踩过)。
+// 信号名后缀口径(用户 2026-10-10 更新):`_r` = 单个(控制)信号的打拍 / `_d` = 数据信号的打拍 ——
+// 两者**只能加在寄存器上**;`_c` / `_v` 不用。旧口径(`_d` = 组合侧的数据类)已被推翻:M04/M06 按旧
+// 口径改名当场撞名(`Duplicate declaration`),所以这里钉的是新口径。断言仍钉"后缀 + 含义 + 例子"
+// 三件一起,而不是挑关键词 —— 否则注释里出现过这几个词就能把断言喂饱(这类教训本仓库已经踩过)。
 check(
-  /`_r`[\s\S]{0,80}寄存后的值/u.test(lintText) && /tvalid_r|tlast_r/u.test(lintText),
-  "rtl 技能写明 `_r` = 寄存后的值(带 `tvalid_r` / `tlast_r` 这种例子)"
+  /`_r`[\s\S]{0,80}单个[\s\S]{0,40}打拍/u.test(lintText) && /tvalid_r|tlast_r/u.test(lintText),
+  "rtl 技能写明 `_r` = 单个(控制)信号的打拍(带 `tvalid_r` / `tlast_r` 这种例子)"
 );
 check(
-  /`_d`[\s\S]{0,60}数据类/u.test(lintText) && /tdata_d|crc_d/u.test(lintText),
-  "rtl 技能写明 `_d` = 数据类(带 `tdata_d` / `crc_d` 这种例子)"
+  /`_d`[\s\S]{0,60}数据类[\s\S]{0,30}打拍/u.test(lintText) && /crc_d|da_captured_d/u.test(lintText),
+  "rtl 技能写明 `_d` = 数据类信号的打拍(带 `crc_d` / `da_captured_d` 这种例子)"
+);
+check(
+  /`_r`\s*\/\s*`_d`[\s\S]{0,80}只能加在寄存器上/u.test(lintText),
+  "rtl 技能写明 `_r` / `_d` 都是打拍、只能加在寄存器上(组合信号不许加)"
+);
+// 多级打拍与"严禁随意加后缀"(用户 2026-10-10 的加严口径):多级写 `_rr` / `_dd` 或并成多位宽;
+// 没有必要的后缀一律不加 —— 这两条把"随手加后缀"这条老毛病钉死。
+check(
+  /多级打拍[\s\S]{0,60}`_rr`[\s\S]{0,20}`_dd`/u.test(lintText) && /多位宽/u.test(lintText),
+  "rtl 技能写明多级打拍用 `_rr` / `_dd`(或并成多位宽形式)"
+);
+check(
+  /严禁加后缀/u.test(lintText) && /精准而简练/u.test(lintText),
+  "rtl 技能写明:命名精准简练,没有必要严禁加后缀、严禁另造后缀形式"
+);
+// 写法总纲(用户 2026-10-10):一切编写格式以时序最优为先 —— 格式与时序冲突时格式让步;
+// 组合逻辑尽量用 `assign` 而不是 `always_comb`,前提是时序不退化。
+check(
+  /一切编写格式以时序最优为先/u.test(lintText) && /让格式让步/u.test(lintText),
+  "rtl 技能写明总纲:一切编写格式以时序最优为先(与时序冲突时格式让步)"
+);
+check(
+  /尽量用 `assign` 而不是 `always_comb`/u.test(lintText) && /时序不退化/u.test(lintText),
+  "rtl 技能写明组合逻辑尽量用 `assign` 而不是 `always_comb`(前提是时序不退化)"
+);
+// 注释与声明区形制(用户 2026-10-10):每个块一条块首注释;声明区先寄存器后组合、按功能分组。
+check(
+  /每个 `always` \/ `always_ff` \/ `always_comb` \/ `initial` 块有且仅有一条块首注释/u.test(lintText),
+  "rtl 技能写明:每个 always / always_ff / always_comb / initial 块有且仅有一条块首注释"
+);
+check(
+  /先寄存器、后组合/u.test(lintText) &&
+    /`\/\/--- 组名 ---`/u.test(lintText) &&
+    /新增信号归到对应的组里/u.test(lintText),
+  "rtl 技能写明声明区位置与分组:先寄存器后组合、一组一条 `//--- 组名 ---`、新增信号归组"
+);
+check(
+  /`_c`\s*\/\s*`_v`[\s\S]{0,40}不用/u.test(lintText) &&
+    /不看后缀猜/u.test(lintText) &&
+    /同名孪生/u.test(lintText),
+  "rtl 技能写明 `_c` / `_v` 不用,以及判据:看赋值不看后缀猜、同名孪生取组合朴素名 + 寄存器后缀"
 );
 // `_q` 与 `_r` 功能重复,按用户口径去掉:新代码不再用,已有代码不动 —— 断言钉住"写明了不再用"
 check(
@@ -1071,6 +1113,11 @@ check(
 check(
   /别自己另造后缀/u.test(lintText) && /_reg/u.test(lintText) && /_ff/u.test(lintText),
   "rtl 技能写明:别自己另造后缀(`_reg` / `_ff` / `_next` 这类)"
+);
+// 旧口径的第二出处必须清掉:工程级技能只准引用唯一出处,不许再复述后缀含义(否则改一处漏一处)
+check(
+  !/数据类暂存/u.test(projectRtlScopeText) && !/寄存后的值/u.test(projectRtlScopeText),
+  "fpga-project-rtl 不再复述旧后缀口径,只引用 fpga-module-rtl 规范清单那处唯一出处"
 );
 // Vivado/XSim 统一继承工作区规则的单一策略。不得再保留重定向 APPDATA 的旧配方，
 // 否则同一次会话会收到两套相反指令。

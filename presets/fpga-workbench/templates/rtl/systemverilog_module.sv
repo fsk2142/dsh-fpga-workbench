@@ -20,10 +20,11 @@ module <ModuleName> # (
     // TODO: module parameter description
                 parameter int unsigned                              PIXEL_W =   8
     ) (
-    // TODO: add clock and reset
+    //--- clock and reset ---
     input       wire                                                clk,
     input       wire                                                rst,
-    // TODO: add module ports (input wire / output logic, col69 aligned)
+    //--- payload ---
+    // TODO: replace with module-specific ports (input wire / output logic, col69 aligned)
     input       wire    [PIXEL_W-1:0]                               din,
     output      logic   [PIXEL_W-1:0]                               dout
     );
@@ -49,17 +50,26 @@ module <ModuleName> # (
 //    Registers                                                                     //
 //==================================================================================//
 // TODO: replace with module-specific registers / internal signals
+// ---- Registers (sequential state) ----
+//--- pointers ---
                 logic   [ADDR_W-1:0]                                rd_ptr_r;
                 logic   [ADDR_W-1:0]                                wr_ptr_r;
+//--- data path (`_r` / `_d` mark registered values only) ---
                 logic   [PIXEL_W-1:0]                               din_d;
                 state_t                                             state_r;
+
+// ---- Combinational ----
+//--- next values (plain name or a meaningful suffix; `_r` / `_d` stay on registers) ---
+                logic   [PIXEL_W-1:0]                               din_nxt;
 
 //==================================================================================//
 //    Combinational Logic                                                           //
 //==================================================================================//
 // TODO: replace with module-specific combinational logic
-assign din_d = din;
+// `_r` / `_d` stay on registers: a combinational next value uses its plain name (or a meaningful suffix)
+assign din_nxt = din;
 
+// Stub combinational block: replace with the module-specific next-value logic.
 always_comb begin
     // next-state / data-path muxes go here
 end
@@ -68,6 +78,7 @@ end
 //    Sequential Logic                                                              //
 //==================================================================================//
 // TODO: replace with module-specific FSM / datapath registers
+// Stub state register: replace with the module-specific FSM state.
 always_ff @( posedge clk ) begin
     if (rst) begin
         state_r <= ST_IDLE;
@@ -76,12 +87,14 @@ always_ff @( posedge clk ) begin
     end
 end
 
+// Stub datapath registers (pointers + the registered data value): reset to zero, then advance.
 always_ff @( posedge clk ) begin
     if (rst) begin
         rd_ptr_r <= '{ADDR_W{1'b0}};
         wr_ptr_r <= '{ADDR_W{1'b0}};
+        din_d    <= '{PIXEL_W{1'b0}};
     end else begin
-        // state_r <= ...;
+        din_d <= din_nxt;
     end
 end
 

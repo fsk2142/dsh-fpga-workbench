@@ -61,7 +61,7 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 
 官方 DeepSeek Harness Desktop `0.2.1-rc.2`:在侧边栏的「插件」页安装本仓库的绝对路径
 `C:\Work\dsh-fpga-workbench`，更新后重启桌面端，再新建会话选择「FPGA 开发模式」。
-插件声明同时保留对 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2` 的兼容。插件自身的 `0.4.4` 是独立版本号，
+插件声明同时保留对 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2` 的兼容。插件自身的 `0.4.5` 是独立版本号，
 不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本，
 不要用旧的全局命令更新官方桌面端的 profile。
 

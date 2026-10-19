@@ -93,5 +93,27 @@ if (rows !== null) {
 const meaningful = (text ?? "").split("\n").filter((line) => line.trim() !== "" && !line.trim().startsWith("#"));
 check(meaningful.length > 0, "不是空文件/纯注释文件");
 
+// 4. persona 模板里的 `{{变量}}`:循环只注册 `provider` 与 `model`。
+//
+// 为什么必须钉住:未注册的名字(典型是 `{{cwd}}`)不会"渲染成空" —— 提示词**组装期**直接抛
+// `unknown prompt variable`,一条消息都发不出去,而且只影响用这个预设的会话。2026-10-19 就是
+// 这条 `suffix: Your working directory is {{cwd}}.` 把既有 FPGA 会话全打挂的。
+// 现在起:模板里出现 provider / model 之外的变量,`npm test` 直接红。
+// 不需要宿主,所以即使上面 schema 解析失败也照跑。
+const ALLOWED_PROMPT_VARIABLES = new Set(["provider", "model"]);
+for (const [label, source] of [
+  ["cordis.patch.yml", text ?? ""],
+  ["presets/fpga-workbench/agent.cordis.yml", readFileSync(new URL("../presets/fpga-workbench/agent.cordis.yml", import.meta.url), "utf8")]
+]) {
+  const unknown = [
+    ...new Set([...source.matchAll(/\{\{([A-Za-z0-9_]+)\}\}/gu)].map((match) => match[1]))
+  ].filter((name) => !ALLOWED_PROMPT_VARIABLES.has(name));
+  check(
+    unknown.length === 0,
+    `${label} 只用已注册的提示词变量(provider / model)`,
+    unknown.length === 0 ? undefined : `未注册:${unknown.map((name) => `{{${name}}}`).join("、")} —— 会在提示词组装期抛错,这条消息发不出去`
+  );
+}
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 补丁字节与形状都合法");
 if (failures.length > 0) process.exitCode = 1;

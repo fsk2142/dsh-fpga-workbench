@@ -20,7 +20,11 @@
 # ── identity ────────────────────────────────────────────────────────────────
 
 # The preset's own persona, shadowing the deployment default for this agent.
-# `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+# `{{model}}` resolves from the agent's own route. The loop registers only `provider` and
+# `model` —— never reference the old cwd variable (or any other unregistered name) here:
+# prompt assembly throws `unknown prompt variable` before any model request, which breaks
+# every message. 当前工作目录由 working-directory 服务以必需的用户上下文注入，
+# persona 不需要也不应该重复它。
 #
 # 本文件其余部分是从官方 standard 预设复制来的组装(工具行、子代理、工作流等),
 # 目的只是让 FPGA 开发模式会话拿到与常规会话相同的能力底座 —— 预设之间不继承,
@@ -29,7 +33,6 @@
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    suffix: Your working directory is {{cwd}}.
     prefix: |-
       你是 **FPGA 开发模式**会话里的开发助手,运行在 DeepSeek Harness 上,由 {{model}} 驱动。
       你面对的是一个真实工程环境,不是演示。

@@ -15,7 +15,6 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              suffix: Your working directory is {{cwd}}.
               prefix: |-
                 你是 **FPGA 开发模式**会话里的开发助手,运行在 DeepSeek Harness 上,由 {{model}} 驱动。
                 你面对的是一个真实工程环境,不是演示。

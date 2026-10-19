@@ -1,6 +1,6 @@
 {
   "name": "dsh-fpga-workbench",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "FPGA 开发模式 + 工具链设置:一个 DSH agent 预设(人设/工具/技能 + 本机工具链提示),外加「设置 → FPGA 开发模式」里配置 Vivado / ModelSim / QuestaSim / Verilator 与仿真库映射文件。",
   "icon": "icon.svg",
   "type": "module",
@@ -29,8 +29,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",
-    "@deepseek-ai/dsh-settings": "^0.1.7-rc.2 || ^0.2.0-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.2 || ^0.2.0-rc.1"
+    "@deepseek-ai/dsh-settings": "^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-rc.2"
   },
   "dsh": {
     "bundle": {
@@ -38,11 +38,12 @@
     },
     "manifestVersion": 1,
     "compatibility": {
-      "dsh": "^0.1.7-rc.2 || ^0.2.0-rc.1",
+      "dsh": "^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-rc.2",
       "dshReleases": {
         "0.1.7-rc.2": "compatible",
         "0.2.0-rc.1": "compatible",
-        "0.2.0-rc.2": "compatible"
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.2": "compatible"
       }
     },
     "client": {

@@ -1371,10 +1371,29 @@ const toolchainLines = toolchainSource.split("\n");
 const spawnPattern = /child_process|execSync|spawnSync|execFile|spawn\(/u;
 const importLine = toolchainLines.findIndex((line) => spawnPattern.test(line) && line.startsWith("import "));
 const versionStart = toolchainLines.findIndex((line) => line.includes("export function queryVersion"));
-const versionEnd = toolchainLines.findIndex((line, index) => index > versionStart && line === "}");
+/**
+ * 函数结尾用**花括号配平**来找,不能找"第一个列首的 `}`"。
+ *
+ * 踩过(2026-10-21):原来是 `line === "}"`,而 `queryVersion` 里只有缩进的 `}` ——
+ * 匹配不到,`versionEnd` 算出 -1,于是"起进程只出现在 queryVersion 里"这条判据把
+ * 整个文件都当成"在函数外",报出一堆假越界。这类检查自己坏掉时不报错、只报红,
+ * 很容易被误读成被检查代码的问题(实际代码是对的)。
+ */
+const versionEnd = (() => {
+  if (versionStart < 0) return -1;
+  let depth = 0;
+  for (let index = versionStart; index < toolchainLines.length; index += 1) {
+    for (const ch of toolchainLines[index]) {
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+    }
+    if (depth === 0 && index > versionStart) return index;
+  }
+  return -1;
+})();
 const outsideVersion = toolchainLines
   .map((line, index) => ({ line, index }))
-  .filter(({ line, index }) => spawnPattern.test(line) && index !== importLine && !(index > versionStart && index < versionEnd));
+  .filter(({ line, index }) => spawnPattern.test(line) && index !== importLine && !(index >= versionStart && index <= versionEnd));
 check(
   importLine >= 0 && versionStart > 0 && versionEnd > versionStart,
   `找得到那个唯一的版本查询函数(定位:import ${importLine} / 函数 ${versionStart}-${versionEnd})`

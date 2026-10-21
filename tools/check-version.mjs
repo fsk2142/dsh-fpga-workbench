@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkForUpdate, compareVersions, packageInfo, parseVersion, repositorySlug } from "../lib/version.js";
+import { checkForUpdate, compareVersions, packageInfo, parseVersion, repositorySlug, updateStateOf } from "../lib/version.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -93,53 +93,70 @@ const check = (ok, label, detail) => {
 // ── 五、检查更新的行为(注入假 fetch,不联网)──────────────────────────────────
 
 {
-  const tagsReply = (names) => ({
-    ok: true,
-    status: 200,
-    json: async () => names.map((name) => ({ name }))
-  });
+  // 市场 API 的回答形状(见 dshmarket 的 UPDATE-API-V1.md)。
+  const reply = (pkg) => ({ ok: true, status: 200, json: async () => ({ schema: "dsh-market/update-api/v1", package: pkg }) });
 
-  // 夹具版本**相对当前清单**算出来,不写死具体数字 ——
-  // 写死过一次:版本从 0.4.5 升到 0.5.0 后,"有新版本"那条夹具(0.4.9)反而比当前旧,
-  // 断言就红了。那是夹具过期,不是逻辑错,但红得一样刺眼。
-  const current = packageInfo().version;
-  const newer = `v9.9.9`;
-  const older = `v0.0.1`;
-
-  // 有新版本
-  const hasNewer = await checkForUpdate(async () => tagsReply([newer, older]));
+  // ① 链接安装:**不是**「已是最新」,而是「这种安装不会更新」
+  const linked = await checkForUpdate(async () => reply({ source: "linked", installedVersion: "0.5.0", latestVersion: null, updateAvailable: false }));
   check(
-    hasNewer.ok === true && hasNewer.latest === "9.9.9" && hasNewer.outdated === true,
-    `能识别出有新版本(${JSON.stringify(hasNewer)})`
+    linked.ok === true && linked.kind === "not-applicable",
+    `链接安装归 not-applicable,不冒充"已是最新"(${JSON.stringify(linked)})`
+  );
+  check(
+    String(linked.reason).includes("链接"),
+    `链接安装的说明里点明了原因(${String(linked.reason)})`
   );
 
-  // 已是最新:用当前版本本身当 tag
-  const same = await checkForUpdate(async () => tagsReply([`v${current}`]));
-  check(same.ok === true && same.outdated === false, `同版本判为已是最新(${JSON.stringify(same)})`);
+  // `file:` 安装同理(本地路径装)
+  const file = await checkForUpdate(async () => reply({ source: "file", installedVersion: "0.5.0", updateAvailable: false }));
+  check(file.ok === true && file.kind === "not-applicable", `file: 安装也归 not-applicable(${String(file.kind)})`);
 
-  // 本地比 tag 还新(开发中)—— 不能报"有新版本"
-  const ahead = await checkForUpdate(async () => tagsReply([older]));
-  check(ahead.ok === true && ahead.outdated === false, "本地版本更新时不报有新版本");
-
-  // 多个 tag 时取**最大**的那个(曾经写成 sort()[0] 取到最小,有新版也报"已是最新")
-  const many = await checkForUpdate(async () => tagsReply(["v0.0.1", newer, "v0.0.2"]));
-  check(many.ok === true && many.latest === "9.9.9", `多个 tag 时取最大版本(${String(many.latest)})`);
-
-  // 没有任何 tag:如实说,不编"已是最新"
-  const noTags = await checkForUpdate(async () => tagsReply([]));
+  // ② 有新版
+  const available = await checkForUpdate(async () =>
+    reply({ source: "git", installedVersion: "0.5.0", latestVersion: "0.6.0", updateAvailable: true })
+  );
   check(
-    noTags.ok === false && String(noTags.reason).includes("tag"),
-    `仓库没有 tag 时如实说明(${String(noTags.reason)})`
+    available.ok === true && available.kind === "available" && available.latest === "0.6.0",
+    `能识别出有新版本(${JSON.stringify(available)})`
   );
 
-  // GitHub 报错(私有/限流)
-  const denied = await checkForUpdate(async () => ({ ok: false, status: 403, json: async () => ({}) }));
+  // ③ 已是最新
+  const current = await checkForUpdate(async () =>
+    reply({ source: "npm", installedVersion: "0.5.0", latestVersion: null, updateAvailable: false })
+  );
+  check(current.ok === true && current.kind === "current", `同版本判为已是最新(${String(current.kind)})`);
+
+  // ④ updateAvailable 为 true 却没给 latestVersion:不许编一个版本号
+  const incomplete = await checkForUpdate(async () =>
+    reply({ source: "npm", installedVersion: "0.5.0", updateAvailable: true })
+  );
   check(
-    denied.ok === false && String(denied.reason).includes("403"),
+    incomplete.ok === false && incomplete.kind === "unknown",
+    `updateAvailable 缺 latestVersion 时归 unknown,不编版本号(${String(incomplete.kind)})`
+  );
+
+  // ⑤ 市场缺席(404):如实说"没有更新接口",不冒充已最新
+  const missing = await checkForUpdate(async () => ({ ok: false, status: 404, json: async () => ({}) }));
+  check(
+    missing.ok === false && missing.kind === "unknown" && String(missing.reason).includes("没有插件更新接口"),
+    `404 时说明"宿主没有更新接口"(${String(missing.reason)})`
+  );
+
+  // ⑥ 其它 HTTP 失败:把状态码报出来
+  const denied = await checkForUpdate(async () => ({ ok: false, status: 401, json: async () => ({}) }));
+  check(
+    denied.ok === false && String(denied.reason).includes("401"),
     `HTTP 失败时把状态码报出来(${String(denied.reason)})`
   );
 
-  // 网络异常
+  // ⑦ 形状不认识:不猜
+  const weird = await checkForUpdate(async () => ({ ok: true, status: 200, json: async () => ({ nope: 1 }) }));
+  check(
+    weird.ok === false && weird.kind === "unknown",
+    `响应里没有 package 字段时归 unknown(${String(weird.reason)})`
+  );
+
+  // ⑧ 网络异常
   const boom = await checkForUpdate(async () => {
     throw new Error("ECONNREFUSED");
   });
@@ -148,7 +165,7 @@ const check = (ok, label, detail) => {
     `网络异常时如实说明(${String(boom.reason)})`
   );
 
-  // 超时:用会一直不 resolve 的 fetch 打,超时值压到 1ms
+  // ⑨ 超时会中止并说明
   const timeout = await checkForUpdate(
     (_url, options) =>
       new Promise((resolve, reject) => {
@@ -161,6 +178,14 @@ const check = (ok, label, detail) => {
     1
   );
   check(timeout.ok === false && String(timeout.reason).includes("超时"), `超时会中止并说明(${String(timeout.reason)})`);
+
+  // ⑩ 纯函数层面:判断顺序是"先看能不能更新,再看有没有新版"
+  //    这条防的是把链接安装画成"已是最新"(那是实质错误,不是措辞问题)
+  const pureNotApplicable = updateStateOf({ package: { source: "linked", installedVersion: "1.0.0", latestVersion: "9.9.9", updateAvailable: true } });
+  check(
+    pureNotApplicable.kind === "not-applicable",
+    `即使接口说 updateAvailable,链接安装仍归 not-applicable(实际 ${pureNotApplicable.kind})`
+  );
 }
 
 // ── 六、静态守卫:不许自动联网 ───────────────────────────────────────────────

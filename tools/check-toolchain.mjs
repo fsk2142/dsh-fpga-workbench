@@ -560,11 +560,15 @@ check(Object.keys(legacyMigrationPatch({ settingsModelVersion: "3", compilerPath
     JSON.stringify({ tool: bareVsim.moduleSimulationTool, ms: bareVsim.modelsimPath, w: bareVsim.settingsMigrationWarnings })
   );
 }
+// 夹具路径:只要结尾还是 `presets/fpga-workbench/templates/<旧平面文件名>` 就会被认成本插件
+// 的旧内置模板,前半截是什么无关紧要 —— 所以这里用一眼能看出是夹具的中性目录,
+// 不把任何人的真实克隆路径写进仓库。
+const FIXTURE_CLONE = "C:\\fixture\\dsh-fpga-workbench";
 const repairedV3BundledTemplates = legacyMigrationPatch({
   settingsModelVersion: "3",
-  projectRtlTemplate: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates\\rtl.sv",
-  projectConstraintsTemplate: "C:/Work/dsh-fpga-workbench/presets/fpga-workbench/templates/constraints.xdc",
-  projectSynthesisTemplate: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates\\run_synth.tcl",
+  projectRtlTemplate: `${FIXTURE_CLONE}\\presets\\fpga-workbench\\templates\\rtl.sv`,
+  projectConstraintsTemplate: "C:/fixture/dsh-fpga-workbench/presets/fpga-workbench/templates/constraints.xdc",
+  projectSynthesisTemplate: `${FIXTURE_CLONE}\\presets\\fpga-workbench\\templates\\run_synth.tcl`,
   projectImplementationTemplate: "builtin:implementation/vivado-implementation.tcl",
   moduleRtlTemplate: "C:\\my-templates\\rtl.sv",
   moduleTestbenchTemplate: "library:simulation/testbench/custom.sv"

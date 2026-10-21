@@ -19,7 +19,7 @@
 // 沙箱限制:node 不能开管道抓子进程输出,所以内容断言直接 import 函数;退出码单独用
 // spawnSync(stdio:"ignore") 验(不开管道,能拿到 status)。要点 run.do 的 `[ME]` 输出时,
 // 把 stdout 重定向到**文件句柄**再读文件(那不是管道)。
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./lib/spawn.mjs";
 import { chmodSync, closeSync, existsSync, copyFileSync, mkdirSync, openSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

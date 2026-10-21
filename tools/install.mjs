@@ -16,7 +16,7 @@
 //   4. **零删除**:本脚本不调用任何删除 API(用户定案:插件运行时绝不永久删除)。
 //      静态守卫见 tools/check-toolchain.mjs —— 以后有人加回删除调用,自检会红。
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./lib/spawn.mjs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 

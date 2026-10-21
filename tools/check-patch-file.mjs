@@ -12,9 +12,15 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { TextDecoder } from "node:util";
 
+import { HOST_HINT, hostDir } from "./lib/host.mjs";
+
 // 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),
-// 这里保留同样的默认值,好让本文件被单独调用时也能跑。
-const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
+// 这里保留同样的推导(见 tools/lib/host.mjs),好让本文件被单独调用时也能跑。
+const APP = process.env.DSH_APP_DIR ?? hostDir();
+if (APP === "") {
+  console.error(`找不到 DSH 宿主目录(要用它自带的 js-yaml 与 cordis-plugin-include)。\n  ${HOST_HINT}`);
+  process.exit(1);
+}
 // 补丁文件按**本文件的位置**定位(仓库根 = 本文件的上一级)—— 写死本机绝对路径的话,
 // 仓库克隆到别处、或从别的目录调用就断。`readFileSync` 直接收 URL,不用再拼字符串路径。
 const FILE = new URL("../cordis.patch.yml", import.meta.url);

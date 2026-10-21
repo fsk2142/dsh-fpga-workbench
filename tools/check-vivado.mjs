@@ -9,7 +9,7 @@
 // 就没人看了。器件型号从 `get_parts` 探针里取第一个可用件,避免写死一个本机没装的型号。
 //
 // 零删除:夹具建在系统临时目录,跑完留在原地并打印路径,由人处置。
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./lib/spawn.mjs";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

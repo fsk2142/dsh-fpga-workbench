@@ -14,11 +14,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { BUNDLED_SKILLS, REQUIRED_PRESET_FILES } from "../lib/selfcheck.js";
 import { INSTRUCTION_FILE } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
+import { HOST_HINT, hostDir } from "./lib/host.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),这里的默认值
-// 只为单独调用(`node tools/check-preset-root.mjs`)兜底。
-const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
+// 由 tools/lib/host.mjs 推导 —— 不写死任何一台机器的安装路径。
+const APP = process.env.DSH_APP_DIR ?? hostDir();
+if (APP === "") {
+  console.error(`找不到 DSH 宿主目录(要用它自带的 js-yaml 与 cordis-plugin-loader)。\n  ${HOST_HINT}`);
+  process.exit(1);
+}
 
 const failures = [];
 const check = (ok, label, detail) => {

@@ -15,19 +15,20 @@
 //
 // 用法:node tools/check-install-safety.mjs
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./lib/spawn.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { PROFILE_HINT, profileManifest } from "./lib/host.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const MIRROR = join(ROOT, ".tmp", "install-mirror");
 
-/** 真实 profile 的清单,只读。 */
-const PROFILE_MANIFEST = process.env.DSH_PROFILE_MANIFEST
-  ?? "<OS_HOME>/.dsh/profiles/desktop/package.json";
+/** 真实 profile 的清单,只读。位置由 tools/lib/host.mjs 统一推导,不写死任何用户目录。 */
+const PROFILE_MANIFEST = profileManifest();
 /** 真实 profile 的工作区策略,决定 nodeLinker 与 allowBuilds。 */
-const PROFILE_WORKSPACE = join(dirname(PROFILE_MANIFEST), "pnpm-workspace.yaml");
+const PROFILE_WORKSPACE = PROFILE_MANIFEST === "" ? "" : join(dirname(PROFILE_MANIFEST), "pnpm-workspace.yaml");
 
 const fail = [];
 const note = (ok, label) => {
@@ -92,8 +93,19 @@ function lockVersions() {
   return found;
 }
 
-if (!existsSync(PROFILE_MANIFEST)) {
-  console.error(`找不到 profile 清单:${PROFILE_MANIFEST}`);
+if (PROFILE_MANIFEST === "" || !existsSync(PROFILE_MANIFEST)) {
+  console.error(
+    [
+      PROFILE_MANIFEST === ""
+        ? "读不出 profile 位置(USERPROFILE / HOME 都为空)。"
+        : `找不到 profile 清单:${PROFILE_MANIFEST}`,
+      "",
+      "这一项测的是「装本插件会不会扰动**你这份** profile 的依赖树」,所以必须指到真实 profile。",
+      `  ${PROFILE_HINT}`,
+      "不给这个变量的话,按 <用户主目录>/.dsh/profiles/desktop 推导(官方桌面端的默认位置)。",
+      ""
+    ].join("\n")
+  );
   process.exit(1);
 }
 

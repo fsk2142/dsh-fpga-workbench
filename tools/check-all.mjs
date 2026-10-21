@@ -15,7 +15,7 @@
 //   · 安装副本检查(--installed):profile 里那份已装副本与源是否逐字节一致、能否加载
 //   · 真实客户端集成:目前**没有**自动化检查,永远记"未检",并在摘要里写清人工怎么检
 // 任一层有跳过/未跑/未检,收尾就不准说"全部通过"。
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./lib/spawn.mjs";
 import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -144,7 +144,7 @@ const HOST_WARN =
     : undefined;
 
 /** 源码级检查:不依赖本机 DSH 安装与 profile。 */
-const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-selfcheck.mjs", "check-package.mjs"];
+const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-selfcheck.mjs", "check-mcp.mjs", "check-version.mjs", "check-package.mjs"];
 
 /** 环境级检查:需要本机装好的 DSH(缺了就 SKIP)。
  *  check-patch-file 用的是**宿主那份** js-yaml 与 cordis-plugin-include schema,

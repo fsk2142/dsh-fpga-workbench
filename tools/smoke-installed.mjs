@@ -7,15 +7,30 @@
 //
 // 用法:node tools/smoke-installed.mjs
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const PROFILE = process.env.DSH_PROFILE_DIR
-  ?? `${process.env.USERPROFILE ?? process.env.HOME ?? ""}\\.dsh\\profiles\\desktop`;
-const INSTALLED = `${PROFILE}\\node_modules\\dsh-fpga-workbench`;
+import { HOST_HINT, PROFILE_HINT, compatibleHostDir, installHostPeerResolution, profileDir } from "./lib/host.mjs";
+
+const PROFILE = profileDir();
+const INSTALLED = join(PROFILE, "node_modules", "dsh-fpga-workbench");
 // 宿主安装目录:唯一来源在 check-all.mjs(由它用同一个环境变量传下来),这里的默认值
-// 只为单独调用(`node tools/smoke-installed.mjs`)兜底。
-const APP = process.env.DSH_APP_DIR ?? "C:/Program Files/DSH Desktop/resources/app";
+// 由 tools/lib/host.mjs 推导 —— 不写死任何一台机器的安装路径,并且**只挑能提供
+// 现代 schemastery 的那份**(否则会拿陈旧的 npm 全局 dsh 验证,报出与插件无关的错)。
+const HOST = process.env.DSH_APP_DIR ?? compatibleHostDir();
+const APP = typeof HOST === "string" ? HOST : HOST.dir;
+
+if (PROFILE === "") {
+  console.error(
+    [
+      "读不出 profile 位置(USERPROFILE / HOME 都为空)。",
+      `  ${PROFILE_HINT}`,
+      ""
+    ].join("\n")
+  );
+  process.exit(1);
+}
 
 const failures = [];
 const check = (ok, label, detail) => {
@@ -23,10 +38,19 @@ const check = (ok, label, detail) => {
   if (!ok) failures.push(label);
 };
 
+// 裸依赖(`@deepseek-ai/schemastery` 等)在真机上由宿主的 profile 解析层路由到宿主目录,
+// profile 的 node_modules 里没有它们。这里把那层路由补上,否则这条冒烟只在开发机上碰巧通过。
+const peer = installHostPeerResolution(APP);
+console.log(
+  peer.enabled
+    ? `      裸依赖解析:接到宿主 ${peer.moduleRoot}`
+    : `      裸依赖解析:未接管(${peer.reason})`
+);
+
 // ── 1. 宿主半侧:在 profile 的解析环境里真的 import 得动 ────────────────────
 let host;
 try {
-  host = await import(pathToFileURL(`${INSTALLED}\\lib\\index.js`).href);
+  host = await import(pathToFileURL(join(INSTALLED, "lib", "index.js")).href);
   check(true, "已装 lib/index.js 能 import(裸依赖从 profile 解析)");
 } catch (error) {
   check(false, "已装 lib/index.js 能 import", String(error));
@@ -47,7 +71,7 @@ if (host !== undefined) {
 
 let toolchain;
 try {
-  toolchain = await import(pathToFileURL(`${INSTALLED}\\lib\\toolchain.js`).href);
+  toolchain = await import(pathToFileURL(join(INSTALLED, "lib", "toolchain.js")).href);
   check(true, "已装 lib/toolchain.js 能 import");
 } catch (error) {
   check(false, "已装 lib/toolchain.js 能 import", String(error));
@@ -55,7 +79,7 @@ try {
 
 let templateLibrary;
 try {
-  templateLibrary = await import(pathToFileURL(`${INSTALLED}\\lib\\template-library.js`).href);
+  templateLibrary = await import(pathToFileURL(join(INSTALLED, "lib", "template-library.js")).href);
   check(true, "已装 lib/template-library.js 能 import");
 } catch (error) {
   check(false, "已装 lib/template-library.js 能 import", String(error));
@@ -64,7 +88,7 @@ try {
 // ── 2. 模式半侧:同样 import 得动 ───────────────────────────────────────────
 let mode;
 try {
-  mode = await import(pathToFileURL(`${INSTALLED}\\lib\\mode.js`).href);
+  mode = await import(pathToFileURL(join(INSTALLED, "lib", "mode.js")).href);
   check(true, "已装 lib/mode.js 能 import");
 } catch (error) {
   check(false, "已装 lib/mode.js 能 import", String(error));
@@ -85,7 +109,7 @@ try {
   const yaml = require("js-yaml");
   const { entryListSchema } = require("@deepseek-ai/cordis-plugin-include");
   try {
-    const rows = yaml.load(readFileSync(`${PROFILE}\\cordis.patch.yml`, "utf8"), { schema: entryListSchema });
+    const rows = yaml.load(readFileSync(join(PROFILE, "cordis.patch.yml"), "utf8"), { schema: entryListSchema });
     const row = rows?.find((entry) => entry?.id === "fpga-workbench");
     if (row !== undefined) {
       values = row.config ?? {};
@@ -117,7 +141,7 @@ try {
 // 这是这项功能唯一的端到端证据 —— 客户端那边只验渲染,判据本身在这里。
 let selfCheckModule;
 try {
-  selfCheckModule = await import(pathToFileURL(`${INSTALLED}\\lib\\selfcheck.js`).href);
+  selfCheckModule = await import(pathToFileURL(join(INSTALLED, "lib", "selfcheck.js")).href);
   check(true, "已装 lib/selfcheck.js 能 import");
 } catch (error) {
   check(false, "已装 lib/selfcheck.js 能 import", String(error));
@@ -213,7 +237,7 @@ if (host !== undefined) {
 if (host !== undefined && toolchain !== undefined && templateLibrary !== undefined) {
   try {
     check(host.TEMPLATE_PATH === "/plugins/fpga-workbench/templates", "已装副本导出分类模板只读接口路径");
-    const hostSource = readFileSync(`${INSTALLED}\\lib\\index.js`, "utf8");
+    const hostSource = readFileSync(join(INSTALLED, "lib", "index.js"), "utf8");
     check(hostSource.includes("path: TEMPLATE_PATH"), "已装副本实际注册分类模板接口");
     check(
       templateLibrary.TEMPLATE_CATEGORIES?.map((category) => category.key).join(",") ===
@@ -267,7 +291,7 @@ if (mode !== undefined) {
 
 // ── 4. 客户端 bundle:喂假 loader + 假 react,执行工厂函数 ───────────────────
 try {
-  const source = readFileSync(`${INSTALLED}\\lib\\client.js`, "utf8");
+  const source = readFileSync(join(INSTALLED, "lib", "client.js"), "utf8");
   let registered;
   const h = () => undefined;
   const react = {

@@ -12,11 +12,10 @@
 //      (改了一半的重命名就死在这条上)
 //   3. 客户端 bundle 契约:loader id = 包名、exports.inject 是数组、无相对 require、无 static import
 //   4. 宿主半侧:导出 apply / inject = ["settings"] / index.js 里不出现 systemPrompt
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./lib/spawn.mjs";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const LIB = join(ROOT, "lib");
 const BUNDLED_TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
@@ -569,6 +568,9 @@ const capabilityFields = capabilityFixtures.flatMap((capability) => [
   }))
 ]);
 /** 状态路由的答复(不带查询串那条 = 初次取字段定义)。字段表本身固定。 */
+// 假宿主答复里的模板库默认路径:插件真身按包位置算(lib/toolchain.js 的 import.meta.url),
+// 这里跟着算 —— 写死成某台机器的绝对路径的话,断言只在那个目录下成立。
+const FAKE_TEMPLATE_ROOT = join(ROOT, "presets", "fpga-workbench", "templates");
 const payload = {
   values: { ...hostValues },
   sections: [
@@ -598,11 +600,11 @@ const payload = {
     { key: "modelsimIniPath", label: "ModelSim 库映射文件", hint: "填 ModelSim 的 modelsim.ini", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "C:\\modelsim\\modelsim.ini", configured: true, present: true, group: "仿真库", control: "text", kind: "file", detectable: false },
     { key: "questaIniPath", label: "QuestaSim 库映射文件", hint: "填 QuestaSim 的 modelsim.ini", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "C:\\questa\\modelsim.ini", configured: true, present: true, group: "仿真库", control: "text", kind: "file", detectable: false },
     { key: "rtlLangStd", label: "RTL 语言与标准", hint: "语言设置", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "systemverilog-2017", configured: true, present: true, group: "语言标准", control: "select", default: "systemverilog-2017", options: [{ value: "systemverilog-2017", label: "SystemVerilog 1800-2017" }] },
-    { key: "templateLibraryPath", label: "模板库路径", hint: "能力卡展开时扫描固定分类。", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "", configured: false, present: true, group: "模板库", control: "text", kind: "directory", detectable: false, blankNote: "留空只使用插件内置模板", defaultPath: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates" },
+    { key: "templateLibraryPath", label: "模板库路径", hint: "能力卡展开时扫描固定分类。", required: false, skips: [], section: "common", sectionLabel: "工具设置", path: "", configured: false, present: true, group: "模板库", control: "text", kind: "directory", detectable: false, blankNote: "留空只使用插件内置模板", defaultPath: FAKE_TEMPLATE_ROOT },
     ...capabilityFields,
     { key: "legacyCompiler", label: "旧键", hint: "不显示", section: "common", group: "旧键", control: "hidden", path: "", configured: false, present: false }
   ],
-  templateLibrary: { fieldKey: "templateLibraryPath", path: "", configured: false, present: true, defaultPath: "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates" },
+  templateLibrary: { fieldKey: "templateLibraryPath", path: "", configured: false, present: true, defaultPath: FAKE_TEMPLATE_ROOT },
   migrationWarnings: [],
   missing: [],
   ok: true
@@ -922,7 +924,9 @@ findButton(commonSection, "展开设置")?.props?.onClick();
 fake.reset();
 secondTree = captured();
 try {
-  const defaultTemplateRoot = "C:\\Work\\dsh-fpga-workbench\\presets\\fpga-workbench\\templates";
+  // 默认模板库根由插件**自己按包位置**算出来(lib/toolchain.js 的 import.meta.url),
+  // 所以这里也从包位置算,不写死任何一台机器的绝对路径。
+  const defaultTemplateRoot = join(ROOT, "presets", "fpga-workbench", "templates");
   let templateAux = findByProp(secondTree, (props) => props.key === "aux-模板库");
   findButton(templateAux, "展开设置")?.props.onClick();
   fake.reset();

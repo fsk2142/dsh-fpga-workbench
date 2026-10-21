@@ -8,6 +8,14 @@ transcript
 *.wlf
 work/
 vsim.wlf
+*.vstf
+
+# Vivado 跑起来落在**当前工作目录**的报告(不是工程产物,是工具自身的行为):
+# dfx_runtime.txt 里只有一行"DFXRuntime Profile Report";.Xil/ 是它建的用户数据目录。
+dfx_runtime.txt
+.Xil/
+*.jou
+*.pb
 
 # 打包/安装验证的临时区,不放任何源文件
 .tmp/
@@ -27,3 +35,16 @@ Thumbs.db
 
 # 会话交接笔记(只给本机下一个接手的人看,含本机路径与已装副本位置)
 HANDOFF.md
+
+# ── AMD Vivado AI 套件:本地放,绝不进版本库 ──────────────────────────────────
+# 用户自行从 AMD 官网下载(需登录)的 MCP 服务器与 VS Code 扩展。**不能提交**:
+# 其 LICENSE 第 3.2 条明令「不得分发或提供给第三方」(shall not distribute or provide
+# Licensed Materials to a third party)。本仓库是公开的,提交即等于分发。
+# 插件只**存路径并调用**它 —— 那是第 2.1 条明确允许的用法。
+# 本地放在 vivado-plugin/ 下自用可以;要不要保留这个目录取决于你,反正 git 看不见它。
+vivado-plugin/
+*.vsix
+vivado-mcp-server-*.exe
+
+# Vivado MCP 会话在工作目录里落的日志目录(实测:每次 vivado_start 都会建)
+.vivado-ai/

@@ -1,0 +1,41 @@
+MIT License
+
+Copyright (c) 2026 dsh-fpga-workbench contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+This license covers the original source in this repository only.
+
+It does NOT cover AMD/Xilinx software. In particular:
+
+* The optional "Vivado MCP" integration talks to `vivado-mcp-server`, which is
+  distributed by AMD under the "XILINX MCP SERVER AND EXTENSION LICENSE
+  AGREEMENT". That agreement is bundled with the AMD download (see LICENSE.txt
+  inside the .vsix). It is a separate agreement between you and AMD/Xilinx, and
+  this project neither grants nor extends any rights under it.
+* That agreement forbids redistributing the AMD binaries to third parties
+  (section 3.2). Therefore no AMD binary is included in this repository, in
+  the npm package, or in the release artifacts. You obtain it yourself from
+  AMD and register the path in the settings page.
+* Vivado, ModelSim, QuestaSim, Quartus and Verilator are commercial or
+  third-party tools governed by their own licenses. This plugin only records
+  paths to them and produces scripts that call them; using those tools
+  requires your own valid licenses.

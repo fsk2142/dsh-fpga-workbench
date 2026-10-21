@@ -36,12 +36,14 @@ Thumbs.db
 # 会话交接笔记(只给本机下一个接手的人看,含本机路径与已装副本位置)
 HANDOFF.md
 
-# ── AMD Vivado AI 套件:本地放,绝不进版本库 ──────────────────────────────────
+# ── AMD Vivado AI 套件:绝不进版本库 ─────────────────────────────────────────
 # 用户自行从 AMD 官网下载(需登录)的 MCP 服务器与 VS Code 扩展。**不能提交**:
 # 其 LICENSE 第 3.2 条明令「不得分发或提供给第三方」(shall not distribute or provide
 # Licensed Materials to a third party)。本仓库是公开的,提交即等于分发。
 # 插件只**存路径并调用**它 —— 那是第 2.1 条明确允许的用法。
-# 本地放在 vivado-plugin/ 下自用可以;要不要保留这个目录取决于你,反正 git 看不见它。
+#
+# 推荐放在**仓库之外**(任意目录均可,与插件位置无关)。下面几条是兜底:
+# 万一有人临时把它丢进仓库目录,git 也看不见它。
 vivado-plugin/
 *.vsix
 vivado-mcp-server-*.exe

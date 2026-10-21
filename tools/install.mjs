@@ -20,6 +20,8 @@ import { spawnSync } from "./lib/spawn.mjs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { desktopElectron } from "./lib/host.mjs";
+
 import { cleanupEntry, formatCleanup } from "./lib/cleanup.mjs";
 import { compareTree } from "./shipped.mjs";
 
@@ -64,6 +66,26 @@ function verify() {
     if (parsed.dsh?.client?.platform !== "web") failures.push("已装清单缺 dsh.client.platform");
   }
   return failures;
+}
+
+/**
+ * 冒烟测试该用哪个解释器跑。
+ *
+ * 桌面端把运行时放在 `app.asar` 里,peer 依赖也在里面 —— **普通 Node 读不到 asar**,
+ * 只有 Electron 的 fs 支持。所以:宿主是桌面端时用它的 Electron(`ELECTRON_RUN_AS_NODE=1`),
+ * 否则用当前这个 Node。
+ * @returns `{ command, prefix, env }`。
+ */
+function smokeRunner() {
+  const electron = desktopElectron();
+  if (electron.command !== "") {
+    return {
+      command: electron.command,
+      prefix: [],
+      env: { ...process.env, ...electron.env }
+    };
+  }
+  return { command: process.execPath, prefix: [], env: { ...process.env } };
 }
 
 /**
@@ -248,8 +270,19 @@ if (checkOnly) {
     console.log("PASS: 已装副本与源逐字节一致。");
     // 光"字节一致"还不够 —— 再在真实解析环境里加载一遍(宿主半侧 import + 客户端 bundle
     // 的工厂函数执行)。这一步能抓住"文件都对、但一加载就炸"的情况,而那种情况重启后就是黑屏。
+    //
+    // **必须用宿主自己的解释器跑**(踩过,2026-10-21):插件的 peer 依赖
+    // (`@deepseek-ai/schemastery` 等)在官方桌面端里位于 `app.asar` 内,而**普通 Node
+    // 看不见 asar 内部** —— 冒烟因此判成"这台机器没有宿主",退回到那份陈旧的全局 dsh,
+    // 拿错误的 schemastery 去验,报出与插件无关的 `.volatile is not a function`,
+    // 然后**回滚掉一次本来装对了的安装**。check-all.mjs 早就是这么做的:选中桌面端时
+    // 改用它的 Electron(ELECTRON_RUN_AS_NODE=1)。这里照同一条口径。
     console.log("\n冒烟测试:在 profile 的解析环境里加载一遍…\n");
-    const smoke = spawnSync(process.execPath, [join(ROOT, "tools", "smoke-installed.mjs")], { stdio: "inherit" });
+    const runner = smokeRunner();
+    const smoke = spawnSync(runner.command, [...runner.prefix, join(ROOT, "tools", "smoke-installed.mjs")], {
+      stdio: "inherit",
+      env: runner.env
+    });
     if ((smoke.status ?? 1) !== 0) {
       rollback("冒烟测试没过(新副本在这个解析环境里加载不起来)");
     }

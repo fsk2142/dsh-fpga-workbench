@@ -116,12 +116,15 @@ if (field !== undefined) {
 // ── 六、许可证边界:仓库里不许出现那个二进制 ─────────────────────────────────
 //
 // AMD 的 LICENSE 第 3.2 条禁止向第三方分发。这条断言盯的是"别再手滑提交进来"。
+//
+// 二进制放在**仓库之外**是推荐姿势(用户自己下载、自己保管)。`.gitignore` 里仍留
+// `vivado-plugin/` 这条兜底:万一有人临时丢进仓库目录,git 也不会看见它。
 
 {
   const gitignore = readFileSync(join(ROOT, ".gitignore"), "utf8");
   check(
     /vivado-plugin\//u.test(gitignore),
-    ".gitignore 忽略了 vivado-plugin/(用户自己放的二进制目录)"
+    ".gitignore 保留了 vivado-plugin/ 兜底(二进制临时丢进仓库目录也不会被提交)"
   );
   check(/vivado-mcp-server-\*\.exe/u.test(gitignore), ".gitignore 忽略了 vivado-mcp-server-*.exe");
   check(/\.vsix/u.test(gitignore), ".gitignore 忽略了 .vsix(AMD 扩展包)");
@@ -132,28 +135,40 @@ if (field !== undefined) {
     !files.some((entry) => /vivado-plugin|\.exe$|\.vsix$/u.test(entry)),
     "发布包 files 白名单不含任何 AMD 二进制"
   );
+
+  // 仓库里**不该真的存在**那个 exe —— 存在就说明有人放下了,而它一旦被 add 就是分发。
+  const inside = ["vivado-plugin/vivado-mcp-server-windows-amd64-2026.9.1.exe", "vivado-mcp-server.exe"]
+    .filter((relative) => existsSync(join(ROOT, relative)));
+  check(
+    inside.length === 0,
+    `仓库目录里没有留下 AMD 二进制(找到:${inside.length === 0 ? "无" : inside.join("、")})`
+  );
 }
 
-// ── 七、真机连通性:有那个 exe 就实测,没有就如实记 SKIP ──────────────────────
+// ── 七、真机连通性:由环境变量指名,没给就如实记 SKIP ─────────────────────────
+//
+// **不再猜仓库里的位置**:二进制推荐放仓库外(如 C:\AMDDesignTools\Plugin),
+// 猜路径只会在换机器时产生一条假的"没找到"。
 
 {
-  const configured = process.env.VIVADO_MCP_EXE ?? "";
-  const candidate = configured !== ""
-    ? configured
-    : join(ROOT, "vivado-plugin", "vivado-mcp-server-windows-amd64-2026.9.1.exe");
-  const inspection = inspectMcpPath(candidate);
-  if (!inspection.ok) {
-    // **不是通过**:如实说明这一项没跑,别让 SKIP 看起来像绿的。
+  const candidate = process.env.VIVADO_MCP_EXE ?? "";
+  if (candidate === "") {
     console.log(
-      `SKIP  真机连通性(Vivado MCP 可执行文件不在:${inspection.reason})` +
-        `\n        要跑这条:设 VIVADO_MCP_EXE 指向你从 AMD 下载的那个 exe`
+      "SKIP  真机连通性(未指定 VIVADO_MCP_EXE)" +
+        "\n        这一项要真的拉起 AMD 的服务器才有证据,且它不在仓库里。" +
+        "\n        要跑:设 VIVADO_MCP_EXE 指向你下载的那个 exe"
     );
-  } else if (existsSync(candidate)) {
-    console.log(
-      `      真机连通性:发现 ${candidate}\n` +
-        `      这一层要真的拉起服务器才会产生证据,不在本脚本里做 ——` +
-        `\n      手工验证:node .tmp/probe-dsh-mcp-client.mjs(需要桌面端 Electron)`
-    );
+  } else {
+    const inspection = inspectMcpPath(candidate);
+    if (!inspection.ok) {
+      console.log(`SKIP  真机连通性(VIVADO_MCP_EXE 指向的路径不可用:${inspection.reason})`);
+    } else {
+      console.log(
+        `      真机连通性:已指定 ${candidate}\n` +
+          "      这一层要真的拉起服务器才会产生证据,不在本脚本里做 ——" +
+          "\n      手工验证需要桌面端 Electron,见 README「已验证」一节。"
+      );
+    }
   }
 }
 

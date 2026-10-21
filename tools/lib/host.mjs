@@ -77,6 +77,42 @@ export function hostCandidates() {
 }
 
 /**
+ * 桌面端的安装根(`.../Programs/DeepSeek Harness`),没装时为空串。
+ *
+ * 判断依据是**外层的 exe 与 app.asar 文件存在**,而不是 asar 内部的 package.json ——
+ * 后者普通 Node 读不到,拿它当判据会在"明明装了桌面端"的机器上判成没装。
+ * @returns 安装根目录,或空串。
+ */
+export function desktopRoot() {
+  const local = process.env.LOCALAPPDATA;
+  if (local === undefined || local === "") return "";
+  const root = join(local, "Programs", "DeepSeek Harness");
+  const exe = join(root, "DeepSeek Harness.exe");
+  const asar = join(root, "resources", "app.asar");
+  return existsSync(exe) && existsSync(asar) ? root : "";
+}
+
+/**
+ * 桌面端自带的 Electron 可执行文件,以及它的 Node 运行环境。
+ *
+ * 官方桌面端把运行时放在 `app.asar` 里,普通 Node 的 `fs` 读不到 asar 内部 ——
+ * 但 Electron 的 fs **支持 asar**。所以凡是"要 require 宿主里的包"的子检查
+ * (冒烟测试、加载契约)都必须用它来跑,`ELECTRON_RUN_AS_NODE=1` 让它以纯 Node 身份执行。
+ * @returns `{ command, env }`;没装桌面端时 `command` 为空串。
+ */
+export function desktopElectron() {
+  const root = desktopRoot();
+  if (root === "") return { command: "", env: {} };
+  return {
+    command: join(root, "DeepSeek Harness.exe"),
+    env: {
+      ELECTRON_RUN_AS_NODE: "1",
+      DSH_APP_DIR: join(root, "resources", "app.asar", "dsh")
+    }
+  };
+}
+
+/**
  * 挑一个"存在 package.json"的宿主目录。
  *
  * 这里**只证明目录形状对**(能被 createRequire 当锚点),不判断版本 —— 版本筛选是
@@ -85,7 +121,11 @@ export function hostCandidates() {
  */
 export function hostDir() {
   for (const candidate of hostCandidates()) {
-    if (existsSync(join(candidate, "package.json"))) return candidate;
+    if (!existsSync(join(candidate, "package.json"))) continue;
+    // 指向 asar 内部时只有 Electron 的 fs 看得见。普通 Node 在这里 existsSync 已经是 false
+    // (所以到不了这一步);加这一条是为了在"asar 被解包到磁盘"的机器上也别误判成普通目录。
+    if (candidate.includes(".asar") && !process.versions.electron) continue;
+    return candidate;
   }
   return "";
 }

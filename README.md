@@ -149,7 +149,18 @@ AMD 官方出了一套 Vivado 的 MCP 服务器。本插件可以接上它 —�
 - **第 3.2 条:不得向第三方分发**(`shall not distribute or provide Licensed Materials to a third party`)。
 
 所以:**本仓库、npm 包、release 附件里都没有那个二进制**;`.gitignore` 也挡住了
-`vivado-plugin/`、`*.vsix`、`vivado-mcp-server-*.exe`。你自己下载、自己填路径,归你自己的许可。
+`vivado-plugin/`、`*.vsix`、`vivado-mcp-server-*.exe`(即使有人临时把它丢进仓库目录,
+git 也看不见它)。你自己下载、自己保管、自己填路径,归你自己的许可。
+
+想找个地方放的话,仓库**外面**任意目录都可以(与插件位置无关),例如:
+
+```text
+C:\AMDDesignTools\Plugin\
+├─ vivado-mcp-server-windows-amd64-<版本>.exe   ← 设置页填这个路径
+└─ vivado-ai-extension-<版本>.vsix              ← 只有用 VS Code 扩展时才需要
+```
+
+那个 `.vsix` 与 DSH 无关 —— 它是给 VS Code 用的,本插件既不读它也不需要它。
 
 而它的**第 2.1 条**明确允许「用户选择的 AI agent 代表用户访问它」—— 本插件就是那个 agent,
 所以"存路径 + 调用"是被许可的用法。

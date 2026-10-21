@@ -1,7 +1,27 @@
 {
   "name": "dsh-fpga-workbench",
-  "version": "0.4.5",
-  "description": "FPGA 开发模式 + 工具链设置:一个 DSH agent 预设(人设/工具/技能 + 本机工具链提示),外加「设置 → FPGA 开发模式」里配置 Vivado / ModelSim / QuestaSim / Verilator 与仿真库映射文件。",
+  "version": "0.5.0",
+  "description": "FPGA 开发模式 + 工具链设置:一个 DSH agent 预设(人设/工具/技能 + 本机工具链提示),外加「设置 → FPGA 开发模式」里配置 Vivado / ModelSim / QuestaSim / Verilator 与仿真库映射文件,以及可选的 AMD Vivado MCP 接入与版本检查。",
+  "license": "MIT",
+  "author": "dsh-fpga-workbench contributors",
+  "homepage": "https://github.com/fsk2142/dsh-fpga-workbench#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fsk2142/dsh-fpga-workbench.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fsk2142/dsh-fpga-workbench/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "fpga",
+    "vivado",
+    "modelsim",
+    "verilator",
+    "mcp",
+    "agent-preset"
+  ],
   "icon": "icon.svg",
   "type": "module",
   "main": "lib/index.js",

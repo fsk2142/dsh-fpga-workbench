@@ -59,22 +59,23 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 
 ## 安装
 
-官方 DeepSeek Harness Desktop `0.2.1-rc.2`:在侧边栏的「插件」页安装本仓库的绝对路径
-`C:\Work\dsh-fpga-workbench`，更新后重启桌面端，再新建会话选择「FPGA 开发模式」。
-插件声明同时保留对 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2` 的兼容。插件自身的 `0.4.5` 是独立版本号，
-不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本，
-不要用旧的全局命令更新官方桌面端的 profile。
-
-下面的命令与 `tools/install.mjs` 是旧 DSH Desktop 环境的安装方式；使用前先确认
-`dsh --version` 与目标桌面端相符。
+在 DeepSeek Harness Desktop(`0.2.1-rc.2`)里,从「插件」页安装本仓库,**然后重启桌面端**,
+新建会话时就能选「FPGA 开发模式」。
 
 ```powershell
-# 从本机工作区(开发时用)
-dsh plugin --profile desktop add file:C:\Work\dsh-fpga-workbench
+# 从 git 仓库安装(HTTPS,任何机器都一样)
+dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workbench.git
 
-# 从 git 仓库(换机器、或不想带着源码目录时用)
-dsh plugin --profile desktop add git+ssh://git@github.com/fsk2142/dsh-fpga-workbench.git
+# 要钉版本就加 #tag(仓库打 tag 之后)
+dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workbench.git#v0.5.0
+
+# 从本机源码目录安装(开发时用;把 <你的克隆目录> 换成实际路径)
+dsh plugin --profile desktop add file:<你的克隆目录>
 ```
+
+插件声明同时兼容 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2`。插件自身的 `0.5.0` 是独立版本号,
+不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本,
+不要用旧的全局命令更新官方桌面端的 profile。
 
 装完**重启 DSH Desktop**,新建会话时预设选择器里就会出现「FPGA 开发模式」。
 
@@ -83,22 +84,77 @@ dsh plugin --profile desktop add git+ssh://git@github.com/fsk2142/dsh-fpga-workb
 1. **不需要构建步骤**。`lib/` 里是可执行的 JS,没有编译产物 —— 包直接就能跑,
    所以仓库里没有 `prepare` / `dist`。git 装法取的是仓库中的**已跟踪内容**；`tools/` 会带上,
    本地且已忽略的 `.tmp/` 不会带上。`tools/` 只用于开发自检,不参与插件加载。
-2. **要指定分支或标签时**在地址后面加 `#`：例如 `...#main`；仓库发布 tag 后也可写 `...#<tag>`。
+2. **要指定分支或标签时**在地址后面加 `#`：例如 `...#main`;仓库发布 tag 后也可写 `...#<tag>`。
    不打标签就跟着 `main` 走,升级时重新 `add` 一次即可。
 3. `pnpm pack` 打出来的 tarball包含 `files` 白名单中的 `lib` / `presets` / `cordis.patch.yml` /
-   `icon.svg`,以及 npm 自动加入的 `package.json` / `README.md`；发布包不带仓库根 `tools/` 与 `docs/`。
+   `icon.svg`,以及 npm 自动加入的 `package.json` / `README.md` / `LICENSE`；发布包不带仓库根 `tools/` 与 `docs/`。
 
-> 刷新安装用 `node C:\Work\dsh-fpga-workbench\tools\install.mjs`(先校验、不一致才重装、
-> 并逐字节校验结果)。**绝不先删**:旧副本先**改名**成备份再重装,装成了备份**保留**
-> (路径会打出来,自己处置);装失败就把备份改回去。**必须在你自己的终端里跑** ——
-> 受限沙箱里 pnpm 无法在 profile 目录建临时文件。
+> 刷新安装:先 `node tools/install.mjs --check`(只校验,不动任何东西),
+> 不一致再 `node tools/install.mjs`。它**绝不先删**:旧副本先**改名**成备份再重装,
+> 装成了备份**保留**(路径会打出来,自己处置);装失败就把备份改回去。
+> **必须在你自己的终端里跑** —— 受限沙箱里 pnpm 无法在 profile 目录建临时文件。
 >
 > **如果 `dsh plugin add` 被供应链策略挡住**(`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`):
 > 那个门禁查的是**整个 profile 的锁文件**,里面任何一个包"太新"就会整体拒绝,与我们这个
-> 包无关。这时用 `node tools\sync-installed.mjs`:它不经过 pnpm,只把包内容写进已装的
+> 包无关。这时用 `node tools/sync-installed.mjs`:它不经过 pnpm,只把包内容写进已装的
 > `node_modules/<包名>`(依赖声明与锁文件里本来就有这个包,且记录的是**路径**,所以内容
 > 更新不会让它们失效)。它不碰 profile 的 `package.json` / 锁文件 / `settings.yaml`,
 > 不联网、不装新依赖。等那几条锁文件记录过了最小发布年龄,再跑 `install.mjs` 即可。
+
+### 版本与检查更新
+
+设置页底部有一张「版本」卡片:打开时显示**当前插件版本**与它兼容的 DSH 版本(只读本地清单,
+不联网)。旁边的「**检查更新**」按钮会去 GitHub 查一次版本标签 ——
+
+- **只有你点它才会联网**(约 8 秒超时,不带任何本机信息);插件启动、定时任务都不会自动查;
+- 仓库还没有打过 tag 时会如实说「没有可比较的版本号」,不会假装"已是最新";
+- 查到新版本后,按 git 装的那条命令重新 `add` 一次即可(见上一节)。
+
+## 可选的 AMD Vivado MCP(常驻会话)
+
+AMD 官方出了一套 Vivado 的 MCP 服务器。本插件可以接上它 —— 接上之后,本模式的会话多出
+一组 `mcp__vivado__*` 工具,**它管的是一个常驻 Vivado 会话**,和你用 shell 跑
+`vivado -mode batch` 是两条不同的路:
+
+| | shell 跑 `vivado -mode batch`(原本就有) | Vivado MCP(可选) |
+|---|---|---|
+| 生命周期 | 一条命令一个进程,跑完就退 | 一个会话常驻,可以连着发很多条 Tcl |
+| 长命令 | 前台等或丢后台任务 | 自带 handoff:超时先返回 `status: running`,之后查状态 |
+| run 进度 | 自己 grep 日志 | `vivado_status action='runs'` 直接给 synth/impl 进度 |
+| 日志 | 自己读文件 | `vivado_log_messages` 按 ERROR / CRITICAL WARNING 分类 |
+
+### 怎么装上
+
+1. 去 **AMD 官网下载** `vivado-mcp-server-<平台>-<版本>`(需要登录 AMD 账号)。本仓库
+   **不打包、不分发**它 —— 见下方「许可证」。
+2. 打开「设置 → FPGA 开发模式 → Vivado MCP」,把那个可执行文件的**路径**填进去并保存。
+3. 重启桌面端。之后在 FPGA 开发模式的会话里就有 `mcp__vivado__*` 工具了。
+
+留空就**完全不启用**:没有这组工具,其余一切照旧。填了路径但文件不在,设置页会直接标出来,
+会话提示里也会写明"路径当前不可用",不会让模型去调一堆不存在的工具。
+
+### 已验证
+
+- Vivado **2025.2** 上实测跑通:起 TCL 会话 → `version -short` 返回 `2025.2` → 执行真实命令
+  (`get_parts` 计数)→ 正常关闭。
+- 经 DSH 自带的 `dsh-mcp-client` 挂载后,11 个工具全部注册为 `mcp__vivado__*`。
+- 服务器自带文档里那条「需要 Vivado 2026.1」的限制,只针对 `extension_mode`(让 AMD 的
+  VS Code 扩展接管界面)。**普通 TCL 会话没有版本门槛**,2025.2 可以直接用。
+
+### 许可证(重要)
+
+那个服务器的分发条款随包附带(《XILINX MCP SERVER AND EXTENSION LICENSE AGREEMENT》,
+`.vsix` 里的 `LICENSE.txt`),不是授权码 —— 登录下载、装完即适用。对本插件有实际约束的只有一条:
+
+- **第 3.2 条:不得向第三方分发**(`shall not distribute or provide Licensed Materials to a third party`)。
+
+所以:**本仓库、npm 包、release 附件里都没有那个二进制**;`.gitignore` 也挡住了
+`vivado-plugin/`、`*.vsix`、`vivado-mcp-server-*.exe`。你自己下载、自己填路径,归你自己的许可。
+
+而它的**第 2.1 条**明确允许「用户选择的 AI agent 代表用户访问它」—— 本插件就是那个 agent,
+所以"存路径 + 调用"是被许可的用法。
+
+另外别把它的**性能对比数据**写进公开文档(第 3.3 条禁止发布 benchmark 结果)。
 
 ## 它由什么组成
 
@@ -106,8 +162,11 @@ dsh plugin --profile desktop add git+ssh://git@github.com/fsk2142/dsh-fpga-workb
 package.json                  dsh.bundle.patch + dsh.client + exports['./mode'];
                               peer 依赖 schemastery(profile 自带,不新增依赖)
 cordis.patch.yml              profile 层:挂载宿主半侧 + 插入 FPGA 预设声明行
-lib/index.js                  宿主半侧(全局):注册设置、同步预设、探测路径、只读状态路由
-lib/mode.js                   模式半侧(只有本模式):把工具链交给本模式的会话
+lib/index.js                  宿主半侧(全局):注册设置、同步预设、探测路径、只读状态路由、
+                              版本信息与「检查更新」
+lib/mode.js                   模式半侧(只有本模式):把工具链交给本模式的会话 + 挂 Vivado MCP
+lib/mcp.js                    AMD Vivado MCP 的接入层(路径判定 + 挂载/卸载 mcp-client)
+lib/version.js                版本号比较与「检查更新」(唯一会联网的地方,且只在按钮里)
 lib/toolchain.js              字段定义 + 存在性判定 + 提示文案 —— 只依赖 node 内置模块
 lib/client.js                 浏览器半侧:手写懒 CJS bundle,「设置 → FPGA 开发模式」分区
 presets/fpga-workbench/

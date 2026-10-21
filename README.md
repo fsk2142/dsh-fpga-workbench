@@ -67,13 +67,13 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workbench.git
 
 # 要钉版本就加 #tag(仓库打 tag 之后)
-dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workbench.git#v0.5.0
+dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workbench.git#v0.6.0
 
 # 从本机源码目录安装(开发时用;把 <你的克隆目录> 换成实际路径)
 dsh plugin --profile desktop add file:<你的克隆目录>
 ```
 
-插件声明同时兼容 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2`。插件自身的 `0.5.0` 是独立版本号,
+插件声明同时兼容 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2`。插件自身的 `0.6.0` 是独立版本号,
 不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本,
 不要用旧的全局命令更新官方桌面端的 profile。
 
@@ -135,9 +135,19 @@ AMD 官方出了一套 Vivado 的 MCP 服务器。本插件可以接上它 —�
 
 ### 已验证
 
-- Vivado **2025.2** 上实测跑通:起 TCL 会话 → `version -short` 返回 `2025.2` → 执行真实命令
-  (`get_parts` 计数)→ 正常关闭。
-- 经 DSH 自带的 `dsh-mcp-client` 挂载后,11 个工具全部注册为 `mcp__vivado__*`。
+- Vivado **2025.2** 上完整跑通一轮(**2026-10-21 实测,不是"应该能行"**):
+
+  | 步骤 | 结果 | 耗时 |
+  |---|---|---|
+  | `vivado_start`(真的拉起 vivado.exe) | `status: success` | 5.6 s |
+  | `vivado_execute: version -short` | 返回 `"2025.2"`,`exit_code=0` | 318 ms |
+  | `vivado_execute: llength [get_parts xc7z020*]` | 返回 `"8"` | 320 ms |
+  | `vivado_status` | `is_command_running=false`,`last_completed_code=0` | 1 ms |
+  | `vivado_stop` | 正常关闭 | 1.4 s |
+  | 关闭后残留进程 | **无 `vivado.exe`** ✅ | — |
+
+- 经 DSH 自带的 `dsh-mcp-client` 挂载后,11 个工具全部注册为 `mcp__vivado__*`;
+  并发调用、重复保存、清空路径后卸载都验证过(工具不重复、无残留、服务器进程退出)。
 - 服务器自带文档里那条「需要 Vivado 2026.1」的限制,只针对 `extension_mode`(让 AMD 的
   VS Code 扩展接管界面)。**普通 TCL 会话没有版本门槛**,2025.2 可以直接用。
 

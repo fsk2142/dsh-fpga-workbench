@@ -185,16 +185,28 @@
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'
 
+# ── time context ────────────────────────────────────────────────────────────
+
+# 让模型知道"现在"是什么时候。成本极低(一行配置、几十个 token),但 FPGA 工程里
+# 有两处会真的用到:模板文件头的 `<DATE>` 要填真实日期;判断"证据是不是过期了"
+# (报告里标的日期 vs 今天)也要有今天的日期。
+- id: time-context
+  name: '@deepseek-ai/dsh-time-context'
+
 # ── goals ───────────────────────────────────────────────────────────────────
 
-# The goal service and session driver stay on the host plane, where the Gateway
-# can resolve them. The human command and model-facing tool register into this
-# preset's scoped layers.
-- id: command-goal
-  name: '@deepseek-ai/dsh-command-goal'
-
-- id: tool-goal
-  name: '@deepseek-ai/dsh-tool-goal'
+# **刻意移除**(2026-10-21,按"不拖慢本模式"的取舍):
+# standard 默认装 command-goal + tool-goal,它们给会话加一层"持久化目标"元机制
+# (create_goal / update_goal / get_goal + 一个斜杠命令)。FPGA 开发模式里,
+# "本次要做什么"就是用户当前的问题,跟踪进度用 todo_write、结论用文件 ——
+# 再叠一层目标服务只增加模型的选择负担,没有对应收益。
+# 若要恢复:把下面两行取消注释即可(宿主侧的服务与驱动仍在,不依赖本预设)。
+#
+# - id: command-goal
+#   name: '@deepseek-ai/dsh-command-goal'
+#
+# - id: tool-goal
+#   name: '@deepseek-ai/dsh-tool-goal'
 
 # ── plan mode ───────────────────────────────────────────────────────────────
 
@@ -295,27 +307,12 @@
         toolName: subagent_fork
         backgroundMode: continuable
 
-    # Production dsh does not install these optional providers. Install the
-    # matching Bundle in this Profile and restart the Host, then copy this
-    # preset and remove `disabled` from the matching tool row. Host availability
-    # alone grants no tool.
-    - id: tool-subagent-codex
-      name: '@deepseek-ai/dsh-tool-subagent'
-      disabled: true
-      config:
-        provider: codex
-        toolName: subagent_codex
-        backgroundMode: one-shot
-        maxDepth: provider-managed
-
-    - id: tool-subagent-claude-code
-      name: '@deepseek-ai/dsh-tool-subagent'
-      disabled: true
-      config:
-        provider: claude-code
-        toolName: subagent_claude_code
-        backgroundMode: one-shot
-        maxDepth: provider-managed
+    # **刻意移除**(2026-10-21):下面三行在 standard 里存在,在这里被删掉而不是
+    # 保留成 `disabled: true`。理由是不同的:
+    #   · tool-subagent-codex / tool-subagent-claude-code —— 需要另装外部 Bundle 与
+    #     对应 CLI 环境才可能工作,FPGA 开发不会用到;留着只是让补丁多两行走一遍加载。
+    #   · tool-ralph —— 为"fresh-agent 长跑迭代"设计;单个模块的开发不需要它。
+    # 要恢复其中任何一个:按 standard 预设那几行的写法加回来并去掉 disabled 即可。
 
     - id: workflow-ptc
       name: '@deepseek-ai/dsh-workflow-ptc'
@@ -324,13 +321,6 @@
 
     - id: tool-workflow
       name: '@deepseek-ai/dsh-tool-workflow'
-
-    - id: tool-ralph
-      name: '@deepseek-ai/dsh-tool-ralph'
-      disabled: true
-      config:
-        subagentProvider: spawn
-        maxRounds: 64
 
 # ── remaining model-facing rows ─────────────────────────────────────────────
 

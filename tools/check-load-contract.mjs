@@ -382,7 +382,34 @@ check(
 const preset = read("presets/fpga-workbench/agent.cordis.yml");
 check(/- id: workflow-ptc[\s\S]*?name: '@deepseek-ai\/dsh-workflow-ptc'/u.test(preset), "FPGA 预设包含新版 workflow-ptc 行");
 check(!/workflow-worker-thread/u.test(preset), "FPGA 预设不再挂载已移除的 workflow-worker-thread 行");
-check(/- id: tool-ralph[\s\S]*?disabled: true/u.test(preset), "FPGA 预设中的 tool-ralph 与新版 standard 一样默认禁用");
+
+// 以下三组是**刻意不装**(2026-10-21,按"不拖慢本模式"的取舍)。断言盯的是"别被顺手抄回来",
+// 因为删掉它们是有意决定,不是漏抄:
+//   · tool-ralph —— 为 fresh-agent 长跑迭代设计,单模块开发不需要;
+//   · codex / claude-code 子代理 —— 需另装外部 Bundle 与对应 CLI 环境;
+//   · goals 两行 —— 本模式用 todo_write 与报告文件跟踪进度,不需要目标元机制。
+// 断言只看**生效的行**,不看注释 —— 文件里刻意留了一段"要恢复就取消注释"的示例,
+// 那是给下一个人的说明,把它算进来会让断言因为"解释自己"而失败(踩过一次)。
+const presetActive = preset
+  .split(/\r?\n/u)
+  .filter((line) => !/^\s*#/u.test(line))
+  .join("\n");
+
+check(
+  !/- id: tool-ralph/u.test(presetActive) &&
+    !/- id: tool-subagent-codex/u.test(presetActive) &&
+    !/- id: tool-subagent-claude-code/u.test(presetActive),
+  "FPGA 预设刻意不装 ralph / codex / claude-code(精简,不是漏抄)"
+);
+check(
+  !/- id: tool-goal/u.test(presetActive) && !/- id: command-goal/u.test(presetActive),
+  "FPGA 预设刻意不装 goals 两行(用 todo 与报告文件跟踪,不要目标元机制)"
+);
+// 时间上下文相反:**要装** —— 模板文件头的 <DATE> 与"证据是否过期"都要用到"今天"。
+check(
+  /- id: time-context[\s\S]*?name: '@deepseek-ai\/dsh-time-context'/u.test(presetActive),
+  "FPGA 预设装了 time-context(写日期、判证据新鲜度要用)"
+);
 check(
   /- id: tool-plugin-manager[\s\S]*?name: '@deepseek-ai\/dsh-plugin-manager\/tools'[\s\S]*?disabled: true/u.test(preset),
   "FPGA 预设包含新版插件管理器工具行"

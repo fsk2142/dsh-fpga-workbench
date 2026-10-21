@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import { BUNDLED_SKILLS, runSelfCheck } from "../lib/selfcheck.js";
 import { BUILTIN_TEMPLATES } from "../lib/template-library.js";
-import { LEVEL_DIRS, TOOLS } from "../lib/toolchain.js";
+import { FIELDS, LEVEL_DIRS, TOOLS } from "../lib/toolchain.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PRESET = join(ROOT, "presets", "fpga-workbench");
@@ -27,8 +27,24 @@ const check = (ok, label, detail) => {
   console.log(`FAIL  ${label}${detail === undefined ? "" : `\n        ${detail}`}`);
 };
 
-/** 递归列出目录下的相对文件路径(用于"照清单拷贝")。 */
-const listFiles = (root, current = root, out = []) => {
+/**
+ * 抹掉 JS 源码里的注释,只留代码。
+ *
+ * 静态守卫("源码里不许再出现某个名字")必须只看代码:注释里常常故意写着"这里曾经错写成 X",
+ * 那是留给下一个人的证据。把注释也算进来,断言就会因为**解释自己**而失败。
+ *
+ * 够用即可:`//` 行注释(允许前面有空白)与 `/* … *\/` 块注释;字符串里的 `//` 可能被误抹,
+ * 本文件只用来查标识符,不看字符串。
+ * @param source - 源码文本。
+ * @returns 去掉注释后的文本。
+ */
+const stripComments = (source) =>
+  source
+    .replace(/\/\*[\s\S]*?\*\//gu, "")
+    .replace(/^\s*\/\/.*$/gmu, "")
+    .replace(/([^:"'`/])\/\/[^\n]*/gu, "$1");
+
+/** 递归列出目录下的相对文件路径(用于"照清单拷贝")。 */const listFiles = (root, current = root, out = []) => {
   for (const item of readdirSync(current, { withFileTypes: true })) {
     const full = join(current, item.name);
     if (item.isDirectory()) listFiles(root, full, out);
@@ -220,6 +236,46 @@ const clean = makeFixture("clean", new Set());
   const report = runSelfCheck({}, clean.root);
   const item = statusOf(report, "settings");
   check(item?.status === "warn" && report.ok === true, `设置模型未写 → warn 但不阻塞(${String(item?.detail)})`);
+}
+
+// ⑪ 模板库路径填了但目录不存在 → library 必须 warn 并点名(2026-10-21 回归)
+//
+//    这一档曾经**恒为 pass**:实现里 find(field => field.key === "templateLibraryRoot") 找的是
+//    一个不存在的字段名,于是 libraryRoot 永远是空串,走"用包内模板库"那条绿分支。用户把模板库
+//    路径填错,自检照样报"通过"。判据整个失效,不是漏报一次。
+{
+  // 路径必须**保证不存在**,但本脚本零删除 —— 所以用一次性名字而不是先删再造。
+  const bogus = join(TMP, `definitely-not-a-template-library-${String(process.pid)}-${String(Date.now())}`);
+  const report = runSelfCheck({ templateLibraryPath: bogus }, clean.root);
+  const item = statusOf(report, "library");
+  check(
+    item?.status === "warn" && String(item?.detail).includes(bogus),
+    `模板库路径不存在 → library 报 warn 并点名(实际:${String(item?.detail)})`
+  );
+
+  // 目录真的存在 → pass,并且说明里点出这个路径(证明读的是填进去的值,不是恒空)
+  const real = join(TMP, `selfcheck-library-${String(process.pid)}`);
+  mkdirSync(real, { recursive: true });
+  const good = statusOf(runSelfCheck({ templateLibraryPath: real }, clean.root), "library");
+  check(
+    good?.status === "pass" && String(good?.detail).includes(real),
+    `模板库路径存在 → library 报 pass 并点名称该路径(实际:${String(good?.detail)})`
+  );
+
+  // 字段定义没了要说 fail,不能静默退化成"没填" —— 用一份没有该字段的来源不可能造,
+  // 所以退而求其次:静态守住"实现里用的字段名真的在 FIELDS 里"。
+  check(
+    FIELDS.some((field) => field.key === "templateLibraryPath"),
+    "selfcheck 读的模板库字段名在 FIELDS 里确实存在"
+  );
+  // 静态守卫只扫**代码**,不扫注释 —— 注释里会写"这里曾经错写成 X"来解释来龙去脉,
+  // 那是要留的证据,不是要清掉的残留。早先版本的断言连注释一起算了,于是它一修好
+  // 就被自己的说明文字绊倒(2026-10-21)。
+  const codeOnly = stripComments(readFileSync(join(ROOT, "lib", "selfcheck.js"), "utf8"));
+  check(
+    !codeOnly.includes("templateLibraryRoot"),
+    "lib/selfcheck.js 的**代码**里不再引用写错的字段名(注释里说明来龙去脉不算)"
+  );
 }
 
 console.log(`夹具留在:${TMP}(本脚本不删任何文件,请自行处置)`);

@@ -16,11 +16,12 @@ git push origin main v0.7.0         # 2. 推送代码与 tag
 # 3. 建 Release（gh CLI 或 GitHub API；正文写用户需要知道的事）
 ```
 
-<!-- 2026-10-22：原来这里写「`tools/probes/audit-rules.mjs` 会核对这条约定」，
-     而 `tools/probes/` 已 gitignore、那个文件在干净克隆里不存在 ——
-     `check-docs` 因此报"提到但文件不存在"。改为指向真正存在的自检。 -->
 发布约定由 `tools/check-version.mjs` 与 `tools/check-docs.mjs` 在 `npm test` 里核对
 （前者查版本号与 `engines.dsh` 的一致性，后者查本文档提到的路径是否真实存在）。
+
+> 2026-10-22 修正：这一行原本指向一个放在已 gitignore 目录里的一次性脚本，
+> 而它在本仓库里不存在 —— 自检会因此报"提到但文件不存在"。
+> 现在改指真正随仓库发布的这两个检查。
 
 ## 发布包边界
 

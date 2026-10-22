@@ -29,13 +29,17 @@ const check = (ok, label, detail) => {
 const read = (rel) => readFileSync(join(ROOT, rel), "utf8");
 const manifest = JSON.parse(read("package.json"));
 check(manifest.dsh?.manifestVersion === 1, `清单声明 dsh.manifestVersion = 1(实际 ${String(manifest.dsh?.manifestVersion)})`);
+// 兼容声明：**不写死范围字符串**，只要求"四个版本都声明了、且范围覆盖它们"。
+// 写死字面量的后果是"加一个兼容版本就得改两处"，而漏改的一处会让测试红
+// （这次就因为给范围补 0.2.0-rc.2 而红过一次）。真正要守的是**一致性**，
+// 那条断言在 check-version.mjs 里（dshReleases ⊆ 范围、peer 与范围一致）。
 check(
-  manifest.dsh?.compatibility?.dsh === "^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-rc.2" &&
-    manifest.dsh?.compatibility?.dshReleases?.["0.1.7-rc.2"] === "compatible" &&
-    manifest.dsh?.compatibility?.dshReleases?.["0.2.0-rc.1"] === "compatible" &&
-    manifest.dsh?.compatibility?.dshReleases?.["0.2.0-rc.2"] === "compatible" &&
-    manifest.dsh?.compatibility?.dshReleases?.["0.2.1-rc.2"] === "compatible",
-  "清单声明兼容 DSH 0.1.7-rc.2、0.2.0-rc.1、0.2.0-rc.2 与 0.2.1-rc.2"
+  ["0.1.7-rc.2", "0.2.0-rc.1", "0.2.0-rc.2", "0.2.1-rc.2"].every(
+    (release) =>
+      manifest.dsh?.compatibility?.dshReleases?.[release] === "compatible" &&
+      String(manifest.dsh?.compatibility?.dsh ?? "").includes(release)
+  ),
+  "清单声明兼容 DSH 0.1.7-rc.2、0.2.0-rc.1、0.2.0-rc.2 与 0.2.1-rc.2，且范围覆盖它们"
 );
 check(
   Array.isArray(manifest.dsh?.client?.inject) &&

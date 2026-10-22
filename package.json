@@ -49,8 +49,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",
-    "@deepseek-ai/dsh-settings": "^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-rc.2",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-rc.2"
+    "@deepseek-ai/dsh-settings": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2"
   },
   "dsh": {
     "bundle": {
@@ -58,7 +58,7 @@
     },
     "manifestVersion": 1,
     "compatibility": {
-      "dsh": "^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-rc.2",
+      "dsh": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2",
       "dshReleases": {
         "0.1.7-rc.2": "compatible",
         "0.2.0-rc.1": "compatible",

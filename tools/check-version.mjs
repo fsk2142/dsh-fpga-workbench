@@ -75,6 +75,74 @@ const check = (ok, label, detail) => {
     "兼容范围取自清单,不是另抄一份"
   );
   check(info.releases.length > 0, `声明了兼容的 DSH 版本(${info.releases.join("、")})`);
+
+  // ── 兼容声明必须与「真的验过的版本」一一对应 ──────────────────────────────
+  //
+  // 2026-10-22 实测发现两件事，合起来改了这里：
+  //
+  // 1. **宿主代码里没有任何地方读 `dsh.compatibility.dshReleases`**
+  //    （扫了 1139 个 js 文件，零引用）。真正决定能否加载的是 `peerDependencies`
+  //    （启动门禁读它）。所以 `dshReleases` 是**给人看的备注**，但它不该自相矛盾。
+  //
+  // 2. **`^` 对 0.x 预发布版会把没验过的版本也算进去**：用宿主自带的 semver 实测，
+  //    `^0.2.0-rc.1` 会放行 `0.2.0`（正式版）、`0.2.5`、`0.1.9` —— 而那些我们从没
+  //    跑过。`dsh-llm-account` 用的是**精确版本**（`0.2.0-rc.2 || 0.2.1-rc.1 || …`），
+  //    正是为了避开这一点。这里对齐它的做法。
+  const compat = String(manifest.dsh?.compatibility?.dsh ?? "");
+  const releases = Object.keys(manifest.dsh?.compatibility?.dshReleases ?? {});
+  const missingFromRange = releases.filter((release) => !compat.includes(release));
+  check(
+    missingFromRange.length === 0,
+    `dshReleases 里每个版本都在兼容范围里(漏写:${missingFromRange.join("、") || "无"})`
+  );
+  check(
+    !/\^/u.test(compat),
+    "兼容范围用**精确版本**而不是 `^` 范围（`^0.2.0-rc.1` 会放行没验过的 0.2.0 / 0.2.5）"
+  );
+
+  const peers = manifest.peerDependencies ?? {};
+  const drifted = Object.entries(peers)
+    .filter(([name]) => name.startsWith("@deepseek-ai/dsh-"))
+    .filter(([, range]) => range !== compat)
+    .map(([name]) => name);
+  check(
+    drifted.length === 0,
+    `宿主 peer 范围与 compatibility.dsh 一致(门禁读 peer;漂开:${drifted.join("、") || "无"})`
+  );
+
+  // 语义验证：**不依赖 semver 库**（check-version 跑在源码层，普通 Node 里没有
+  // semver —— 它只在宿主 asar 里）。改为检查字符串结构：精确版本用 `||` 分隔，
+  // 每一项都必须是完整的 x.y.z[-预发布]，不能有 `^` / `~` / `>=` 这类范围符号。
+  //
+  // 为什么这样就够：宿主门禁用的是 npm 的 semver，而"精确版本 + `||`"在 semver
+  // 里只匹配字面相等的版本。结构对了，语义就对了。
+  const parts = compat.split("||").map((piece) => piece.trim()).filter(Boolean);
+  const notExact = parts.filter((piece) => !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(piece));
+  check(
+    parts.length > 0 && notExact.length === 0,
+    `兼容范围每一项都是精确版本（非法项:${notExact.join("、") || "无"}；共 ${String(parts.length)} 项）`
+  );
+  const declaredOnly = parts.every((piece) => releases.includes(piece));
+  check(
+    declaredOnly,
+    `兼容范围里没有 dshReleases 之外的版本（多出:${parts.filter((piece) => !releases.includes(piece)).join("、") || "无"}）`
+  );
+}
+
+// ── 三b、检查更新用的协议不能硬编码 http ─────────────────────────────────────
+//
+// 宿主走 HTTPS(或用户经反向代理)时,`http://<host>` 会拼成 `http://example.com:443`
+// —— 协议错、端口也错,表现只是「更新检查失败」。这条守卫盯源码里不再出现硬编码。
+{
+  const source = readFileSync(join(ROOT, "lib", "index.js"), "utf8");
+  check(
+    !/base\s*=\s*host\s*===\s*""\s*\?\s*""\s*:\s*`http:\/\/\$\{host\}`/u.test(source),
+    "不把更新检查的源站协议硬编码成 http（按 x-forwarded-proto / 回环 / 外部域名判定）"
+  );
+  check(
+    /x-forwarded-proto/u.test(source),
+    "读取 x-forwarded-proto 以支持反向代理后的 HTTPS"
+  );
 }
 
 // ── 四、仓库地址从哪里来 ─────────────────────────────────────────────────────

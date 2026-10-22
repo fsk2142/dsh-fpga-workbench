@@ -514,6 +514,38 @@ interface DetectedTool {
   [extra: string]: unknown;
 }
 
+/** 一张工具卡（宿主 `toolCards` 的一项）。 */
+interface ToolCard {
+  key: string;
+  label?: string;
+  fieldKeys?: string[];
+  /** 这张卡的主路径字段名（用于浏览/检测）。 */
+  pathKey?: string;
+  /** 宿主给的当前状态（ready / pending / missing…）。 */
+  state?: string;
+  /** 这个字段能不能自动检测。 */
+  detectable?: boolean;
+  /** 字段的路径类型（file / directory）。 */
+  kind?: string;
+  [extra: string]: unknown;
+}
+
+/** 一张能力卡（宿主 `capabilities` 的一项）。 */
+interface CapabilityCard {
+  key: string;
+  label?: string;
+  section?: string;
+  fieldKeys?: string[];
+  templates?: Array<{ key: string; label?: string; [extra: string]: unknown }>;
+  /** "用哪个工具"的字段名。 */
+  toolKey?: string;
+  /** 这次选中的工具。 */
+  tool?: string;
+  /** 宿主给的当前状态。 */
+  state?: string;
+  [extra: string]: unknown;
+}
+
 /** 设置页:标题 + 状态警告 + 各字段。 */
 function SettingsPanel(): ReturnType<typeof h> | null {
   ensureStyles();
@@ -534,7 +566,13 @@ function SettingsPanel(): ReturnType<typeof h> | null {
     fieldKey?: string;
     loading?: boolean;
     error?: string;
-    perField?: Array<{ key: string; tool?: string; hits?: DetectedTool[]; error?: string }>;
+    perField?: Array<{
+      key: string;
+      tool?: string;
+      loading?: boolean;
+      hits?: DetectedTool[];
+      error?: string;
+    }>;
     values?: Record<string, string>;
     tools?: DetectedTool[];
   } | null>(null);
@@ -682,7 +720,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
   const toolFieldKeys = new Set((status?.toolCards ?? []).flatMap((card) => card.fieldKeys ?? []));
   const capabilityFieldKeys = new Set(
     (status?.capabilities ?? []).flatMap((capability) => [
-      capability.toolKey,
+      String(capability.toolKey ?? ""),
       ...(capability.templates ?? []).map((template) => template.key)
     ])
   );
@@ -793,7 +831,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
           throw new Error("接口返回格式不正确");
         }
         const all = data.found;
-        const hits = all.filter((hit) => hit.field === fieldKey);
+        const hits = all.filter((hit: DetectedTool) => hit.field === fieldKey);
         setDetect({ fieldKey, perField: [{ key: fieldKey, tool: hits[0]?.label ?? label, hits }] });
       })
       .catch((error) => {
@@ -844,14 +882,15 @@ function SettingsPanel(): ReturnType<typeof h> | null {
       return h("span", { className: "fpga-set-detect-row fpga-set-hint" }, "正在检测这个工具…");
     }
     const where = entry.tool === undefined ? "" : `(${String(entry.tool)})`;
-    if (entry.hits.length === 0) {
+    const hits = entry.hits ?? [];
+    if (hits.length === 0) {
       return h(
         "span",
         { className: "fpga-set-detect-row" },
         `没检测到${where}的路径 —— 手填,或用「浏览…」挑`
       );
     }
-    return entry.hits.map((hit: DetectedTool) =>
+    return hits.map((hit: DetectedTool) =>
       h(
         "span",
         { className: "fpga-set-detect-row", key: `${String(entry.key)}-${String(hit.path)}` },
@@ -921,24 +960,24 @@ function SettingsPanel(): ReturnType<typeof h> | null {
         ? "在下面进到那一层,点「用这个目录」;也可以直接把路径粘进输入框。"
         : "在下面找到那个文件**点一下**选中(或打几个字母过滤后回车);也可以直接把路径粘进输入框。"
     );
-    browseTo(field.key, startDir(field, current));
+    browseTo(String(field.key), startDir(field, current));
   };
 
   /** 当前草稿下的一张工具卡状态；路径刚改而预演未返回时显示“正在检查”。 */
-  const toolState = (card) => {
-    const changedPath = drafts[card.pathKey] !== undefined;
-    if (!changedPath) return card.state;
-    if (String(drafts[card.pathKey] ?? "").trim() === "") return "unconfigured";
+  const toolState = (card: ToolCard): string => {
+    const changedPath = card.pathKey === undefined ? false : drafts[card.pathKey] !== undefined;
+    if (!changedPath) return card.state ?? "pending";
+    if (String(drafts[card.pathKey ?? ""] ?? "").trim() === "") return "unconfigured";
     if (previewError !== undefined) return "invalid";
-    return preview?.toolCards?.find((entry) => entry.key === card.key)?.state ?? "pending";
+    return String((preview?.toolCards as ToolCard[] | undefined)?.find((entry) => entry.key === card.key)?.state ?? "pending");
   };
-  const toolCardDirty = (card) => (card.fieldKeys ?? []).some((key) => drafts[key] !== undefined);
-  const openTool = (card) => {
+  const toolCardDirty = (card: ToolCard): boolean => (card.fieldKeys ?? []).some((key) => drafts[key] !== undefined);
+  const openTool = (card: ToolCard): void => {
     setExpandedTool(card.key);
     setSaveError(undefined);
     setDetect(null);
     const pathField = fields.find((field) => field.key === card.pathKey);
-    if (pathField?.detectable === true) runDetect(card.pathKey, card.label);
+    if (pathField?.detectable === true && card.pathKey !== undefined) runDetect(card.pathKey, card.label);
   };
   const closeTool = () => {
     // 在途的检测/浏览答复不许再写回状态(与 closeCapability 的 templateSeq 同一手法):
@@ -949,7 +988,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
     setDetect(null);
     setExpandedTool(undefined);
   };
-  const cancelTool = (card) => {
+  const cancelTool = (card: ToolCard): void => {
     revertKeys(card.fieldKeys ?? []);
     browseSeq.current += 1;
     detectSeq.current += 1;
@@ -957,7 +996,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
     setDetect(null);
     setExpandedTool(undefined);
   };
-  const saveTool = (card) => {
+  const saveTool = (card: ToolCard): void => {
     const state = toolState(card);
     if (state !== "ready" && state !== "unconfigured") return;
     saveKeys(card.fieldKeys ?? [], () => {
@@ -970,7 +1009,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
   };
 
   /** 能力卡展开时才扫描它需要的模板分类；关闭、切卡或重开都会让旧答复作废。 */
-  const openCapability = (capability) => {
+  const openCapability = (capability: CapabilityCard): void => {
     const mine = (templateSeq.current += 1);
     setExpandedCapability(capability.key);
     setSaveError(undefined);
@@ -983,8 +1022,8 @@ function SettingsPanel(): ReturnType<typeof h> | null {
       .then((data) => {
         if (mine !== templateSeq.current) return;
         const validGroups = Array.isArray(data?.groups) && data.groups.every(
-          (group) => group !== null && typeof group === "object" && typeof group.key === "string" &&
-            Array.isArray(group.items) && Array.isArray(group.errors ?? [])
+          (group: unknown) => group !== null && typeof group === "object" && typeof (group as { key?: unknown }).key === "string" &&
+            Array.isArray((group as { items?: unknown }).items) && Array.isArray((group as { errors?: unknown }).errors ?? [])
         );
         if (data === null || typeof data !== "object" || !validGroups) {
           throw new Error("接口返回格式不正确");
@@ -1001,25 +1040,25 @@ function SettingsPanel(): ReturnType<typeof h> | null {
     setExpandedCapability(undefined);
     setTemplateScan(null);
   };
-  const capabilityKeys = (capability) => [
-    capability.toolKey,
+  const capabilityKeys = (capability: CapabilityCard): string[] => [
+    String(capability.toolKey ?? ""),
     ...(capability.templates ?? []).map((template) => template.key)
   ];
-  const cancelCapability = (capability) => {
+  const cancelCapability = (capability: CapabilityCard): void => {
     revertKeys(capabilityKeys(capability));
     closeCapability();
   };
-  const saveCapability = (capability) => {
+  const saveCapability = (capability: CapabilityCard): void => {
     saveKeys(capabilityKeys(capability), closeCapability);
   };
-  const capabilityDirty = (capability) => capabilityKeys(capability).some((key) => drafts[key] !== undefined);
+  const capabilityDirty = (capability: CapabilityCard): boolean => capabilityKeys(capability).some((key) => drafts[key] !== undefined);
 
   const toolUi = {
     expandedTool,
     showToolSettings,
     toggleToolSettings: () => setShowToolSettings((shown) => !shown),
     expandedAuxGroup,
-    toggleAuxGroup: (group) => setExpandedAuxGroup((current) => current === group ? undefined : group),
+    toggleAuxGroup: (group: string) => setExpandedAuxGroup((current) => current === group ? undefined : group),
     state: toolState,
     dirty: toolCardDirty,
     open: openTool,
@@ -1054,7 +1093,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
         // 不让 `checks.length` 在**渲染阶段**炸掉 —— 那时 catch 已经管不到了。
         const checks = Array.isArray(payload?.checks) ? payload.checks : null;
         const valid = checks !== null && checks.every(
-          (item) => item !== null && typeof item === "object" &&
+          (item: unknown) => item !== null && typeof item === "object" &&
             typeof item.id === "string" && typeof item.status === "string"
         );
         if (!valid) throw new Error("自检接口返回格式不正确");
@@ -1063,7 +1102,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
             ok: payload.ok === true,
             failed: payload.failed,
             warned: payload.warned,
-            checks: checks.map((item) => ({
+            checks: checks.map((item: { id?: string; label?: string; status?: string; detail?: string }) => ({
               id: item.id,
               status: item.status,
               label: typeof item.label === "string" ? item.label : item.id,
@@ -1099,8 +1138,8 @@ function SettingsPanel(): ReturnType<typeof h> | null {
       .catch((error) => setUpdate({ error: error instanceof Error ? error.message : String(error) }));
   };
 
-  const checkMark = (state) => (state === "fail" ? "✗" : state === "warn" ? "!" : "✓");
-  const checkClass = (state) =>
+  const checkMark = (state: unknown): string => (state === "fail" ? "✗" : state === "warn" ? "!" : "✓");
+  const checkClass = (state: unknown): string =>
     state === "fail" ? "fpga-set-bad" : state === "warn" ? "fpga-set-warn" : "fpga-set-good";
 
   /** 自检卡片:按钮 + 逐条结论。只在用户点过之后才出现结果。 */
@@ -1239,7 +1278,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
       { className: "fpga-set-lead" },
       "先登记本机工具，再为模块和工程环节选择已就绪工具及模板。各环节可按需反复切换，并非固定流水线。"
     ),
-    ...(status?.migrationWarnings ?? []).map((warning, index) =>
+    ...((status?.migrationWarnings as string[] | undefined) ?? []).map((warning, index) =>
       h("p", { className: "fpga-set-bad", key: `migration-warning-${String(index)}` }, `设置迁移提醒：${String(warning)}`)
     ),
     ...renderFields(
@@ -1568,7 +1607,7 @@ function renderFields(
           h(
             "div",
             { className: "fpga-set-row", key: capability.toolKey },
-            h("div", { className: "fpga-set-label" }, h("span", null, "工具"), helpBubble(capability.toolKey, "只可选择工具设置中已经就绪的工具；未就绪项会显示但不可选。")),
+            h("div", { className: "fpga-set-label" }, h("span", null, "工具"), helpBubble(String(capability.toolKey ?? ""), "只可选择工具设置中已经就绪的工具；未就绪项会显示但不可选。")),
             h(
               "select",
               {
@@ -1578,7 +1617,7 @@ function renderFields(
                 "aria-label": `${String(capability.label)}工具`,
                 onChange: (event) => {
                   const next = String(event.target.value ?? "auto");
-                  stage(capability.toolKey, next);
+                  stage(String(capability.toolKey ?? ""), next);
                   // 工具交给 AI / 明确不用 时，模板只能「由 AI 自行决定」
                   if (next === "auto" || next === "none") {
                     for (const t of capability.templates ?? []) stage(t.key, "");

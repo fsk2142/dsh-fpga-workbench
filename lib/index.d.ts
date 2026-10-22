@@ -22,6 +22,44 @@ export declare const SELFCHECK_PATH = "/plugins/fpga-workbench/selfcheck";
 export declare const UPDATE_PATH = "/plugins/fpga-workbench/update";
 /** 设置页读版本信息(本插件版本 + 兼容的 DSH 版本)的只读路由。不发网络请求。 */
 export declare const VERSION_PATH = "/plugins/fpga-workbench/version";
+/** 本文件用到的 HTTP 请求/响应形状（只列真正访问的成员）。 */
+interface HttpRequest {
+  method?: string;
+  url?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  setEncoding?: (encoding: string) => void;
+  on?: (event: string, listener: (...args: never[]) => void) => void;
+}
+/** `json()` 目标：`res.writeHead` + `res.end` 就够了。 */
+interface HttpResponse {
+  writeHead: (status: number, headers?: Record<string, string>) => unknown;
+  end: (body?: string) => unknown;
+}
+/** 宿主的 webServer 服务（只列本插件用到的两种注册）。 */
+interface WebServerLike {
+  register: (options: {
+    kind: string;
+    path: string;
+    handler: (req: HttpRequest, res: HttpResponse) => unknown;
+  }) => unknown;
+}
+/** Cordis 上下文里本文件用到的成员。 */
+interface HostContext {
+  get: (name: string) => unknown;
+  /** Cordis 契约：上下文一定有 inject / effect / on（可选的是"服务"，不是这几个方法）。 */
+  inject: (deps: string[], callback: (ctx: HostContext) => void) => unknown;
+  effect: (factory: () => unknown, label?: string) => unknown;
+  on: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  logger?: {
+    info?: (message: string) => void;
+    warn?: (message: string) => void;
+  };
+  /** webServer 只在带 Web 的宿主里存在，所以它是可选的（缺了只是少一个设置页）。 */
+  webServer?: WebServerLike;
+  baseUrl?: string;
+  fiber?: unknown;
+  [key: string]: unknown;
+}
 /**
  * 设置 schema:每个字段一个字符串。
  *
@@ -44,7 +82,7 @@ export declare const Config: z<Schemastery.ObjectS<any>, Schemastery.ObjectT<any
  * @param {object} ctx - host plugin context carrying `settings`.
  * @param {Record<string, unknown>} [config] - Loader 传入的本行配置。
  */
-export declare function apply(ctx: any, config: any): void;
+export declare function apply(ctx: HostContext, config?: Record<string, unknown>): void;
 export declare const name = "fpga-workbench";
 export declare const inject: string[];
 //#endregion

@@ -58,6 +58,55 @@ export const UPDATE_PATH = "/plugins/fpga-workbench/update";
 /** 设置页读版本信息(本插件版本 + 兼容的 DSH 版本)的只读路由。不发网络请求。 */
 export const VERSION_PATH = "/plugins/fpga-workbench/version";
 
+/** 本文件用到的 HTTP 请求/响应形状（只列真正访问的成员）。 */
+interface HttpRequest {
+  method?: string;
+  url?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  setEncoding?: (encoding: string) => void;
+  on?: (event: string, listener: (...args: never[]) => void) => void;
+}
+
+/** `json()` 目标：`res.writeHead` + `res.end` 就够了。 */
+interface HttpResponse {
+  writeHead: (status: number, headers?: Record<string, string>) => unknown;
+  end: (body?: string) => unknown;
+}
+
+/** 宿主的 webServer 服务（只列本插件用到的两种注册）。 */
+interface WebServerLike {
+  register: (options: { kind: string; path: string; handler: (req: HttpRequest, res: HttpResponse) => unknown }) => unknown;
+}
+
+/** 宿主的 settings 服务（describe / update，形状宽松校验）。 */
+interface SettingsServiceLike {
+  describe: (options?: { redactSecrets?: boolean }) => ReadonlyArray<{ ns?: string; value?: unknown }> | undefined;
+  update: (ns: string, patch: unknown) => Promise<unknown> | unknown;
+  configure?: (options: { auto: boolean }, fiber?: unknown) => unknown;
+  get?: (ns: string) => unknown;
+}
+
+/** Cordis 上下文里本文件用到的成员。 */
+interface HostContext {
+  get: (name: string) => unknown;
+  /** Cordis 契约：上下文一定有 inject / effect / on（可选的是"服务"，不是这几个方法）。 */
+  inject: (deps: string[], callback: (ctx: HostContext) => void) => unknown;
+  effect: (factory: () => unknown, label?: string) => unknown;
+  on: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  logger?: { info?: (message: string) => void; warn?: (message: string) => void };
+  /** webServer 只在带 Web 的宿主里存在，所以它是可选的（缺了只是少一个设置页）。 */
+  webServer?: WebServerLike;
+  baseUrl?: string;
+  fiber?: unknown;
+  [key: string]: unknown;
+}
+
+/** 设置门面的形状（createSettingsFacade 的返回）。 */
+interface SettingsFacade {
+  get: () => Record<string, unknown>;
+  update: (patch: Record<string, unknown>) => Promise<Record<string, unknown>>;
+}
+
 /**
  * 设置 schema:每个字段一个字符串。
  *
@@ -88,7 +137,7 @@ export const Config = SettingsSchema;
 export { legacyMigrationPatch, statusOf } from "./toolchain.js";
 
 /** 记一条日志;没有 logger 就退回 console。 */
-function note(ctx, level, message) {
+function note(ctx: HostContext, level: "info" | "warn", message: string): void {
   try {
     const logger = ctx?.logger;
     if (logger !== undefined && typeof logger[level] === "function") logger[level](message);
@@ -110,7 +159,7 @@ function note(ctx, level, message) {
  * @param settings - 已注册的设置命名空间句柄(`register()` 的返回值)。
  * @param ctx - host plugin context(用于记日志)。
  */
-function migrateLegacyKeys(settings, ctx) {
+function migrateLegacyKeys(settings: SettingsFacade, ctx: HostContext): void {
   try {
     const patch = legacyMigrationPatch(settings.get());
     const keys = Object.keys(patch);
@@ -129,11 +178,11 @@ function migrateLegacyKeys(settings, ctx) {
 }
 
 /** 读取一个小的 JSON 请求体,超过上限就拒绝(设置补丁本身很小)。 */
-function readJsonBody(req, limit = 1024 * 1024) {
+function readJsonBody(req: HttpRequest, limit = 1024 * 1024): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let text = "";
     req.setEncoding?.("utf8");
-    req.on("data", (chunk) => {
+    req.on("data", (chunk: string) => {
       text += chunk;
       if (text.length > limit) reject(new Error("请求体过大"));
     });
@@ -159,7 +208,7 @@ function readJsonBody(req, limit = 1024 * 1024) {
  * @param req - HTTP 请求。
  * @returns 要覆盖的字段值;查询串坏掉时为空对象。
  */
-function pendingOverrides(req) {
+function pendingOverrides(req: HttpRequest): Record<string, unknown> {
   const overrides = {};
   try {
     const params = new URL(req.url ?? "", "http://localhost").searchParams;
@@ -183,14 +232,14 @@ function pendingOverrides(req) {
  * @param {Record<string, unknown>} [initial] - Loader 传入的初始行配置。
  * @returns {{ get: () => Record<string, unknown>, update: (patch: Record<string, unknown>) => Promise<Record<string, unknown>> }}
  */
-function createSettingsFacade(ctx, initial = {}) {
+function createSettingsFacade(ctx: HostContext, initial: Record<string, unknown> = {}): SettingsFacade {
   let current = { ...initial };
-  let service;
+  let service: SettingsServiceLike | undefined;
 
   const sync = () => {
     if (service === undefined) return;
     try {
-      const descriptor = service.describe({ redactSecrets: true })?.find((entry) => entry?.ns === NS);
+      const descriptor = service.describe({ redactSecrets: true })?.find((entry: { ns?: string; value?: unknown }) => entry?.ns === NS);
       if (descriptor?.value !== null && typeof descriptor?.value === "object") {
         current = { ...current, ...descriptor.value };
       }
@@ -204,7 +253,7 @@ function createSettingsFacade(ctx, initial = {}) {
       sync();
       return { ...current };
     },
-    update: async (patch) => {
+    update: async (patch: Record<string, unknown>): Promise<Record<string, unknown>> => {
       const next = { ...current, ...patch };
       if (service === undefined) {
         current = next;
@@ -216,8 +265,8 @@ function createSettingsFacade(ctx, initial = {}) {
     }
   };
 
-  ctx.inject(["settings"], (settingsCtx) => {
-    const candidate = settingsCtx.settings;
+  ctx.inject(["settings"], (settingsCtx: HostContext) => {
+    const candidate = (settingsCtx as { settings?: SettingsServiceLike }).settings;
     if (
       typeof candidate?.describe !== "function" ||
       typeof candidate?.update !== "function"
@@ -244,7 +293,7 @@ function createSettingsFacade(ctx, initial = {}) {
  * @param {object} ctx - host plugin context carrying `settings`.
  * @param {Record<string, unknown>} [config] - Loader 传入的本行配置。
  */
-export function apply(ctx, config) {
+export function apply(ctx: HostContext, config: Record<string, unknown> = {}): void {
   const settings = createSettingsFacade(ctx, config);
 
   // 把改名前的旧键搬进新键(一次性,幂等)。等 Loader 把本行 settings face 挂好再迁移,
@@ -257,8 +306,8 @@ export function apply(ctx, config) {
   // 设置页的只读接口(状态 / 列目录 / 检测本机工具 / 分类模板 / 自检)与保存接口。webServer 在
   // headless/CLI 部署里不存在 —— 拿不到就不注册这一步,设置项本身照常可读写,只是没有状态提示与按钮
   // (GUI 与 CLI 共用同一份配置)。
-  ctx.inject(["webServer"], (webCtx) => {
-    const json = (res, payload, status = 200) => {
+  ctx.inject(["webServer"], (webCtx: HostContext) => {
+    const json = (res: HttpResponse, payload: unknown, status = 200): void => {
       res.writeHead(status, {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store"
@@ -268,11 +317,11 @@ export function apply(ctx, config) {
 
     webCtx.effect(
       () =>
-        webCtx.webServer.register({
+        webCtx.webServer!.register({
           kind: "exact",
           path: STATUS_PATH,
-          handler: (req, res) => {
-            const values = settings.get();
+          handler: (req: HttpRequest, res: HttpResponse) => {
+            const values: Record<string, unknown> = settings.get();
             // 查询串里带上字段名 = "**预演**这一次改动":设置页有未保存的改动时用它问一次,
             // 于是"就绪/未就绪"跟着**页面上那一份**走,而不是等保存后才更新。
             // 只读:不写设置,也不建任何目录。
@@ -290,7 +339,7 @@ export function apply(ctx, config) {
     // 鉴权仍由宿主 webServer 前置闸门负责,这里不重复实现。
     webCtx.effect(
       () =>
-        webCtx.webServer.register({
+        webCtx.webServer!.register({
           kind: "exact",
           path: SETTINGS_PATH,
           handler: async (req, res) => {
@@ -326,10 +375,10 @@ export function apply(ctx, config) {
     // "这份已装副本 + 这份设置"的实际状态,而不是只在开发机上跑 npm test 才知道。
     webCtx.effect(
       () =>
-        webCtx.webServer.register({
+        webCtx.webServer!.register({
           kind: "exact",
           path: SELFCHECK_PATH,
-          handler: (req, res) => {
+          handler: (req: HttpRequest, res: HttpResponse) => {
             if (req.method !== "GET") {
               json(res, { error: "只支持 GET" }, 405);
               return;
@@ -344,10 +393,10 @@ export function apply(ctx, config) {
     // 设置页打开时读这一条就够显示"当前版本"。
     webCtx.effect(
       () =>
-        webCtx.webServer.register({
+        webCtx.webServer!.register({
           kind: "exact",
           path: VERSION_PATH,
-          handler: (req, res) => {
+          handler: (req: HttpRequest, res: HttpResponse) => {
             if (req.method !== "GET") {
               json(res, { error: "只支持 GET" }, 405);
               return;
@@ -367,7 +416,7 @@ export function apply(ctx, config) {
     // 不自己伪造凭据,也不绕过市场:拿不到就如实说"查不到"。
     webCtx.effect(
       () =>
-        webCtx.webServer.register({
+        webCtx.webServer!.register({
           kind: "exact",
           path: UPDATE_PATH,
           handler: async (req, res) => {
@@ -419,10 +468,10 @@ export function apply(ctx, config) {
     // 所以这里保持"不做来源校验":真正的闸在宿主那一层,重复实现只会变成假门禁。
     webCtx.effect(
       () =>
-        webCtx.webServer.register({
+        webCtx.webServer!.register({
           kind: "exact",
           path: BROWSE_PATH,
-          handler: (req, res) => {
+          handler: (req: HttpRequest, res: HttpResponse) => {
             let requested = "";
             try {
               requested = new URL(req.url ?? "", "http://localhost").searchParams.get("path") ?? "";
@@ -441,10 +490,10 @@ export function apply(ctx, config) {
     // **不传设置值**:检测只报机器事实；已保存值与未保存草稿由页面自己判断。
     webCtx.effect(
       () =>
-        webCtx.webServer.register({
+        webCtx.webServer!.register({
           kind: "exact",
           path: DETECT_PATH,
-          handler: (req, res) => {
+          handler: (req: HttpRequest, res: HttpResponse) => {
             let field;
             try {
               field = new URL(req.url ?? "", "http://localhost").searchParams.get("field") ?? undefined;
@@ -462,10 +511,10 @@ export function apply(ctx, config) {
     // 区分“模板读取失败”和“确实没有用户模板”。
     webCtx.effect(
       () =>
-        webCtx.webServer.register({
+        webCtx.webServer!.register({
           kind: "exact",
           path: TEMPLATE_PATH,
-          handler: (req, res) => {
+          handler: (req: HttpRequest, res: HttpResponse) => {
             let capability = "";
             try {
               capability = new URL(req.url ?? "", "http://localhost").searchParams.get("capability") ?? "";
@@ -477,7 +526,7 @@ export function apply(ctx, config) {
               return;
             }
             try {
-              const values = settings.get();
+              const values: Record<string, unknown> = settings.get();
               json(res, scanTemplates({
                 capability,
                 capabilities: CAPABILITIES,

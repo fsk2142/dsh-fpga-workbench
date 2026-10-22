@@ -59,3 +59,10 @@ vivado-mcp-server-*.exe
 #   · 是"当时为了查清某个具体问题"写的,不适合当长期维护的公共接口。
 # 所以忽略掉,别让它们出现在 git status 里;要留档就自己另存一份。
 tools/probes/
+
+# ── 类型收尾时脚本自动生成的临时备份 ─────────────────────────────────────────
+# `scripts/type-index-*.mjs` 会先备份再改，产物是 `*.pre-type-backup` 这类名字。
+# 它们只是当下的安全网，不该进版本库（git 历史本身就是更好的备份）。
+*.pre-type-backup
+*.pre-type2-backup
+*.pre-esm-backup

@@ -88,6 +88,72 @@ export interface LegacyCustomEntry {
   [extra: string]: unknown;
 }
 
+/**
+ * 一条"哪个环节用哪类工具"的绑定（{@link BINDINGS} 的一项）。
+ *
+ * `bind()` 产出的形状就是这五个字段。声明成接口后，`resolveBinding` 里的
+ * `binding.tools` / `ROLE_TOOLS[binding.role]` 才有类型 —— 标成
+ * `Record<string, unknown>` 时它们是 `unknown`，下游报 TS18046 / TS2538。
+ */
+export interface Binding {
+  key: string;
+  section: string;
+  stage: string;
+  label: string;
+  role: string;
+  /** 该绑定允许的工具键（由 role 决定，bind() 里一定补上）。 */
+  tools: string[];
+  toolKey?: string;
+  [extra: string]: unknown;
+}
+
+/** 能力卡里的一个模板槽位。 */
+export interface CapabilityTemplate {
+  key: string;
+  category: string;
+  label: string;
+  [extra: string]: unknown;
+}
+
+/**
+ * 一张能力卡（{@link CAPABILITIES} 的一项）。
+ *
+ * 声明成真实形状后，`capability.templates.map((template) => ...)` 里的 `template`
+ * 才有类型 —— 标成 `Record<string, unknown>` 时它是 `unknown`，下游 16 处报 TS18046。
+ */
+export interface CapabilitySpec {
+  key: string;
+  section: string;
+  label: string;
+  hint?: string;
+  role: string;
+  toolKey: string;
+  tools: string[];
+  /** 每张能力卡都有模板槽位（可能为空数组）—— 声明必选后不必到处判空。 */
+  templates: CapabilityTemplate[];
+  [extra: string]: unknown;
+}
+
+/**
+ * `inspectTools` 的一项：字段定义 + 这台机器上的实际情况。
+ *
+ * 它是设置页渲染的直接输入，所以成员名必须是**真实的**（不是索引签名糊过去）——
+ * 下游 `.filter((tool) => tool.control !== "hidden")` 这类代码要能过类型检查。
+ */
+export interface InspectedField extends FieldSpec {
+  /** 实际生效的路径类型（可能与 field.kind 不同：随选中的工具变）。 */
+  kind?: string;
+  /** 用户填的原值（未 trim）。 */
+  path?: string;
+  configured?: boolean;
+  present?: boolean;
+  inactive?: boolean;
+  unused?: boolean;
+  required?: boolean;
+  /** 下拉/选择的候选项。 */
+  options?: Array<{ value: string; label?: string }>;
+}
+
 export interface FieldSpec {
   /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
   key: string;
@@ -176,7 +242,7 @@ export function toolLevelPrefix(tool: { level: ToolLevel }): string {
  *
  * 这些旧字段只负责迁移老配置；默认值也必须指向现行分类模板，不能依赖已经退出的平铺模板。
  */
-export const TEMPLATE_FIELDS = [
+export const TEMPLATE_FIELDS: TemplateSlot[] = [
   { key: "rtlTemplatePath", kind: "rtl", label: "RTL 模板", file: "rtl/systemverilog_module.sv" },
   { key: "tbTemplatePath", kind: "tb", label: "测试平台模板", file: "simulation/testbench/systemverilog_testbench.sv" },
   { key: "xdcTemplatePath", kind: "xdc", label: "约束模板", file: "constraints/vivado_module_xdc.xdc" },
@@ -363,7 +429,7 @@ const ROLE_TOOLS: Record<string, string[]> = {
   fpga: ["vivado", "quartus", "custom-fpga"]
 };
 
-const bind = (key: string, section: string, stage: string, label: string, role: string) => ({
+const bind = (key: string, section: string, stage: string, label: string, role: string): Binding => ({
   key,
   section,
   stage,
@@ -374,7 +440,7 @@ const bind = (key: string, section: string, stage: string, label: string, role: 
   tools: ROLE_TOOLS[role]
 });
 
-export const BINDINGS = [
+export const BINDINGS: Binding[] = [
   bind("moduleSpecScript", "module", "module-spec", "脚本工具", "script"),
   bind("moduleRtlCompiler", "module", "module-rtl", "编译 / lint 工具", "compiler"),
   bind("moduleVerifSimulator", "module", "module-verif", "仿真工具", "simulator"),
@@ -400,7 +466,7 @@ const BINDING_BY_KEY = Object.fromEntries(BINDINGS.map((binding) => [binding.key
  * 数组顺序只控制展示顺序；它不代表执行顺序，更不会生成流水线。每个能力只保存一个
  * `toolKey`，实际路径永远回到 {@link TOOL_CATALOG} 对应的通用路径读取。
  */
-export const CAPABILITIES = [
+export const CAPABILITIES: CapabilitySpec[] = [
   {
     key: "module-rtl",
     section: "module",
@@ -493,7 +559,7 @@ export const CAPABILITIES = [
 export const CAPABILITY_BY_KEY = Object.fromEntries(CAPABILITIES.map((capability) => [capability.key, capability]));
 
 /** 把目录形式的路径补成可拼接的前缀(XSim 的路径是一个目录)。 */
-function pad(path) {
+function pad(path: string): string {
   return path.endsWith("\\") || path.endsWith("/") ? path : `${path}\\`;
 }
 
@@ -504,7 +570,7 @@ function pad(path) {
  * 判断的空间。所有字段都是可选能力,缺一项只影响显式绑定它的环节,不会形成全局门禁。
  * 语言、库映射和模板仍属于通用区。旧全局键隐藏保留一个迁移周期。
  */
-export const FIELDS: FieldSpec[] = [
+export const FIELDS = [
   // 通用区只登记“这台机器有什么”。每个工具一个独立路径,切换环节首选时不会互相覆盖。
   ...[
     ["python", "脚本工具"],
@@ -745,7 +811,7 @@ export const FIELDS: FieldSpec[] = [
  * 逐项写容易漏,而漏了的后果是设置页把它们塞进别的分组 —— 统一补默认值更稳。
  * (现在每个字段都显式写了 group,这里只兜底,别再依赖它。)
  */
-for (const field of FIELDS) {
+for (const field of FIELDS as FieldSpec[]) {
   if (field.control === undefined) field.control = "text";
   if (field.control !== "hidden" && field.section === undefined) {
     field.section = "common";
@@ -756,7 +822,7 @@ for (const field of FIELDS) {
 
 export const SETTINGS_MODEL_VERSION = "3";
 
-const LEGACY_STAGE_TARGETS = {
+const LEGACY_STAGE_TARGETS: Record<string, string[]> = {
   compiler: ["moduleRtlCompilerTool", "projectIntegrateCompilerTool"],
   simulator: ["moduleVerifSimulatorTool", "projectSyssimSimulatorTool"],
   synthesizer: [
@@ -814,19 +880,19 @@ const TEMPLATE_CATEGORY_BY_KEY = Object.fromEntries(
  * 修复已经完成 v3 迁移、但能力卡里仍保存旧插件平面模板路径的设置。
  * 这不是再次迁移工具选择；只改能被精确识别为本插件旧模板的值，因而可重复执行。
  */
-function legacyBundledTemplateRepair(values) {
+function legacyBundledTemplateRepair(values: Record<string, unknown>): Record<string, unknown> {
   const patch = {};
   for (const [key, category] of Object.entries(TEMPLATE_CATEGORY_BY_KEY)) {
     const selected = String(values?.[key] ?? "").trim();
     if (selected === "") continue;
     const canonical = canonicalTemplateSelection(selected, category);
-    if (canonical !== selected) patch[key] = canonical;
+    if (canonical !== selected && typeof key === "string") patch[key] = canonical;
   }
   return patch;
 }
 
 /** 根据旧共享路径里可核对的名字识别工具；认不出来就落入自定义槽位。 */
-function inferLegacyTool(role, path) {
+function inferLegacyTool(role: string, path: string): string {
   const lower = String(path).trim().toLowerCase().replaceAll("/", "\\");
   if (role === "compiler") {
     if (/(^|\\)iverilog(?:\.exe)?$/u.test(lower)) return "iverilog";
@@ -848,7 +914,7 @@ function inferLegacyTool(role, path) {
 }
 
 /** 用于比较 Windows 路径是否只是大小写或分隔符不同；不解析、不访问文件系统。 */
-function comparablePath(path) {
+function comparablePath(path: string): string {
   return String(path ?? "").trim().replaceAll("/", "\\").replace(/[\\]+$/u, "").toLowerCase();
 }
 
@@ -859,28 +925,28 @@ function comparablePath(path) {
  * 迁移只追加新字段或把旧插件模板路径替换成等价 ID，绝不把旧字段写空。冲突保留在旧隐藏字段中，
  * 并写一条不含完整路径的提醒。
  */
-export function legacyMigrationPatch(values) {
+export function legacyMigrationPatch(values: Record<string, unknown>): Record<string, unknown> {
   const source = values ?? {};
   const templateRepair = legacyBundledTemplateRepair(source);
   if (valueOf(source, "settingsModelVersion") === SETTINGS_MODEL_VERSION) return templateRepair;
 
-  const effective = { ...source, ...templateRepair };
-  const patch = { settingsModelVersion: SETTINGS_MODEL_VERSION, ...templateRepair };
-  const warnings = [];
-  const current = (key) => String(effective[key] ?? "").trim();
-  const original = (key) => String(source[key] ?? "").trim();
-  const remember = (key, value, persist = false) => {
+  const effective: Record<string, unknown> = { ...source, ...templateRepair };
+  const patch: Record<string, unknown> = { settingsModelVersion: SETTINGS_MODEL_VERSION, ...templateRepair };
+  const warnings: string[] = [];
+  const current = (key: string): string => String(effective[key] ?? "").trim();
+  const original = (key: string): string => String(source[key] ?? "").trim();
+  const remember = (key: string, value: unknown, persist = false): void => {
     const text = String(value ?? "").trim();
     if (text === "" || current(key) !== "") return;
     effective[key] = text;
     if (persist) patch[key] = text;
   };
-  const warn = (message) => {
+  const warn = (message: string): void => {
     if (!warnings.includes(message)) warnings.push(message);
   };
 
   /** 把 v1 的一个角色只放进内存中的 v2 形状，再由下面统一收敛到 v3。 */
-  const normalizeV1Role = (role, allowed, specificEvidence = []) => {
+  const normalizeV1Role = (role: string, allowed: string[], specificEvidence: Array<[string, string]> = []): string | undefined => {
     const selection = current(role);
     const sharedPath = current(`${role}Path`);
     let tool;
@@ -913,8 +979,8 @@ export function legacyMigrationPatch(values) {
     }
     const custom = LEGACY_CUSTOM[role];
     if (custom !== undefined && tool === custom.tool) {
-      remember(custom.nameKey, "旧配置中的其他工具", true);
-      remember(custom.notesKey, `从旧的${role}共享设置迁移；请结合当前工程确认调用方法。`, true);
+      if (typeof custom.nameKey === "string") remember(custom.nameKey, "旧配置中的其他工具", true);
+      if (typeof custom.notesKey === "string") remember(custom.notesKey, `从旧的${role}共享设置迁移；请结合当前工程确认调用方法。`, true);
     }
   };
 
@@ -952,7 +1018,7 @@ export function legacyMigrationPatch(values) {
   }
   for (const [toolKey, paths] of overridePaths) {
     const definition = TOOL_CATALOG[toolKey];
-    const unique = [...new Map(paths.map((path) => [comparablePath(path), path])).values()];
+    const unique = [...new Map(paths.map((path: unknown) => [comparablePath(String(path)), path])).values()];
     const registered = current(definition.pathKey);
     if (registered === "" && unique.length === 1) {
       remember(definition.pathKey, unique[0], true);
@@ -989,7 +1055,7 @@ export function legacyMigrationPatch(values) {
     }
   }
 
-  let previousWarnings = [];
+  let previousWarnings: string[] = [];
   try {
     const parsed = JSON.parse(original("settingsMigrationWarnings") || "[]");
     if (Array.isArray(parsed)) previousWarnings = parsed.filter((entry) => typeof entry === "string");
@@ -1015,7 +1081,7 @@ export function legacyMigrationPatch(values) {
  * @param kind - `"file"` 或 `"directory"`。
  * @returns 存在且类型相符。
  */
-export function probeFilesystem(path, kind) {
+export function probeFilesystem(path: string, kind?: string): boolean {
   // **键里必须带 kind**。同一个路径可能被按两种类型问:例如用户把目录填进文件字段时,
   // 界面会先问"是文件吗"(否),再问"是目录吗"(是)。只按路径建键会让第二次直接
   // 命中第一次的 false —— 于是"目录填进文件字段"这种错误被误判成"不可用"或反之。
@@ -1066,7 +1132,7 @@ export function clearProbeCache() {
  * @param kind - `"file"` 或 `"directory"`。
  * @returns 存在且类型相符。
  */
-function probeUncached(path, kind) {
+function probeUncached(path: string, kind?: string): boolean {
   if (!existsSync(path)) return false;
   try {
     return kind === "directory" ? statSync(path).isDirectory() : statSync(path).isFile();
@@ -1076,7 +1142,7 @@ function probeUncached(path, kind) {
 }
 
 /** 拿一项配置的字符串值。迁移完成后不再跨字段兜底,避免清空新字段时旧值复活。 */
-function valueOf(values, key) {
+function valueOf(values: Record<string, unknown>, key: string): unknown {
   return String(values?.[key] ?? "").trim();
 }
 
@@ -1093,7 +1159,7 @@ function valueOf(values, key) {
  * @param dir - 要列的目录;空串表示列出盘符(Windows)或文件系统根。
  * @returns `{ path, parent, entries, truncated, error? }`;`entries` 每项 `{ name, path, kind }`。
  */
-export function listDirectory(dir) {
+export function listDirectory(dir: string): { path: string; parent: string | undefined; entries: Array<{ name: string; path: string; kind: string }>; truncated: boolean; error?: string } {
   const target = String(dir ?? "").trim();
   if (target === "") {
     const roots = process.platform === "win32"
@@ -1118,7 +1184,7 @@ export function listDirectory(dir) {
   try {
     names = readdirSync(target, { withFileTypes: true });
   } catch (error) {
-    return { path: target, parent: parentOf(target), entries: [], truncated: false, error: String(error.code ?? error.message) };
+    return { path: target, parent: parentOf(target), entries: [], truncated: false, error: String((error as { code?: string; message?: string }).code ?? (error as { message?: string }).message) };
   }
   const entries = names
     .map((entry) => ({
@@ -1138,7 +1204,7 @@ export function listDirectory(dir) {
  * @param dir - 当前目录。
  * @returns 上级目录路径。
  */
-function parentOf(dir) {
+function parentOf(dir: string): string | undefined {
   const trimmed = dir.replace(/[\\/]+$/u, "");
   // 盘根 / UNC share 根之上没有"上一级",返回原样:
   //   · `C:\` 削成 `C:` 是**盘上的工作目录**(readdirSync("C:") 列的是进程 CWD),
@@ -1150,7 +1216,34 @@ function parentOf(dir) {
 }
 
 /** 解析一个环节绑定；只解析能力事实,不会选择或执行任何工具。 */
-export function resolveBinding(values, binding, probe = probeFilesystem) {
+/** `resolveBinding` 的结论：绑定本身 + 这次解析出的选择与状态。 */
+export interface ResolvedBinding extends Binding {
+  selection: string;
+  state: string;
+  present: boolean;
+  unused?: boolean;
+  reason?: string;
+  path?: string;
+  [extra: string]: unknown;
+}
+
+/**
+ * 绑定不存在时的结论。
+ *
+ * **它没有 section / stage / label / role / tools** —— 那些来自绑定本身，而绑定都没找到。
+ * 所以这里必须是独立的形状，不能用 `ResolvedBinding` 糊过去（第一版那样写，
+ * 这个分支直接 TS2739「缺少 5 个属性」）。
+ */
+export interface MissingBinding {
+  key: string;
+  selection: string;
+  state: string;
+  present: false;
+  reason: string;
+  [extra: string]: unknown;
+}
+
+export function resolveBinding(values: Record<string, unknown>, binding: Binding, probe: (path: string, kind?: string) => boolean = probeFilesystem): ResolvedBinding | MissingBinding {
   if (binding === undefined) {
     return { key: "", selection: "", state: "invalid", present: false, reason: "环节绑定不存在" };
   }
@@ -1192,7 +1285,7 @@ export function resolveBinding(values, binding, probe = probeFilesystem) {
 }
 
 /** 解析全部环节绑定。数组顺序只用于稳定展示,不表示执行顺序。 */
-export function resolveBindings(values, probe = probeFilesystem) {
+export function resolveBindings(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean = probeFilesystem): Array<ResolvedBinding | MissingBinding> {
   return BINDINGS.map((binding) => resolveBinding(values, binding, probe));
 }
 
@@ -1203,7 +1296,7 @@ export function resolveBindings(values, probe = probeFilesystem) {
  * @param probe - `(path, kind) => boolean`。
  * @returns 能力卡的工具解析结果。
  */
-export function resolveCapability(values, capability, probe = probeFilesystem) {
+export function resolveCapability(values: Record<string, unknown>, capability: CapabilitySpec, probe: (path: string, kind?: string) => boolean = probeFilesystem): Record<string, unknown> {
   if (capability === undefined) {
     return { key: "", selection: "", state: "invalid", present: false, reason: "能力配置不存在" };
   }
@@ -1242,7 +1335,7 @@ export function resolveCapability(values, capability, probe = probeFilesystem) {
 }
 
 /** 解析七张能力卡；数组顺序只用于展示，不代表执行顺序。 */
-export function resolveCapabilities(values, probe = probeFilesystem) {
+export function resolveCapabilities(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean = probeFilesystem): Record<string, unknown> {
   return CAPABILITIES.map((capability) => resolveCapability(values, capability, probe));
 }
 
@@ -1253,7 +1346,28 @@ export function resolveCapabilities(values, probe = probeFilesystem) {
  * @param tool - 该能力当前的工具选择。
  * @param probe - `(path, kind) => boolean`。
  */
-export function resolveCapabilityTemplates(values, capability, tool = "auto", probe = probeFilesystem) {
+/** 一个内置模板槽位（{@link TEMPLATE_FIELDS} 的一项）。 */
+export interface TemplateSlot {
+  key: string;
+  kind: string;
+  label: string;
+  file: string;
+  announce?: string;
+  [extra: string]: unknown;
+}
+
+/** 一张能力卡解析一个模板槽位的结果（`describeEnv` 直接读这些字段）。 */
+export interface ResolvedTemplate extends CapabilityTemplate {
+  source?: string;
+  path?: string;
+  present?: boolean;
+  compatible?: boolean;
+  reason?: string;
+  templateLabel?: unknown;
+  [extra: string]: unknown;
+}
+
+export function resolveCapabilityTemplates(values: Record<string, unknown>, capability: CapabilitySpec, tool = "auto", probe: (path: string, kind?: string) => boolean = probeFilesystem): ResolvedTemplate[] {
   const libraryRoot = valueOf(values, "templateLibraryPath");
   return (capability?.templates ?? []).map((template) => {
     const resolved = resolveTemplateSelection({
@@ -1279,7 +1393,7 @@ export function resolveCapabilityTemplates(values, capability, tool = "auto", pr
  * @param probe - `(path, kind) => boolean`,路径存在且类型匹配。
  * @returns 每项 `{ key, label, hint, kind, skips, path, configured, present }`。
  */
-export function inspectTools(values, probe) {
+export function inspectTools(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean): InspectedField[] {
   return FIELDS.map((field) => {
     const raw = valueOf(values, field.key);
     // 下拉字段:没有路径可探。"就绪"= 值(空则取默认值)确实是合法选项之一。
@@ -1316,7 +1430,7 @@ export function inspectTools(values, probe) {
  * @param tool - {@link inspectTools} 的一项。
  * @returns 该进缺失清单时为 true。
  */
-export function isMissing(tool) {
+export function isMissing(tool: InspectedField): boolean {
   return tool.required === true && !tool.present && tool.unused !== true;
 }
 
@@ -1331,7 +1445,7 @@ export function isMissing(tool) {
  * @param values - 设置解析后的值。
  * @returns `{ tools, sections, stages, bindings, missing, ok }`。
  */
-export function statusOf(values, probe = probeFilesystem) {
+export function statusOf(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean = probeFilesystem): { fields: InspectedField[]; [extra: string]: unknown } {
   const tools = inspectTools(values, probe)
     // 隐藏字段只供迁移使用,不发给设置页。
     .filter((tool) => tool.control !== "hidden")
@@ -1388,7 +1502,7 @@ export function statusOf(values, probe = probeFilesystem) {
   const missing = capabilities
     .filter((capability) => capability.state === "missing" || capability.state === "invalid")
     .map((capability) => capability.key);
-  let migrationWarnings = [];
+  let migrationWarnings: string[] = [];
   try {
     const parsed = JSON.parse(valueOf(values, "settingsMigrationWarnings") || "[]");
     if (Array.isArray(parsed)) migrationWarnings = parsed.filter((entry) => typeof entry === "string");
@@ -1454,7 +1568,7 @@ const RUNTIME_NOTE =
  * @param probe - `(path, kind) => boolean`。
  * @returns 提示行数组;空数组表示不需要提示。
  */
-export function verilatorRootHint(path, probe = probeFilesystem) {
+export function verilatorRootHint(path: string, probe: (path: string, kind?: string) => boolean = probeFilesystem): string[] {
   if (String(process.env.VERILATOR_ROOT ?? "").trim() !== "") return [];
   if (!/^verilator_bin(\.exe)?$/iu.test(basename(String(path)))) return [];
   const root = join(dirname(dirname(String(path))), "share", "verilator");
@@ -1479,7 +1593,7 @@ export function verilatorRootHint(path, probe = probeFilesystem) {
  * @param probe - `(path, kind) => boolean`,同 {@link inspectTools}。
  * @returns 提示段的正文。
  */
-export function describeEnv(values, probe) {
+export function describeEnv(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): string {
   if (values === undefined || values === null) return UNREADABLE;
 
   const checkPath = probe ?? probeFilesystem;
@@ -1696,9 +1810,9 @@ export function describeEnv(values, probe) {
  * @param tools - {@link inspectTools} 的结果。
  * @returns 提示段里的一节。
  */
-function choiceLines(tools) {
+function choiceLines(tools: Array<Record<string, unknown>>): string[] {
   const byKey = new Map(tools.filter((tool) => tool.control === "select").map((tool) => [tool.key, tool]));
-  const labelOf = (tool) => tool?.options?.find((option) => option.value === tool.path)?.label ?? String(tool?.path ?? "");
+  const labelOf = (tool: Record<string, unknown>): string | undefined => tool?.options?.find((option) => option.value === tool.path)?.label ?? String(tool?.path ?? "");
   const rtl = byKey.get("rtlLangStd");
   const sim = byKey.get("simLangStd");
   const simLabel = sim?.path === "same" ? `与 RTL 相同(${labelOf(rtl)})` : labelOf(sim);
@@ -1727,7 +1841,10 @@ const EXTENSIONS = {
  * @returns 每项 `{ kind, label, file, path, source, present, announce, missing? }`;`source` 为 `"user"` 或 `"bundled"`;
  *   `missing` 是"填了但找不到"的那个路径;`announce` 是提示段的播报规则(见 {@link TEMPLATE_FIELDS})。
  */
-export function resolveTemplates(values, probe) {
+export function resolveTemplates(
+  values: Record<string, unknown>,
+  probe: (path: string, kind?: string) => boolean
+): Array<{ kind: string; label: string; file: string; path: string; source: string; present: boolean; announce: string; missing?: string }> {
   return TEMPLATE_FIELDS.map(({ key, kind, label, file, announce = "always" }) => {
     const custom = String(values?.[key] ?? "").trim();
     const bundled = join(BUNDLED_TEMPLATE_DIR, file);
@@ -1743,7 +1860,7 @@ export function resolveTemplates(values, probe) {
 }
 
 /** 探测包一层:设置页的探针不该把提示组装搞崩。 */
-function exists(probe, path) {
+function exists(probe: (path: string) => boolean, path: string): boolean {
   try {
     return probe(path, "file") === true;
   } catch {
@@ -1785,7 +1902,7 @@ export const VERSION_PROBE_TIMEOUT_MS = 5000;
  * @param value - 任意用户提供的字符串。
  * @returns 单行、不会改变提示结构的文本。
  */
-export function promptScalar(value) {
+export function promptScalar(value: unknown): string {
   const text = String(value ?? "");
   return text.replace(/[\u0000-\u001f\u007f-\u009f]/gu, (ch) => {
     const code = ch.codePointAt(0);
@@ -1805,7 +1922,7 @@ export function promptScalar(value) {
  * @param value - 任意用户提供的字符串。
  * @returns PowerShell 里可直接使用的**单行**参数字面量。
  */
-export function promptArg(value) {
+export function promptArg(value: unknown): string {
   const text = promptScalar(value);
   if (/^[A-Za-z0-9_.:/\\-]+$/u.test(text)) return text;
   return `'${text.replaceAll("'", "''")}'`;
@@ -1832,7 +1949,7 @@ export function promptArg(value) {
  * @param path - 已登记的工具路径(原值)。
  * @returns 渲染后的参数。
  */
-const usagePath = (path) => {
+const usagePath = (path: unknown): string => {
   const text = String(path ?? "");
   // 连续的**分隔符**反斜杠压成一个 `/`（`\\` 在 PowerShell 转义后是两个字符，
   // 逐个替换会得到 `//` —— 实测踩到：`C://msys64//bin//vivado.bat`）。
@@ -1854,7 +1971,7 @@ const usagePath = (path) => {
  * @param command - `{ args, pattern }`:查询参数与从输出里取版本号的模式(第一个捕获组)。
  * @returns `{ version }` 或 `{ error, output? }`。
  */
-export function queryVersion(path, command) {
+export function queryVersion(path: string, command: { args: string[]; pattern: RegExp; timeoutMs?: number }): { version?: string; error?: string; output?: string } {
   try {
     const result = spawnSync(path, command.args, {
       encoding: "utf8",
@@ -1979,7 +2096,7 @@ export const DETECT_TARGETS = [
 ];
 
 /** 极简通配:只支持一个 `*`(厂商目录名那种模式够用,不为它引入 glob 依赖)。 */
-function matchesPattern(name, pattern) {
+function matchesPattern(name: string, pattern: string): boolean {
   const star = pattern.indexOf("*");
   const lowered = name.toLowerCase();
   if (star === -1) return lowered === pattern.toLowerCase();
@@ -1987,7 +2104,7 @@ function matchesPattern(name, pattern) {
 }
 
 /** 展开 `%Name%` 记号;变量不在时原样保留(那样自然探不到,不会误报成命中)。 */
-function expandEnv(text, env) {
+function expandEnv(text: string, env: NodeJS.ProcessEnv): string {
   return String(text).replace(/%([^%]+)%/gu, (whole, name) => {
     const value = env?.[name];
     return typeof value === "string" && value !== "" ? value : whole;
@@ -1995,7 +2112,7 @@ function expandEnv(text, env) {
 }
 
 /** 列一个目录下的子目录名;读不动时为空 —— 一个拒绝访问的目录不该让整次检测失败。 */
-export function readdirNames(dir) {
+export function readdirNames(dir: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch {
@@ -2013,7 +2130,7 @@ export function readdirNames(dir) {
  * @param list - `(dir) => string[]`,列子目录名。
  * @returns 候选绝对路径(不保证存在,交给 probe 判)。
  */
-function expandPattern(root, pattern, list) {
+function expandPattern(root: string, pattern: string, list: string[]): string[] {
   let current = [root];
   for (const segment of String(pattern).split("\\")) {
     if (segment === "") continue;
@@ -2031,7 +2148,7 @@ function expandPattern(root, pattern, list) {
 }
 
 /** PATH 里的目录(去掉引号与空项)。 */
-function pathDirs(env) {
+function pathDirs(env: NodeJS.ProcessEnv): string[] {
   return String(env?.PATH ?? "")
     .split(";")
     .map((entry) => entry.trim().replace(/^"|"$/gu, ""))
@@ -2067,7 +2184,7 @@ export function detectTools(
 ) {
   const hits = [];
   const seen = new Set();
-  const exists = (path, kind = "file") => {
+  const exists = (path: string, kind = "file"): boolean => {
     try {
       return probe(path, kind) === true;
     } catch {
@@ -2075,7 +2192,7 @@ export function detectTools(
     }
   };
   /** 展开一组模式,留下真实存在的(同一个路径只留一次)。 */
-  const expand = (globs) =>
+  const expand = (globs: Array<{ root: string; pattern: string }>): string[] =>
     globs
       .flatMap((glob) => expandPattern(expandEnv(glob.root, env), expandEnv(glob.pattern, env), list))
       .filter((path, index, all) => exists(path) && all.indexOf(path) === index);
@@ -2086,7 +2203,7 @@ export function detectTools(
    * 只报实测到的东西:不做"版本够不够"的判定(没有字段声明硬要求了 —— 带 `expected` 的
    * 那套判定随终端字段一起删了,2026-09-21;用户对 Python 3 没有统一版本约束)。
    */
-  const versionInfo = (target, path) => {
+  const versionInfo = (target: string, path: string): Record<string, unknown> => {
     if (target.version === undefined) return {};
     let queried;
     try {
@@ -2228,7 +2345,7 @@ export const MINIMAL_SETUP = [
  * @param toolKey - TOOL_CATALOG 的键(如 `vivado`)。
  * @returns 提示行数组;没有对应指引时为空数组。
  */
-export function installGuidance(toolKey) {
+export function installGuidance(toolKey: string): string | undefined {
   const hint = INSTALL_HINTS[toolKey];
   if (hint === undefined) return [];
   const cost = hint.free === true ? "免费" : "商业授权";

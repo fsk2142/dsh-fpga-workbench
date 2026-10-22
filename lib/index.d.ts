@@ -69,22 +69,14 @@ interface HostContext {
  * 每个字段都必须是 volatile:DSH 0.1.7 的 settings 服务只允许写 volatile 字段,
  * 且 describe() 只列出带 volatile 字段的行。普通字段会在保存时被直接拒绝。
  */
-export declare const SettingsSchema: z<Schemastery.ObjectS<NoInfer<{
-  [k: string]: z<string, string, "volatile-defined">;
-}>>, Schemastery.ObjectT<NoInfer<{
-  [k: string]: z<string, string, "volatile-defined">;
-}>>, "plain">;
+export declare const SettingsSchema: z<Schemastery.ObjectS<any>, Schemastery.ObjectT<any>, "plain">;
 /**
  * DSH 0.1.7+ 的 Loader 行 schema 导出名。
  *
  * 旧版本由 `settings.register(NS, ...)` 注册命名空间;新版本改为从插件导出的
  * `Config` 派生本行的设置表单,再由 settings 服务的 `describe/update` 读写。
  */
-export declare const Config: z<Schemastery.ObjectS<NoInfer<{
-  [k: string]: z<string, string, "volatile-defined">;
-}>>, Schemastery.ObjectT<NoInfer<{
-  [k: string]: z<string, string, "volatile-defined">;
-}>>, "plain">;
+export declare const Config: z<Schemastery.ObjectS<any>, Schemastery.ObjectT<any>, "plain">;
 /**
  * 挂载宿主半侧。
  * @param {object} ctx - host plugin context carrying `settings`.

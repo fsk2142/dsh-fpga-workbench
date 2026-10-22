@@ -53,6 +53,71 @@ export interface LegacyCustomEntry {
   notesKey?: string;
   [extra: string]: unknown;
 }
+/**
+ * 一条"哪个环节用哪类工具"的绑定（{@link BINDINGS} 的一项）。
+ *
+ * `bind()` 产出的形状就是这五个字段。声明成接口后，`resolveBinding` 里的
+ * `binding.tools` / `ROLE_TOOLS[binding.role]` 才有类型 —— 标成
+ * `Record<string, unknown>` 时它们是 `unknown`，下游报 TS18046 / TS2538。
+ */
+export interface Binding {
+  key: string;
+  section: string;
+  stage: string;
+  label: string;
+  role: string;
+  /** 该绑定允许的工具键（由 role 决定，bind() 里一定补上）。 */
+  tools: string[];
+  toolKey?: string;
+  [extra: string]: unknown;
+}
+/** 能力卡里的一个模板槽位。 */
+export interface CapabilityTemplate {
+  key: string;
+  category: string;
+  label: string;
+  [extra: string]: unknown;
+}
+/**
+ * 一张能力卡（{@link CAPABILITIES} 的一项）。
+ *
+ * 声明成真实形状后，`capability.templates.map((template) => ...)` 里的 `template`
+ * 才有类型 —— 标成 `Record<string, unknown>` 时它是 `unknown`，下游 16 处报 TS18046。
+ */
+export interface CapabilitySpec {
+  key: string;
+  section: string;
+  label: string;
+  hint?: string;
+  role: string;
+  toolKey: string;
+  tools: string[];
+  /** 每张能力卡都有模板槽位（可能为空数组）—— 声明必选后不必到处判空。 */
+  templates: CapabilityTemplate[];
+  [extra: string]: unknown;
+}
+/**
+ * `inspectTools` 的一项：字段定义 + 这台机器上的实际情况。
+ *
+ * 它是设置页渲染的直接输入，所以成员名必须是**真实的**（不是索引签名糊过去）——
+ * 下游 `.filter((tool) => tool.control !== "hidden")` 这类代码要能过类型检查。
+ */
+export interface InspectedField extends FieldSpec {
+  /** 实际生效的路径类型（可能与 field.kind 不同：随选中的工具变）。 */
+  kind?: string;
+  /** 用户填的原值（未 trim）。 */
+  path?: string;
+  configured?: boolean;
+  present?: boolean;
+  inactive?: boolean;
+  unused?: boolean;
+  required?: boolean;
+  /** 下拉/选择的候选项。 */
+  options?: Array<{
+    value: string;
+    label?: string;
+  }>;
+}
 export interface FieldSpec {
   /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
   key: string;
@@ -97,19 +162,7 @@ export declare function toolLevelPrefix(tool: {
  *
  * 这些旧字段只负责迁移老配置；默认值也必须指向现行分类模板，不能依赖已经退出的平铺模板。
  */
-export declare const TEMPLATE_FIELDS: ({
-  key: string;
-  kind: string;
-  label: string;
-  file: string;
-  announce?: undefined;
-} | {
-  key: string;
-  kind: string;
-  label: string;
-  file: string;
-  announce: string;
-})[];
+export declare const TEMPLATE_FIELDS: TemplateSlot[];
 /** 设置页的三个顶层区。数组只定义展示分区,不表示执行顺序。 */
 export declare const SETTINGS_SECTIONS: {
   key: string;
@@ -155,63 +208,16 @@ export declare const STAGE_BY_KEY: {
     note: string;
   };
 };
-export declare const BINDINGS: {
-  key: string;
-  section: string;
-  stage: string;
-  label: string;
-  role: string;
-  toolKey: string;
-  pathKey: string;
-  tools: string[];
-}[];
+export declare const BINDINGS: Binding[];
 /**
  * 新设置页按“能力”选择工具，不按开发阶段重复登记路径。
  *
  * 数组顺序只控制展示顺序；它不代表执行顺序，更不会生成流水线。每个能力只保存一个
  * `toolKey`，实际路径永远回到 {@link TOOL_CATALOG} 对应的通用路径读取。
  */
-export declare const CAPABILITIES: {
-  key: string;
-  section: string;
-  label: string;
-  hint: string;
-  role: string;
-  toolKey: string;
-  tools: string[];
-  templates: ({
-    key: string;
-    category: string;
-    label: string;
-    hint?: undefined;
-  } | {
-    key: string;
-    category: string;
-    label: string;
-    hint: string;
-  })[];
-}[];
+export declare const CAPABILITIES: CapabilitySpec[];
 export declare const CAPABILITY_BY_KEY: {
-  [k: string]: {
-    key: string;
-    section: string;
-    label: string;
-    hint: string;
-    role: string;
-    toolKey: string;
-    tools: string[];
-    templates: ({
-      key: string;
-      category: string;
-      label: string;
-      hint?: undefined;
-    } | {
-      key: string;
-      category: string;
-      label: string;
-      hint: string;
-    })[];
-  };
+  [k: string]: CapabilitySpec;
 };
 /**
  * 扁平设置 schema。客户端再按 section / stage 元数据组合成三个顶层区和环节卡。
@@ -220,7 +226,107 @@ export declare const CAPABILITY_BY_KEY: {
  * 判断的空间。所有字段都是可选能力,缺一项只影响显式绑定它的环节,不会形成全局门禁。
  * 语言、库映射和模板仍属于通用区。旧全局键隐藏保留一个迁移周期。
  */
-export declare const FIELDS: FieldSpec[];
+export declare const FIELDS: ({
+  key: string;
+  tool: string;
+  section: string;
+  sectionLabel: string;
+  group: string;
+  control: string;
+  label: string;
+  hint: string | undefined;
+  blankNote: string;
+  kind: string;
+  required: boolean;
+  skips: never[];
+} | {
+  tool: string;
+  section: string;
+  sectionLabel: string;
+  group: string;
+  required: boolean;
+  skips: never[];
+  key: string | undefined;
+  control: string;
+  label: string;
+  hint: string;
+} | {
+  key: string;
+  section: string;
+  sectionLabel: string;
+  group: string;
+  control: string;
+  label: string;
+  hint: string;
+  default: string;
+  options: {
+    value: string;
+    label: string;
+  }[];
+  required: boolean;
+  skips: never[];
+  usage?: undefined;
+  defaultPath?: undefined;
+  blankNote?: undefined;
+  kind?: undefined;
+} | {
+  default?: undefined;
+  options?: undefined;
+  key: string;
+  section: string;
+  sectionLabel: string;
+  group: string;
+  control: string;
+  label: string;
+  hint: string;
+  blankNote: string;
+  kind: string;
+  required: boolean;
+  skips: never[];
+  usage: (path: string) => string[];
+  defaultPath?: undefined;
+} | {
+  default?: undefined;
+  options?: undefined;
+  usage?: undefined;
+  key: string;
+  section: string;
+  sectionLabel: string;
+  group: string;
+  control: string;
+  label: string;
+  hint: string;
+  blankNote: string;
+  defaultPath: string;
+  kind: string;
+  required: boolean;
+  skips: never[];
+} | {
+  default?: undefined;
+  options?: undefined;
+  usage?: undefined;
+  defaultPath?: undefined;
+  key: string;
+  section: string;
+  sectionLabel: string;
+  group: string;
+  control: string;
+  label: string;
+  hint: string;
+  blankNote: string;
+  kind: string;
+  required: boolean;
+  skips: never[];
+} | {
+  key: unknown;
+  group: string;
+  control: string;
+  label: string;
+  hint: string;
+  default: string;
+  required: boolean;
+  skips: never[];
+})[];
 export declare const SETTINGS_MODEL_VERSION = "3";
 /**
  * 把 v1 全局设置或 v2 阶段设置一次性迁到“顶部工具登记 + 七张能力卡”。即使已经是 v3，
@@ -229,7 +335,7 @@ export declare const SETTINGS_MODEL_VERSION = "3";
  * 迁移只追加新字段或把旧插件模板路径替换成等价 ID，绝不把旧字段写空。冲突保留在旧隐藏字段中，
  * 并写一条不含完整路径的提醒。
  */
-export declare function legacyMigrationPatch(values: any): {};
+export declare function legacyMigrationPatch(values: Record<string, unknown>): Record<string, unknown>;
 /**
  * 真实文件系统探测。
  *
@@ -243,7 +349,7 @@ export declare function legacyMigrationPatch(values: any): {};
  * @param kind - `"file"` 或 `"directory"`。
  * @returns 存在且类型相符。
  */
-export declare function probeFilesystem(path: any, kind: any): any;
+export declare function probeFilesystem(path: string, kind?: string): boolean;
 /**
  * 清空探测缓存。设置刚保存、或用户点了"重新检测"时调用,让界面立刻反映改动。
  */
@@ -261,27 +367,46 @@ export declare function clearProbeCache(): void;
  * @param dir - 要列的目录;空串表示列出盘符(Windows)或文件系统根。
  * @returns `{ path, parent, entries, truncated, error? }`;`entries` 每项 `{ name, path, kind }`。
  */
-export declare function listDirectory(dir: any): {
+export declare function listDirectory(dir: string): {
   path: string;
-  parent: any;
-  entries: never[];
-  truncated: boolean;
-  error: string;
-} | {
-  error?: undefined;
-  path: string;
-  parent: any;
-  entries: {
+  parent: string | undefined;
+  entries: Array<{
     name: string;
     path: string;
     kind: string;
-  }[];
+  }>;
   truncated: boolean;
+  error?: string;
 };
 /** 解析一个环节绑定；只解析能力事实,不会选择或执行任何工具。 */
-export declare function resolveBinding(values: any, binding: any, probe?: typeof probeFilesystem): any;
+/** `resolveBinding` 的结论：绑定本身 + 这次解析出的选择与状态。 */
+export interface ResolvedBinding extends Binding {
+  selection: string;
+  state: string;
+  present: boolean;
+  unused?: boolean;
+  reason?: string;
+  path?: string;
+  [extra: string]: unknown;
+}
+/**
+ * 绑定不存在时的结论。
+ *
+ * **它没有 section / stage / label / role / tools** —— 那些来自绑定本身，而绑定都没找到。
+ * 所以这里必须是独立的形状，不能用 `ResolvedBinding` 糊过去（第一版那样写，
+ * 这个分支直接 TS2739「缺少 5 个属性」）。
+ */
+export interface MissingBinding {
+  key: string;
+  selection: string;
+  state: string;
+  present: false;
+  reason: string;
+  [extra: string]: unknown;
+}
+export declare function resolveBinding(values: Record<string, unknown>, binding: Binding, probe?: (path: string, kind?: string) => boolean): ResolvedBinding | MissingBinding;
 /** 解析全部环节绑定。数组顺序只用于稳定展示,不表示执行顺序。 */
-export declare function resolveBindings(values: any, probe?: typeof probeFilesystem): any[];
+export declare function resolveBindings(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): Array<ResolvedBinding | MissingBinding>;
 /**
  * 解析一张能力卡的工具选择。能力卡只读取顶部工具登记，不存在阶段覆盖路径。
  * @param values - 设置值。
@@ -289,9 +414,9 @@ export declare function resolveBindings(values: any, probe?: typeof probeFilesys
  * @param probe - `(path, kind) => boolean`。
  * @returns 能力卡的工具解析结果。
  */
-export declare function resolveCapability(values: any, capability: any, probe?: typeof probeFilesystem): any;
+export declare function resolveCapability(values: Record<string, unknown>, capability: CapabilitySpec, probe?: (path: string, kind?: string) => boolean): Record<string, unknown>;
 /** 解析七张能力卡；数组顺序只用于展示，不代表执行顺序。 */
-export declare function resolveCapabilities(values: any, probe?: typeof probeFilesystem): any[];
+export declare function resolveCapabilities(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): Record<string, unknown>;
 /**
  * 精确解析一张能力卡保存的模板选择。这里只 stat 最终文件，不枚举模板库目录。
  * @param values - 设置值。
@@ -299,7 +424,26 @@ export declare function resolveCapabilities(values: any, probe?: typeof probeFil
  * @param tool - 该能力当前的工具选择。
  * @param probe - `(path, kind) => boolean`。
  */
-export declare function resolveCapabilityTemplates(values: any, capability: any, tool?: string, probe?: typeof probeFilesystem): any;
+/** 一个内置模板槽位（{@link TEMPLATE_FIELDS} 的一项）。 */
+export interface TemplateSlot {
+  key: string;
+  kind: string;
+  label: string;
+  file: string;
+  announce?: string;
+  [extra: string]: unknown;
+}
+/** 一张能力卡解析一个模板槽位的结果（`describeEnv` 直接读这些字段）。 */
+export interface ResolvedTemplate extends CapabilityTemplate {
+  source?: string;
+  path?: string;
+  present?: boolean;
+  compatible?: boolean;
+  reason?: string;
+  templateLabel?: unknown;
+  [extra: string]: unknown;
+}
+export declare function resolveCapabilityTemplates(values: Record<string, unknown>, capability: CapabilitySpec, tool?: string, probe?: (path: string, kind?: string) => boolean): ResolvedTemplate[];
 /**
  * 判定每个字段的状态。
  *
@@ -311,55 +455,13 @@ export declare function resolveCapabilityTemplates(values: any, capability: any,
  * @param probe - `(path, kind) => boolean`,路径存在且类型匹配。
  * @returns 每项 `{ key, label, hint, kind, skips, path, configured, present }`。
  */
-export declare function inspectTools(values: any, probe: any): ({
-  /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
-  key: string;
-  tool?: string;
-  kind?: string;
-  label?: string;
-  hint?: string;
-  control?: string;
-  default?: unknown;
-  section?: string;
-  sectionLabel?: string;
-  group?: string;
-  blankNote?: string;
-  required?: boolean;
-  skips?: string[];
-  usage?: (path: string) => string[];
-  templateLevel?: unknown;
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
-  /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
-  key: string;
-  tool?: string;
-  kind?: string;
-  label?: string;
-  hint?: string;
-  control?: string;
-  default?: unknown;
-  section?: string;
-  sectionLabel?: string;
-  group?: string;
-  blankNote?: string;
-  required?: boolean;
-  skips?: string[];
-  usage?: (path: string) => string[];
-  templateLevel?: unknown;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-})[];
+export declare function inspectTools(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean): InspectedField[];
 /**
  * 兼容旧调用方的字段级缺失判定。新模型没有全局必填路径；实际环节状态由 resolveBinding 判定。
  * @param tool - {@link inspectTools} 的一项。
  * @returns 该进缺失清单时为 true。
  */
-export declare function isMissing(tool: any): boolean;
+export declare function isMissing(tool: InspectedField): boolean;
 /**
  * 当前状态:每项的存在情况 + 给设置页用的汇总(**这是设置页字段定义的唯一来源**)。
  *
@@ -371,86 +473,9 @@ export declare function isMissing(tool: any): boolean;
  * @param values - 设置解析后的值。
  * @returns `{ tools, sections, stages, bindings, missing, ok }`。
  */
-export declare function statusOf(values: any, probe?: typeof probeFilesystem): {
-  tools: ({
-    /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
-    key: string;
-    tool?: string;
-    kind?: string;
-    label?: string;
-    hint?: string;
-    control?: string;
-    default?: unknown;
-    section?: string;
-    sectionLabel?: string;
-    group?: string;
-    blankNote?: string;
-    required?: boolean;
-    skips?: string[];
-    templateLevel?: unknown;
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
-    /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
-    key: string;
-    tool?: string;
-    kind?: string;
-    label?: string;
-    hint?: string;
-    control?: string;
-    default?: unknown;
-    section?: string;
-    sectionLabel?: string;
-    group?: string;
-    blankNote?: string;
-    required?: boolean;
-    skips?: string[];
-    templateLevel?: unknown;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  })[];
-  toolGroups: {
-    key: string;
-    label: string;
-  }[];
-  toolCards: {
-    key: string;
-    role: string;
-    groupLabel: string;
-    label: string;
-    pathKey: string;
-    fieldKeys: string[];
-    kind: string;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    detectable: boolean;
-    state: string;
-  }[];
-  sections: {
-    key: string;
-    label: string;
-    hint: string;
-  }[];
-  capabilities: any[];
-  templateLibrary: {
-    fieldKey: string;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    defaultPath: string;
-  };
-  migrationWarnings: any[];
-  missing: any[];
-  ok: boolean;
+export declare function statusOf(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): {
+  fields: InspectedField[];
+  [extra: string]: unknown;
 };
 /**
  * MSYS2 装的 Verilator 在原生 Windows 上必须带 `VERILATOR_ROOT` —— 把可照抄的那一行给会话。
@@ -469,7 +494,7 @@ export declare function statusOf(values: any, probe?: typeof probeFilesystem): {
  * @param probe - `(path, kind) => boolean`。
  * @returns 提示行数组;空数组表示不需要提示。
  */
-export declare function verilatorRootHint(path: any, probe?: typeof probeFilesystem): string[];
+export declare function verilatorRootHint(path: string, probe?: (path: string, kind?: string) => boolean): string[];
 /**
  * 生成 FPGA 模式会话里那段工具链说明。
  *
@@ -481,7 +506,7 @@ export declare function verilatorRootHint(path: any, probe?: typeof probeFilesys
  * @param probe - `(path, kind) => boolean`,同 {@link inspectTools}。
  * @returns 提示段的正文。
  */
-export declare function describeEnv(values: any, probe: any): string;
+export declare function describeEnv(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): string;
 /**
  * 解析每个模板最终用哪一份:用户填的那份优先,没填或找不到就退回插件自带的。
  *
@@ -491,7 +516,7 @@ export declare function describeEnv(values: any, probe: any): string;
  * @returns 每项 `{ kind, label, file, path, source, present, announce, missing? }`;`source` 为 `"user"` 或 `"bundled"`;
  *   `missing` 是"填了但找不到"的那个路径;`announce` 是提示段的播报规则(见 {@link TEMPLATE_FIELDS})。
  */
-export declare function resolveTemplates(values: any, probe: any): ({
+export declare function resolveTemplates(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean): Array<{
   kind: string;
   label: string;
   file: string;
@@ -499,17 +524,8 @@ export declare function resolveTemplates(values: any, probe: any): ({
   source: string;
   present: boolean;
   announce: string;
-  missing?: undefined;
-} | {
-  kind: string;
-  label: string;
-  file: string;
-  path: string;
-  source: string;
-  present: boolean;
-  missing: string;
-  announce: string;
-})[];
+  missing?: string;
+}>;
 /** 版本查询的超时:一个只会打印版本号的进程,几秒还不回就是有问题,不能把检测挂住。 */
 export declare const VERSION_PROBE_TIMEOUT_MS = 5000;
 /**
@@ -526,7 +542,7 @@ export declare const VERSION_PROBE_TIMEOUT_MS = 5000;
  * @param value - 任意用户提供的字符串。
  * @returns 单行、不会改变提示结构的文本。
  */
-export declare function promptScalar(value: any): string;
+export declare function promptScalar(value: unknown): string;
 /**
  * 把一个值渲染成**可以直接粘进 PowerShell** 的参数(同一套显示层的另一个语义)。
  *
@@ -536,7 +552,7 @@ export declare function promptScalar(value: any): string;
  * @param value - 任意用户提供的字符串。
  * @returns PowerShell 里可直接使用的**单行**参数字面量。
  */
-export declare function promptArg(value: any): string;
+export declare function promptArg(value: unknown): string;
 /**
  * 只读地跑一次版本查询 —— **检测路径上唯一允许起进程的地方**。
  *
@@ -550,18 +566,14 @@ export declare function promptArg(value: any): string;
  * @param command - `{ args, pattern }`:查询参数与从输出里取版本号的模式(第一个捕获组)。
  * @returns `{ version }` 或 `{ error, output? }`。
  */
-export declare function queryVersion(path: any, command: any): {
-  error: string;
-  output?: undefined;
-  version?: undefined;
-} | {
-  error: string;
-  output: string;
-  version?: undefined;
-} | {
-  error?: undefined;
-  output?: undefined;
-  version: any;
+export declare function queryVersion(path: string, command: {
+  args: string[];
+  pattern: RegExp;
+  timeoutMs?: number;
+}): {
+  version?: string;
+  error?: string;
+  output?: string;
 };
 /**
  * 检测表的每一项:往哪个字段填、命中后把下拉切到哪个选项、以及去哪儿找。
@@ -616,7 +628,7 @@ export declare const DETECT_TARGETS: ({
   }[];
 })[];
 /** 列一个目录下的子目录名;读不动时为空 —— 一个拒绝访问的目录不该让整次检测失败。 */
-export declare function readdirNames(dir: any): string[];
+export declare function readdirNames(dir: string): string[];
 /**
  * 检测这台机器上有哪些工具。
  *
@@ -637,25 +649,13 @@ export declare function readdirNames(dir: any): string[];
  * @returns 每项 `{ field, tool, label, path, source }`;`source` 为 `"known"` 或 `"path"`。
  *   带版本查询的项另有 `version` / `versionError` / `versionNote`(只如实报,不判定)。
  */
-export declare function detectTools(probe?: typeof probeFilesystem, list?: typeof readdirNames, env?: NodeJS.ProcessEnv, readVersion?: typeof queryVersion, fields?: undefined): ({
-  version?: undefined;
-  versionError?: undefined;
-  versionNote?: undefined;
+export declare function detectTools(probe?: typeof probeFilesystem, list?: typeof readdirNames, env?: NodeJS.ProcessEnv, readVersion?: typeof queryVersion, fields?: undefined): {
   field: string;
   tool: string;
   label: string;
-  path: any;
-  source: any;
-} | {
-  version: string | undefined;
-  versionError: string | undefined;
-  versionNote: string;
-  field: string;
-  tool: string;
-  label: string;
-  path: any;
-  source: any;
-})[];
+  path: string;
+  source: string;
+}[];
 /**
  * 每个工具「没装时怎么办」的安装指引。
  *
@@ -747,5 +747,5 @@ export declare const MINIMAL_SETUP: string[];
  * @param toolKey - TOOL_CATALOG 的键(如 `vivado`)。
  * @returns 提示行数组;没有对应指引时为空数组。
  */
-export declare function installGuidance(toolKey: any): string[];
+export declare function installGuidance(toolKey: string): string | undefined;
 //#endregion

@@ -490,13 +490,15 @@ export interface DetectTarget {
     pattern: RegExp;
     timeoutMs?: number;
   };
-  /** 候选路径的 glob 列表。 */
-  globs?: Array<{
+  /** 候选路径的 glob 列表（每个探测目标都有，可能为空数组）。 */
+  globs: Array<{
     root: string;
     pattern: string;
     fallback?: boolean;
   }>;
   fields?: string[];
+  /** 候选可执行文件名（相对 glob 目录）。 */
+  exe?: string;
   [extra: string]: unknown;
 }
 /** 一个内置模板槽位（{@link TEMPLATE_FIELDS} 的一项）。 */
@@ -506,6 +508,21 @@ export interface TemplateSlot {
   label: string;
   file: string;
   announce?: string;
+  [extra: string]: unknown;
+}
+/** 能力卡不存在时的结论（没有定义里的任何字段）。 */
+export interface MissingCapability {
+  key: string;
+  section: string;
+  label: string;
+  role: string;
+  toolKey: string;
+  tools: string[];
+  templates: CapabilityTemplate[];
+  selection: string;
+  state: string;
+  present: false;
+  reason: string;
   [extra: string]: unknown;
 }
 /** 一张能力卡解析后的结论：能力定义 + 这次选中的工具与可用性。 */
@@ -715,7 +732,23 @@ export declare function detectTools(probe?: typeof probeFilesystem, list?: typeo
  * 不写版本号(会过期)、不写"推荐某某版本"(各家工程要求不同)、不写直链
  * (链接会变,而且有些要登录)。`free` 表示可免费用于商用;`account` 表示下载需注册账号。
  */
-export declare const INSTALL_HINTS: Record<string, string[]>;
+/**
+ * 某个工具"从哪儿装、填什么"的说明。
+ *
+ * ⚠️ 这是**对象**不是字符串数组 —— 我第一批误标成 `Record<string, string[]>`，
+ * 结果 `hint.free` / `hint.where` 等 10 处报 TS2339。按真实数据声明。
+ */
+export interface InstallHint {
+  /** 工具名（设置页展示用）。 */
+  label?: string;
+  where: string;
+  note: string;
+  url: string;
+  free?: boolean;
+  account?: boolean;
+  [extra: string]: unknown;
+}
+export declare const INSTALL_HINTS: Record<string, InstallHint>;
 /**
  * 「最省事的起步组合」—— 只在**一个工具都没登记**时出现,不打扰已经配好的人。
  *

@@ -896,7 +896,7 @@ function legacyBundledTemplateRepair(values: Record<string, unknown>): Record<st
     const selected = String(values?.[key] ?? "").trim();
     if (selected === "") continue;
     const canonical = canonicalTemplateSelection(selected, category);
-    if (canonical !== selected && typeof key === "string") patch[key] = canonical;
+    if (canonical !== selected) (patch as Record<string, string>)[String(key)] = canonical;
   }
   return patch;
 }
@@ -1308,7 +1308,7 @@ export function resolveBindings(values: Record<string, unknown>, probe: (path: s
  */
 export function resolveCapability(values: Record<string, unknown>, capability: CapabilitySpec, probe: (path: string, kind?: string) => boolean = probeFilesystem): ResolvedCapability {
   if (capability === undefined) {
-    return { key: "", selection: "", state: "invalid", present: false, reason: "能力配置不存在" };
+    return { key: "", section: "", label: "", role: "", toolKey: "", tools: [], templates: [], selection: "", state: "invalid", present: false, reason: "能力配置不存在" } as MissingCapability;
   }
   const selection = valueOf(values, capability.toolKey) || "auto";
   if (selection === "auto") return { ...capability, selection, state: "auto", present: true };
@@ -1363,9 +1363,11 @@ export interface DetectTarget {
   field: string;
   /** 可选：显式指定版本查询命令。 */
   version?: { args: string[]; pattern: RegExp; timeoutMs?: number };
-  /** 候选路径的 glob 列表。 */
-  globs?: Array<{ root: string; pattern: string; fallback?: boolean }>;
+  /** 候选路径的 glob 列表（每个探测目标都有，可能为空数组）。 */
+  globs: Array<{ root: string; pattern: string; fallback?: boolean }>;
   fields?: string[];
+  /** 候选可执行文件名（相对 glob 目录）。 */
+  exe?: string;
   [extra: string]: unknown;
 }
 
@@ -1376,6 +1378,22 @@ export interface TemplateSlot {
   label: string;
   file: string;
   announce?: string;
+  [extra: string]: unknown;
+}
+
+/** 能力卡不存在时的结论（没有定义里的任何字段）。 */
+export interface MissingCapability {
+  key: string;
+  section: string;
+  label: string;
+  role: string;
+  toolKey: string;
+  tools: string[];
+  templates: CapabilityTemplate[];
+  selection: string;
+  state: string;
+  present: false;
+  reason: string;
   [extra: string]: unknown;
 }
 
@@ -1408,13 +1426,14 @@ export interface ResolvedTemplate extends CapabilityTemplate {
 export function resolveCapabilityTemplates(values: Record<string, unknown>, capability: CapabilitySpec, tool = "auto", probe: (path: string, kind?: string) => boolean = probeFilesystem): ResolvedTemplate[] {
   const libraryRoot = valueOf(values, "templateLibraryPath");
   return (capability?.templates ?? []).map((template) => {
-    const resolved = resolveTemplateSelection({
+    const templateArgs = {
       selection: valueOf(values, template.key),
       category: template.category,
       tool,
       libraryRoot,
       probe
-    });
+    };
+    const resolved = resolveTemplateSelection(templateArgs as { selection: string; category: string; tool: string; libraryRoot: string; probe: (path: string, kind?: string) => boolean });
     const { label: templateLabel, ...state } = resolved;
     return { ...template, ...state, templateLabel };
   });
@@ -1493,7 +1512,7 @@ export function statusOf(values: Record<string, unknown>, probe: (path: string, 
         ...safe,
         detectable: DETECT_TARGETS.some((target) => target.field === tool.key),
         // 「没装怎么装」—— 只在**没就绪**时带出去;装好的人不需要在界面上再看一遍下载指引。
-        install: tool.present === true ? undefined : INSTALL_HINTS[tool.tool]
+        install: tool.present === true || typeof tool.tool !== "string" ? undefined : INSTALL_HINTS[tool.tool]
       };
     });
   const toolCards = Object.entries(TOOL_CATALOG).map(([key, definition]) => {
@@ -1701,7 +1720,7 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
         "还缺这些工具(按需补,不必全装):",
         ...missing.flatMap((entry) => {
           const guidance = installGuidance(entry.tool);
-          return [`- ${entry.why}`, ...guidance];
+          return [`- ${String(entry.why ?? "")}`, ...guidance];
         })
       ].join("\n")
     );
@@ -1726,7 +1745,7 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
   const seenTemplatePaths = new Map();
   for (const sectionKey of ["module", "project"]) {
     const section = SETTINGS_SECTIONS.find((entry) => entry.key === sectionKey);
-    const sectionLines = [`${section.label}能力偏好（可以按任务反复切换，不表示先后）:`];
+    const sectionLines = [`${String(section.label ?? "")}能力偏好（可以按任务反复切换，不表示先后）:`];
     for (const capability of resolved.filter((entry) => entry.section === sectionKey)) {
       const head = `- ${capability.label}`;
       if (capability.state === "auto") {
@@ -1787,7 +1806,7 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
     );
   }
   lines.push("显式首选应优先采用；若当前工程事实不允许，要说明原因再调整。工具未实际运行就不能把对应验证写成通过。配置本身不会生成命令队列或自动调用工具。");
-  lines.push(choiceLines(tools));
+  lines.push(choiceLines(tools as InspectedField[]));
   // 产物落点:**每个阶段的产物放各自阶段的目录里**(用户定案,不再有"全局缓存目录"这个字段)。
   // 一句到底,不留"该信哪条"的空间 —— 报告要能指着它们,所以结论类必须留在环节目录。
   lines.push(
@@ -2296,7 +2315,24 @@ export function detectTools(
  * 不写版本号(会过期)、不写"推荐某某版本"(各家工程要求不同)、不写直链
  * (链接会变,而且有些要登录)。`free` 表示可免费用于商用;`account` 表示下载需注册账号。
  */
-export const INSTALL_HINTS: Record<string, string[]> = {
+/**
+ * 某个工具"从哪儿装、填什么"的说明。
+ *
+ * ⚠️ 这是**对象**不是字符串数组 —— 我第一批误标成 `Record<string, string[]>`，
+ * 结果 `hint.free` / `hint.where` 等 10 处报 TS2339。按真实数据声明。
+ */
+export interface InstallHint {
+  /** 工具名（设置页展示用）。 */
+  label?: string;
+  where: string;
+  note: string;
+  url: string;
+  free?: boolean;
+  account?: boolean;
+  [extra: string]: unknown;
+}
+
+export const INSTALL_HINTS: Record<string, InstallHint> = {
   python: {
     label: "Python 3",
     free: true,

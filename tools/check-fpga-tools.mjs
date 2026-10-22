@@ -34,7 +34,7 @@ import {
   withDigests
 } from "../presets/fpga-workbench/tools/module/module-report-check.mjs";
 import { INSTRUCTION_FILE, applyScaffold, planScaffold, readModeRules } from "../presets/fpga-workbench/tools/setup-scaffold.mjs";
-import { defaultDestination, renderTemplate } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
+import { defaultDestination, renderTemplate, snakeCase } from "../presets/fpga-workbench/tools/lib/stamp.mjs";
 import { TEMP_GRACE_MS, listTempLeftovers } from "./lib/cleanup.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1332,6 +1332,13 @@ check(
   "测试平台落到 verif/tb_<snake>.sv(驼峰转下划线;仿真与比对合成一个环节后落在 verif/)"
 );
 check(defaultDestination("tb", "UartRx", "C:/t/tb.vhd") === join("verif", "tb_uart_rx.vhd"), "扩展名跟着模板走");
+// 2026-10-22 审查 L1：连续大写缩写要落在合理边界上。
+// 原来只有 `([a-z0-9])([A-Z])` 一条，于是 `SPIMaster → spimaster`、`I2CMaster → i2_cmaster`。
+// 关键是**数字不是分界**：I2C / I2S / AXI4 这类缩写里的数字与相邻大写属于同一个词。
+check(snakeCase("SPIMaster") === "spi_master", "SPIMaster → spi_master(连续大写按缩写处理)");
+check(snakeCase("I2CMaster") === "i2c_master", "I2CMaster → i2c_master(数字不是分界)");
+check(snakeCase("AXI4Stream") === "axi4_stream", "AXI4Stream → axi4_stream(数字后接词首仍算边界)");
+check(snakeCase("UartRx") === "uart_rx", "UartRx → uart_rx(技能里承诺的样例，不能改坏)");
 // run.do 反过来:名字是**固定**的(跑法里 `do run.do` 写死了它),不跟模板扩展名走、也不替模块名
 check(
   defaultDestination("sim-compile", undefined, "C:/t/compile.do") === join("verif", "run.do"),
@@ -1866,6 +1873,22 @@ check(
     /regexp[^\n]*"SPEEDGRADE"/u.test(bundledRunSynth),
   "run_synth.tcl 的器件预检真的去读 2025.x JSON 三段(DEVICE / PACKAGE / SPEEDGRADE)"
 );
+// 2026-10-22 审查 L2：Tcl 自上而下解释，`proc fail` 必须出现在**任何调用之前**。
+// 否则"RTL/工程目录是 junction 就拒绝"那段护栏会报 `invalid command name "fail"`，
+// 文案失效（看起来像脚本崩了，而不是明确拒绝）。
+// 覆盖 synthesis/ 下全部模板（module 版与 project 版都在那儿）。
+const synthesisDir = join(ROOT, "presets", "fpga-workbench", "templates", "synthesis");
+const tclFiles = readdirSync(synthesisDir).filter((name) => name.endsWith(".tcl"));
+check(tclFiles.length > 0, `找得到 synthesis/ 下的 Tcl 模板（${String(tclFiles.length)} 份）`);
+for (const name of tclFiles) {
+  const text = readFileSync(join(synthesisDir, name), "utf8");
+  const procAt = text.search(/^\s*proc\s+fail\b/mu);
+  const callAt = text.search(/^\s*fail\s+"/mu);
+  check(
+    procAt < 0 || callAt < 0 || procAt < callAt,
+    `${name} 的 proc fail 定义在首次调用之前（L2；proc@${String(procAt)} call@${String(callAt)}）`
+  );
+}
 check(
   /regexp[^\n]*part\[\^A-Za-z0-9\]/u.test(bundledRunSynth),
   "run_synth.tcl 仍保留老写法(整条器件串)作退路(两种写法都要认)"

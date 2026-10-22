@@ -283,9 +283,21 @@ export function checkFile(file, isTestbench) {
     //
     // 判据:`assert property` 的**前件与后件是同一个标识符** —— 不管设计怎样都成立,是恒真式。
     // 只警告(不拦门禁):模板里的占位断言就长这样;但必须被看见,别把"有断言"当成"验过了"。
-    const vacuous = /assert\s+property\s*\([^;]*?\b([A-Za-z_]\w*)\s*\|->\s*\1\b/u.exec(codeOnly(line));
-    if (vacuous !== null) {
-      add("恒真断言", number, `恒真断言(\`${vacuous[1]} |-> ${vacuous[1]}\`):它不管设计怎样都通过,不是设计检查 —— 换成真正要守的性质`);
+    //
+    // 2026-10-22 审查(L4):原来只拿**单行**匹配,而 `assert property (` 与性质常分两行写
+    // （`assert property (` 一行、`@(posedge clk) a |-> a` 下一行）—— 那样永远匹配不到,
+    // 等于这条规则对跨行写法静默失效。现在从本行起拼到 `;` 为止（最多 8 行），
+    // 用整条语句匹配。只在"本行含 assert property"时触发，避免同一断言被逐行重复报。
+    if (/assert\s+property/u.test(codeOnly(line))) {
+      let statement = "";
+      for (let j = index; j < Math.min(index + 8, lines.length); j += 1) {
+        statement += `${codeOnly(lines[j])}\n`;
+        if (codeOnly(lines[j]).includes(";")) break;
+      }
+      const vacuous = /assert\s+property\s*\([^;]*?\b([A-Za-z_]\w*)\s*\|->\s*\1\b/u.exec(statement);
+      if (vacuous !== null) {
+        add("恒真断言", number, `恒真断言(\`${vacuous[1]} |-> ${vacuous[1]}\`):它不管设计怎样都通过,不是设计检查 —— 换成真正要守的性质`);
+      }
     }
 
     // ── end 与 else begin 同行 ──

@@ -20,7 +20,7 @@ import { spawnSync } from "./lib/spawn.mjs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { desktopElectron } from "./lib/host.mjs";
+import { desktopElectron, profileDir } from "./lib/host.mjs";
 
 import { cleanupEntry, formatCleanup } from "./lib/cleanup.mjs";
 import { compareTree } from "./shipped.mjs";
@@ -28,9 +28,16 @@ import { compareTree } from "./shipped.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_NAME = "dsh-fpga-workbench";
 const PROFILE_NAME = process.env.DSH_PROFILE_NAME ?? "desktop";
-const HOME = process.env.USERPROFILE ?? process.env.HOME ?? "";
-const PROFILE_DIR = process.env.DSH_PROFILE_DIR ?? join(HOME, ".dsh", "profiles", PROFILE_NAME);
-const INSTALLED = join(PROFILE_DIR, "node_modules", PACKAGE_NAME);
+/**
+ * profile 目录：走 `host.mjs` 的 `profileDir()`，不要自己拼。
+ *
+ * 2026-10-22 审查（L6）：原来的 `join(HOME, ".dsh", ...)` 在 `USERPROFILE` 与 `HOME`
+ * 都为空时会拼出**相对路径** `.dsh/profiles/desktop`，而且它恰好以期望的尾巴结尾 ——
+ * 后面那条"路径形状校验"也会失效。`profileDir()` 对空 home 返回**空串**，
+ * 由下面那道守卫明确拒绝（见文件末尾）。
+ */
+const PROFILE_DIR = profileDir();
+const INSTALLED = PROFILE_DIR === "" ? "" : join(PROFILE_DIR, "node_modules", PACKAGE_NAME);
 
 const checkOnly = process.argv.includes("--check");
 
@@ -200,6 +207,19 @@ function restore(backup) {
     console.error(`回滚失败:${error.message}\n备份仍在原处(**没有删除**):${backup}`);
     return false;
   }
+}
+
+/**
+ * profile 目录为空 = 既没 `DSH_PROFILE_DIR`、也推不出 home。
+ *
+ * 2026-10-22 审查（L6）：原来直接 `join(HOME, ".dsh", ...)`，两个环境变量都空时会拼出
+ * **相对路径** `.dsh/profiles/desktop`，后面那条"路径形状校验"也会跟着失效
+ * （拼出来的串恰好以期望尾巴结尾）。这里提前拦住，并说清该怎么修。
+ */
+if (PROFILE_DIR === "") {
+  console.error("找不到 DSH profile 目录:USERPROFILE / HOME 都为空,也没有设 DSH_PROFILE_DIR。");
+  console.error("请设置 DSH_PROFILE_DIR=<profile 目录>,或在正常登录的用户环境下运行本脚本。");
+  process.exit(1);
 }
 
 if (checkOnly) {

@@ -47,19 +47,13 @@ set REPORT_DIR "synth"
 set GEN_STUB   1
 set STRATEGY   "default"
 
-# ---- 派生路径(不用改) ------------------------------------------------------ #
-set RTL      [file normalize [file join $MODULE_ROOT $RTL_DIR]]
-# DSH-N01:根目录自己也不能是链接(同上;理由见仿真模板 modelsim_run.do 的同一段)。
-if {[file type $RTL] eq "link"} {
-  fail "RTL root is a symlink/Junction; refusing to follow it: $RTL"
-}
-set RPT      [file normalize [file join $MODULE_ROOT $REPORT_DIR]]
-set PROJ_DIR [file join $RPT "vivado_proj"]
-set PROJ     "synth_proj"
-set RUN_LOG  [file join $PROJ_DIR "${PROJ}.runs" synth_1 "runme.log"]
-
 # ---- 两个失败出口:英文说清楚 + 非零退出码 ---------------------------------- #
 # fail:所有失败分支都走它。step:每一步都硬失败,Vivado 的报错不许变成"跑完了"。
+#
+# ⚠️ 这两个 proc **必须定义在任何调用之前**:Tcl 自上而下解释,
+# 下面的派生路径段里就有一处 `fail`(RTL 根是 junction 时)。写在使用之后时,
+# 那一处会报 `invalid command name "fail"` —— 护栏文案失效。
+# 2026-10-22 审查(L2)指出本文件与 vivado_project_synthesis.tcl 都有这个顺序问题。
 proc fail {msg} {
   puts "\n\[run_synth\] ERROR: $msg"
   exit 1
@@ -72,6 +66,17 @@ proc step {what body} {
     exit 1
   }
 }
+
+# ---- 派生路径(不用改) ------------------------------------------------------ #
+set RTL      [file normalize [file join $MODULE_ROOT $RTL_DIR]]
+# DSH-N01:根目录自己也不能是链接(同上;理由见仿真模板 modelsim_run.do 的同一段)。
+if {[file type $RTL] eq "link"} {
+  fail "RTL root is a symlink/Junction; refusing to follow it: $RTL"
+}
+set RPT      [file normalize [file join $MODULE_ROOT $REPORT_DIR]]
+set PROJ_DIR [file join $RPT "vivado_proj"]
+set PROJ     "synth_proj"
+set RUN_LOG  [file join $PROJ_DIR "${PROJ}.runs" synth_1 "runme.log"]
 
 # ---- 收文件 ---------------------------------------------------------------- #
 set ::SKIPPED_STUBS {}

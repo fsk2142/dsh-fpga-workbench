@@ -40,8 +40,15 @@ type HFunction = (
 const h: HFunction = React.createElement as unknown as HFunction;
 
 /** 与宿主 lib/toolchain.js 的 NS 一致 —— 这就是卡片的认领 key。 */
+/**
+ * 本插件的**设置 namespace**（宿主 `lib/toolchain.js` 的 `NS` 同值）。
+ *
+ * 注意它与包名 `dsh-fpga-workbench` **不同**：宿主用 `Config` 派生设置表单，
+ * 命名空间取插件行 id（`cordis.patch.yml` 里的 `id: fpga-workbench`）。
+ * 所以 `configForms.whileServed([NS], …)` 要用这个值 ——
+ * 照抄 dsh-safe-delete 时不能连它的 `NAMESPACE` 值一起抄（它恰好等于包名）。
+ */
 const NS = "fpga-workbench";
-void NS; // settings.section 移除后暂未使用，保留常量供将来与宿主对齐
 /**
  * 显示名:设置分区名与设置页标题都用它。
  *
@@ -487,7 +494,21 @@ interface ClientContext {
         label?: string | (() => string);
       },
       component: () => ReturnType<typeof h> | null
-    ) => unknown;
+    ) => (() => void) | undefined;
+  };
+  /**
+   * 等某个服务挂上再执行回调（Cordis 的 `ctx.inject`）。
+   *
+   * 配置页必须等 `configForms` 就绪：宿主渲染配置页时要用它，
+   * 早于它就绪注册会出现「槽位存在但入口不出现，且不报错」。
+   */
+  inject?: (deps: string[], callback: (scoped: ClientContext) => unknown) => unknown;
+  /** 把一段工作挂在当前 fiber 上（失效时自动清理）。 */
+  effect?: (factory: () => unknown, label?: string) => unknown;
+  /** 配置表单服务（宿主的 `configForms`）。 */
+  configForms?: {
+    get?: (ns: string) => unknown;
+    whileServed?: (namespaces: string[], register: () => void) => unknown;
   };
 }
 
@@ -775,6 +796,8 @@ function SettingsPanel(): ReturnType<typeof h> | null {
   const [selfCheck, setSelfCheck] = React.useState<SelfCheckUiState | null>(null);
   // 「当前版本」:挂载时读一次(只读本地清单,不发网络请求)。
   const [version, setVersion] = React.useState<VersionPayload | undefined>(undefined);
+  /** 版本接口答不上来（非 2xx / 格式不对）。用来区分"还在读"与"读不到"。 */
+  const [versionFailed, setVersionFailed] = React.useState(false);
   // 「检查更新」:同样三态;**只有点按钮才联网**。
   const [update, setUpdate] = React.useState<UpdateUiState | null>(null);
   // 三条异步取数各有一个**代次**:发请求前自增、把当次的值带进回调,回来时对不上就整份丢掉。
@@ -826,11 +849,18 @@ function SettingsPanel(): ReturnType<typeof h> | null {
     fetch(VERSION_URL, { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : undefined))
       .then((data) => {
-        if (!live || data === null || typeof data !== "object") return;
+        if (!live) return;
+        if (data === null || typeof data !== "object") {
+          // 2026-10-22 审查 L8：非 2xx / 格式不对时原来什么都不做，页面就永远停在
+          // 「当前版本:读取中…」—— 看起来像卡住了。标记成"读不到"，如实显示。
+          setVersionFailed(true);
+          return;
+        }
         setVersion(data);
       })
       .catch(() => {
-        // 版本读不到不影响任何功能,留空即可;页面上会显示"读取中…"而不是编一个版本号
+        // 版本读不到不影响任何功能；标出来，别让界面永远显示"读取中"。
+        if (live) setVersionFailed(true);
       });
     return () => {
       live = false;
@@ -844,15 +874,23 @@ function SettingsPanel(): ReturnType<typeof h> | null {
         if (!live) return;
         // 字段定义也来自这里,所以拿不到就必须说出来 —— 否则界面会是"空白的设置页",
         // 看起来像插件没装好,而其实只是这条路由没答上来。
-        if (data === undefined) setFailed(true);
-        else {
+        //
+        // 2026-10-22 审查 L8：失败时只置 failed，**旧的 status 会继续显示** ——
+        // 页面上是"上一次的成功快照 + 一条失败横幅"，读起来像"现在仍然是这样"。
+        // 清掉它，让失败态与显示内容一致。
+        if (data === undefined) {
+          setFailed(true);
+          setStatus(null);
+        } else {
           if (data.values !== null && typeof data.values === "object") settingsValues = { ...data.values };
           setFailed(false);
           setStatus(data);
         }
       })
       .catch(() => {
-        if (live) setFailed(true);
+        if (!live) return;
+        setFailed(true);
+        setStatus(null);
       });
     return () => {
       live = false;
@@ -1176,32 +1214,36 @@ function SettingsPanel(): ReturnType<typeof h> | null {
       runDetect(card.pathKey, String(card.label ?? ""));
     }
   };
-  const closeTool = () => {
-    // 在途的检测/浏览答复不许再写回状态(与 closeCapability 的 templateSeq 同一手法):
-    // 否则卡片收起后,失败文案还会渲染在面板根上、浏览面板会被重新打开。
+  /**
+   * 收起"工具卡内的交互面板"：作废在途答复并清掉所有相关临时状态。
+   *
+   * `pickNote` 也要在这里清（2026-10-22 审查 L8）：它是一条操作说明，
+   * 只在选择器打开时有意义 —— 原来一旦设置就再也不会消失，收起卡片后
+   * 那行提示还挂在页面上，看起来像"当前正在选路径"。
+   */
+  const closeToolPanels = (): void => {
+    // 在途的检测/浏览答复不许再写回状态（与 closeCapability 的 templateSeq 同一手法）：
+    // 否则卡片收起后，失败文案还会渲染在面板根上、浏览面板会被重新打开。
     browseSeq.current += 1;
     detectSeq.current += 1;
     setBrowse(null);
     setDetect(null);
     setExpandedTool(undefined);
+    setPickNote(undefined);
+  };
+
+  const closeTool = () => {
+    closeToolPanels();
   };
   const cancelTool = (card: ToolCard): void => {
     revertKeys(card.fieldKeys ?? []);
-    browseSeq.current += 1;
-    detectSeq.current += 1;
-    setBrowse(null);
-    setDetect(null);
-    setExpandedTool(undefined);
+    closeToolPanels();
   };
   const saveTool = (card: ToolCard): void => {
     const state = toolState(card);
     if (state !== "ready" && state !== "unconfigured") return;
     saveKeys(card.fieldKeys ?? [], () => {
-      browseSeq.current += 1;
-      detectSeq.current += 1;
-      setBrowse(null);
-      setDetect(null);
-      setExpandedTool(undefined);
+      closeToolPanels();
     });
   };
 
@@ -1281,11 +1323,24 @@ function SettingsPanel(): ReturnType<typeof h> | null {
   /**
    * 跑一次只读自检。结果三态:进行中 / 结果 / 失败原因 —— 失败要说清是"拉不到",而不是显示成"没问题"。
    */
+  /**
+   * 自检与检查更新各有一个"代次"计数器。
+   *
+   * 2026-10-22 审查 L8：这两条链原来没有代次守卫 —— 按钮禁用只是缓解（快速点两次、
+   * 或第一次请求慢到第二次已经发出时，先发的答复可能后到并覆盖新结果）。
+   * detect / preview / browse / template 四条链都有守卫，这两条补齐同一口径。
+   */
+  const selfCheckSeq = React.useRef(0);
+  const updateSeq = React.useRef(0);
+
   const runCheck = () => {
+    const mine = (selfCheckSeq.current += 1);
     setSelfCheck({ loading: true });
     fetch(SELFCHECK_URL, { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${String(response.status)}`))))
       .then((payload) => {
+        // 已经不是最新那一次：整个丢弃，最新那次的结论才作数。
+        if (mine !== selfCheckSeq.current) return;
         // 结构校验(与 detect / templates 两条同类代码同一口径):答复格式不对就抛进 catch,
         // 不让 `checks.length` 在**渲染阶段**炸掉 —— 那时 catch 已经管不到了。
         const checks = Array.isArray(payload?.checks) ? payload.checks : null;
@@ -1308,7 +1363,10 @@ function SettingsPanel(): ReturnType<typeof h> | null {
           }
         });
       })
-      .catch((error) => setSelfCheck({ error: error instanceof Error ? error.message : String(error) }));
+      .catch((error) => {
+        if (mine !== selfCheckSeq.current) return;
+        setSelfCheck({ error: error instanceof Error ? error.message : String(error) });
+      });
   };
 
   /**
@@ -1316,10 +1374,12 @@ function SettingsPanel(): ReturnType<typeof h> | null {
    * 失败要如实说清原因(网络不通 / 限流 / 仓库没有 tag),不编"已是最新"。
    */
   const runUpdateCheck = () => {
+    const mine = (updateSeq.current += 1);
     setUpdate({ loading: true });
     fetch(UPDATE_URL, { method: "POST", cache: "no-store" })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${String(response.status)}`))))
       .then((payload) => {
+        if (mine !== updateSeq.current) return;
         if (payload === null || typeof payload !== "object") throw new Error("检查更新接口返回格式不正确");
         setUpdate({
           result: {
@@ -1332,7 +1392,10 @@ function SettingsPanel(): ReturnType<typeof h> | null {
           }
         });
       })
-      .catch((error) => setUpdate({ error: error instanceof Error ? error.message : String(error) }));
+      .catch((error) => {
+        if (mine !== updateSeq.current) return;
+        setUpdate({ error: error instanceof Error ? error.message : String(error) });
+      });
   };
 
   const checkMark = (state: unknown): string => (state === "fail" ? "✗" : state === "warn" ? "!" : "✓");
@@ -1419,10 +1482,13 @@ function SettingsPanel(): ReturnType<typeof h> | null {
         "p",
         { className: "fpga-set-hint" },
         // `version` 是宿主返回的对象（读不到时是 undefined），不是字符串 ——
-        // 所以判"没有"只看 undefined，不是 `=== ""`。
-        version === undefined
-          ? "当前版本:读取中…"
-          : `当前版本 ${String(version.version ?? "")}。兼容 DSH:${String(version.dshRange ?? "")}。`
+        // 三态：读到了 / 读不到 / 还在读。原来只有前两种合在 undefined 里，
+        // 于是接口失败时界面永远显示"读取中…"（审查 L8）。
+        version !== undefined
+          ? `当前版本 ${String(version.version ?? "")}。兼容 DSH:${String(version.dshRange ?? "")}。`
+          : versionFailed
+            ? "当前版本:读不到（版本接口没有正常回应；不影响任何功能）"
+            : "当前版本:读取中…"
       ),
       h(
         "p",
@@ -2389,27 +2455,88 @@ function renderBrowser(
  * @param ctx - client plugin context carrying `slots`.
  */
 function apply(ctx: ClientContext): void {
-  ctx.slots.inject("plugins.bundle.config", () =>
-    ctx.slots.register(
+  /**
+   * 挂配置页到「插件 → dsh-fpga-workbench → 配置」。
+   *
+   * 写法照 `dsh-safe-delete`（一个已确认可用的带配置页插件），三点缺一不可：
+   *
+   *   1. **`ctx.inject(['configForms'], …)`** —— 等配置表单服务挂上再注册。
+   *      宿主渲染配置页时要用这个服务；早于它就绪注册，槽位记录虽然存在，
+   *      页面拿不到对应表单，「配置」入口**就不出现，而且不报错**。
+   *      （2026-10-22 从 safe-delete 抄来的；之前只 `slots.inject` 直接注册，
+   *        正是少了这一步。）
+   *   2. **`configForms.whileServed([ns], …)`** —— 确保这个 namespace 的配置
+   *      确实被服务；服务撤销时会自动注销插槽，不会留下悬空的注册。
+   *   3. **`plugins.bundle.config`** 而不是 `plugins.row.config` —— 本插件是一个
+   *      bundle，key 是**包名**（不是 `<包名>#<行 id>`，那是单行配置用的）。
+   *
+   * 回调必须**返回** `register` 的清理句柄：cordis 用它在这个 effect 失效时注销插槽；
+   * 返回 undefined 会让注册无法被追踪。注册动作放在**子 ctx** 的 `effect` 里，
+   * 因为 `whileServed` 的回调可能晚于 `apply` 触发 —— 那时外层 fiber 的活跃状态
+   * 没有保证，子 fiber 的才有。
+   */
+  const parentSlots = ctx.slots;
+  const parentEffect = (ctx as { effect?: (fn: () => unknown, label?: string) => unknown }).effect;
+
+  /** 真正把卡片挂上去（拿到可用的 slots + 确认 configForms 服务就绪之后才调）。 */
+  const attach = (slots: ClientContext["slots"]): (() => void) => {
+    const cleanup = slots.register(
       {
         name: "plugins.bundle.config",
-        key: "dsh-fpga-workbench",
+        key: NS,
         order: 500,
         label: () => LABEL
       },
       SettingsPanel
-    )
-  );
+    );
+    // register 返回清理句柄；外层 effect 要用它注销插槽。
+    return typeof cleanup === "function" ? cleanup : () => undefined;
+  };
+
+  const runWhileServed = (scoped: ClientContext): (() => void) => {
+    const service = scoped as ClientContext & {
+      slots?: ClientContext["slots"];
+      configForms?: {
+        get?: (ns: string) => unknown;
+        whileServed?: (namespaces: string[], register: () => void) => unknown;
+      };
+    };
+    const forms = service.configForms;
+    const slots = service.slots ?? parentSlots;
+    if (forms?.whileServed === undefined) {
+      // 没有配置表单服务：直接注册（退路）。旧宿主可能没有这个服务，
+      // 那时行为与迁移前一致 —— 至少不会比原来更差。
+      return attach(slots);
+    }
+    const handle = forms.whileServed([NS], () => slots.inject("plugins.bundle.config", () => attach(slots)));
+    return typeof handle === "function" ? (handle as () => void) : () => undefined;
+  };
+
+  // 优先走「等 configForms 就绪」这条正路。
+  const injectConfigForms = (ctx as {
+    inject?: (deps: string[], callback: (scoped: ClientContext) => unknown) => unknown;
+  }).inject;
+  if (typeof injectConfigForms === "function") {
+    injectConfigForms(["configForms"], (scoped) => runWhileServed(scoped));
+    return;
+  }
+  // 没有 inject（极旧宿主）：退回直接注册，并把注册放进 effect 里以便注销。
+  if (typeof parentEffect === "function") {
+    parentEffect(() => runWhileServed(ctx), "dsh-fpga-workbench: plugins-page card");
+    return;
+  }
+  runWhileServed(ctx);
 }
 
 /**
  * 服务注入:数组,不是对象。形状写错会让 apply 拿到缺服务的 ctx 并抛 TypeError,
  * 而宿主只回一句「did not provide an error message」。
  *
- * 只列 slots；DSH 0.1.7 的设置卡挂在 `plugins.bundle.config`,不再依赖 settingsScope。
+ * `configForms` 必须列进来（2026-10-22 照 dsh-safe-delete 补）：
+ * 配置页要等这个服务就绪才能注册，否则「配置」入口不出现且**不报错**。
+ * `slots` 是挂卡用的，两个都要。
  */
-
-export const inject = ["slots"];
+export const inject = ["slots", "configForms"];
 
 export const name = "dsh-fpga-workbench";
 

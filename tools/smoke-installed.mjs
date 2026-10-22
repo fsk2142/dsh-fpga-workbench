@@ -121,7 +121,11 @@ try {
   } catch (error) {
     if (error?.code === "ENOENT") {
       try {
-        values = yaml.load(readFileSync(`${PROFILE}\\..\\..\\settings.yaml`, "utf8"))?.["fpga-workbench"] ?? {};
+        // 用 `join` 而不是写死 `\\..\\..\\`（2026-10-22 审查 L5）：
+        // 反斜杠是 Windows 专用，POSIX 上这个回退路径会静默失效。
+        // 本仓库定位 Windows-only，但一行 `join` 就能不写死平台。
+        const legacySettings = join(PROFILE, "..", "..", "settings.yaml");
+        values = yaml.load(readFileSync(legacySettings, "utf8"))?.["fpga-workbench"] ?? {};
         settingsRead = true;
         check(true, `从旧 settings.yaml 读到真实设置(${Object.keys(values).length} 项)`);
       } catch (legacyError) {

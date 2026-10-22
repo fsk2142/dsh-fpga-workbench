@@ -22,14 +22,21 @@ import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { cleanupEntry, formatCleanup } from "./lib/cleanup.mjs";
+import { homeDir, profileDir } from "./lib/host.mjs";
 import { compareTree, hashOf, shippedFiles } from "./shipped.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_NAME = "dsh-fpga-workbench";
 const PROFILE_NAME = process.env.DSH_PROFILE_NAME ?? "desktop";
-const HOME = process.env.USERPROFILE ?? process.env.HOME ?? "";
-const PROFILE_DIR = process.env.DSH_PROFILE_DIR ?? join(HOME, ".dsh", "profiles", PROFILE_NAME);
-const INSTALLED = join(PROFILE_DIR, "node_modules", PACKAGE_NAME);
+/**
+ * profile 目录：走 `host.mjs` 的 `profileDir()`，**不要自己拼**。
+ *
+ * 2026-10-22 审查（L6）：原来是 `join(HOME, ".dsh", ...)`，当 `USERPROFILE` 与 `HOME`
+ * 都为空时会拼出**相对路径** `.dsh/profiles/desktop`，后面那些"路径形状校验"随之失效。
+ * `profileDir()` 对空 home 返回**空串**（明确表示"没有"），调用方据此报错退出。
+ */
+const PROFILE_DIR = profileDir();
+const INSTALLED = PROFILE_DIR === "" ? "" : join(PROFILE_DIR, "node_modules", PACKAGE_NAME);
 
 /** 文件名安全的时间戳(备份目录名与"改名移开"的后缀用)。 */
 const timestamp = () => new Date().toISOString().replace(/[:.]/gu, "-");
@@ -39,6 +46,17 @@ const prune = process.argv.includes("--prune");
 
 /** 拒绝在形状不对的路径上写东西(与 install.mjs 同一条保险)。 */
 const expectedTail = ["profiles", PROFILE_NAME, "node_modules", PACKAGE_NAME].join(sep);
+/**
+ * 先把"根本推不出 profile 目录"与"路径形状不对"分开报（2026-10-22 审查 L6）。
+ *
+ * 不分开的话，空 home 拼出来的相对路径 `.dsh/profiles/desktop` **恰好**以
+ * `expectedTail` 结尾 —— 形状校验会放行，然后在一个相对路径上写文件。
+ */
+if (PROFILE_DIR === "") {
+  console.error("找不到 DSH profile 目录:USERPROFILE / HOME 都为空,也没有设 DSH_PROFILE_DIR。");
+  console.error("请设置 DSH_PROFILE_DIR=<profile 目录>,或在正常登录的用户环境下运行本脚本。");
+  process.exit(1);
+}
 if (!INSTALLED.endsWith(expectedTail)) {
   console.error(`拒绝写入:路径形状不符合预期\n  实际: ${INSTALLED}\n  期望结尾: ${expectedTail}`);
   process.exit(1);
@@ -119,7 +137,11 @@ if (checkOnly) {
   //   · 失败(含**正在写的那一个**)按快照写回旧内容;这次新加的文件**改名** `.failed-<时间戳>` 移开;
   //     没来得及清掉的临时文件按零删除规则**列出来**;
   //   · 循环跑完后的 `compareTree` 校验**失败或抛异常**也走同一套回滚,且不再打印"重启生效"。
-  const backupRoot = join(HOME, ".dsh", ".fpga-workbench-backup", `sync-${timestamp()}`);
+  // 备份根放在 home 下；home 推不出时退回**已装副本的兄弟目录**（仍在 profile 内，
+  // 不会把备份写到工作目录或盘根）。审查 L6 之后这里不再直接用 HOME 常量。
+  const backupRoot = homeDir() === ""
+    ? join(PROFILE_DIR, ".fpga-workbench-backup", `sync-${timestamp()}`)
+    : join(homeDir(), ".dsh", ".fpga-workbench-backup", `sync-${timestamp()}`);
   const snapshotOf = new Map();
   const writtenTargets = [];
   const leftoverTemps = [];

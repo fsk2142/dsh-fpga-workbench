@@ -324,6 +324,17 @@ check(loaderId === manifest.name, `bundle 的 loader id 等于包名(实际 ${St
 // 而"产物里确实导出了 inject 这个名字"由上面那条 `exports.inject =` 守着。
 check(/export\s+const\s+inject\s*=\s*\[/u.test(client), "源码里 inject 是数组字面量(写成对象会让整行不激活)");
 check(!/export\s+const\s+inject\s*=\s*\{/u.test(client), "源码里 inject 不是对象字面量");
+// 2026-10-22（照 dsh-safe-delete）：配置页必须等 `configForms` 就绪再注册。
+// 少这一步时「槽位注册成功、但页面上的「配置」入口不出现，且不报错」——
+// 从现象看就是"插件页找不到设置"。这条断言防的是以后有人把它删掉。
+check(
+  /export\s+const\s+inject\s*=\s*\[[^\]]*["']configForms["']/u.test(client),
+  "客户端 inject 里带 configForms(否则插件页的「配置」入口不出现且不报错)"
+);
+check(
+  /configForms[\s\S]{0,200}whileServed/u.test(client),
+  "客户端用 configForms.whileServed 包住注册(服务撤销时自动注销插槽)"
+);
 check(/exports\.apply\s*=/u.test(clientBundle), "导出 apply");
 check(/exports\.name\s*=/u.test(clientBundle), "导出 name");
 check(!/require\(\s*["']\./u.test(clientBundle), "bundle 内没有相对 require(会被拼进组合后解析失败)");

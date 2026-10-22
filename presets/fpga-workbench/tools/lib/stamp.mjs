@@ -235,13 +235,42 @@ const SYNTH_FIELDS = {
 };
 
 /**
- * CamelCase / 混合写法 → snake_case(TB 文件名与模块名用这个)。
+ * CamelCase / 混合写法 → snake_case（TB 文件名与模块名用这个）。
+ *
+ * 两条替换，顺序有意义：
+ *   1. `([a-z0-9])([A-Z])` —— 小写/数字后接大写：`UartRx` → `Uart_Rx`
+ *   2. `([A-Z]+)([A-Z][a-z])` —— **连续大写后接「大写+小写」**：`SPIMaster` → `SPI_Master`
+ *
+ * 第 2 条是 2026-10-22 审查（L1）补的：原来只有第 1 条，于是
+ * `SPIMaster → spimaster`、`I2CMaster → i2_cmaster` —— 名字难认，且 `i2_cmaster`
+ * 里的 `cmaster` 已不是原词边界。技能只承诺 `UartRx → uart_rx`，不算违诺，
+ * 但落点该是 `spi_master` / `i2c_master` 才符合直觉。
  * @param name - 模块名。
  * @returns 小写下划线形式。
  */
 export function snakeCase(name) {
   return String(name)
-    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    /**
+     * 连续大写后接「大写+小写」：`SPIMaster` → `SPI_Master`、`I2CMaster` → `I2C_Master`。
+     *
+     * **必须放在第一条之前**：它处理的是"缩写整体 + 词首"的边界，
+     * 而下面那条处理"小写后接大写"。若反序，`UartRx` 的 `R` 会先被这里选中。
+     */
+    .replace(/([A-Z]+)([A-Z][a-z])/gu, "$1_$2")
+    /**
+     * 除缩写外，**数字后接大写+小写**也算词边界：`AXI4Stream` → `AXI4_Stream`、
+     * `DDR3Ctrl` → `DDR3_Ctrl`。
+     *
+     * 用 `([0-9])([A-Z][a-z])` 而不是 `([a-z0-9])([A-Z])`：
+     * 后者会把 `I2C`（数字后紧跟大写）也拆成 `I2_C` —— 而 I2C/I2S 是一个整体缩写。
+     * 要求分界点后是**大写+小写**，才能只切真实词首（`4S`+`tream`），
+     * 又不碰 `2C`（它后面没有小写）。
+     */
+    .replace(/([0-9])([A-Z][a-z])/gu, "$1_$2")
+    /**
+     * 小写字母后接大写：`UartRx` → `Uart_Rx`。
+     */
+    .replace(/([a-z])([A-Z])/gu, "$1_$2")
     .replace(/[^A-Za-z0-9]+/gu, "_")
     .replace(/^_+|_+$/gu, "")
     .toLowerCase();

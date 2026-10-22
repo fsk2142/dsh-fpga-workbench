@@ -1009,7 +1009,16 @@ export function legacyMigrationPatch(values: Record<string, unknown>): Record<st
 
   const pythonSelection = current("python");
   if (pythonSelection === "none") {
-    for (const key of LEGACY_STAGE_TARGETS.python) effective[key] = "none";
+    /**
+     * **只在目标还没被显式选过时才写 "none"**（2026-10-22 审查 L9）。
+     *
+     * 原来无条件把所有 python 阶段设成 "none" —— 而 v2 用户可能已在某个阶段
+     * 显式选了具体工具（例如验证阶段用自定义脚本工具），那条选择会在一次迁移里
+     * 被静默覆盖。本函数其它分支都有 `current(key) === ""` 这个守卫，这里补同一口径。
+     */
+    for (const key of LEGACY_STAGE_TARGETS.python) {
+      if (current(key) === "") effective[key] = "none";
+    }
   } else if (pythonSelection === "python" || current("pythonPath") !== "") {
     for (const key of LEGACY_STAGE_TARGETS.python) {
       if (current(key) === "" || current(key) === "auto") effective[key] = "python";

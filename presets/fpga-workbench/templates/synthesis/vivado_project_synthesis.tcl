@@ -47,15 +47,10 @@ set REPORT_DIR   "doc"
 set JOBS         4
 set RESET_POLICY "auto"
 
-# ---- 派生路径(不用改) ------------------------------------------------------ #
-set PRJ_ROOT [file normalize [file join $PROJECT_ROOT $PRJ_DIR]]
-# DSH-N01:工程目录自己也不能是链接(否则整个工程都在工程根外)。
-if {[file type $PRJ_ROOT] eq "link"} {
-  fail "prj dir is a symlink/Junction; refusing to follow it: $PRJ_ROOT"
-}
-set RPT      [file normalize [file join $PROJECT_ROOT $REPORT_DIR]]
-
 # ---- 两个失败出口:英文说清楚 + 非零退出码 ---------------------------------- #
+# ⚠️ 必须定义在任何调用之前:Tcl 自上而下解释,下面派生路径段里就有一处 `fail`
+# (工程目录是 junction 时)。写在使用之后会报 `invalid command name "fail"`,
+# 护栏文案失效。2026-10-22 审查(L2)。
 proc fail {msg} {
   puts "\n\[run_prj_synth\] ERROR: $msg"
   exit 1
@@ -67,6 +62,15 @@ proc step {what body} {
     puts "  $err"
     exit 1
   }
+}
+
+# ---- 派生路径(不用改) ------------------------------------------------------ #
+set PRJ_ROOT [file normalize [file join $PROJECT_ROOT $PRJ_DIR]]
+# DSH-N01:工程目录自己也不能是链接(否则整个工程都在工程根外)。
+if {[file type $PRJ_ROOT] eq "link"} {
+  fail "prj dir is a symlink/Junction; refusing to follow it: $PRJ_ROOT"
+}
+set RPT      [file normalize [file join $PROJECT_ROOT $REPORT_DIR]]
 }
 
 # ---- 预检 0:工程与报告目录 ------------------------------------------------ #

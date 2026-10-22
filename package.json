@@ -25,9 +25,20 @@
   "icon": "icon.svg",
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2"
+  },
   "exports": {
-    ".": "./lib/index.js",
-    "./mode": "./lib/mode.js",
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./mode": {
+      "types": "./lib/mode.d.ts",
+      "default": "./lib/mode.js"
+    },
     "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
@@ -42,14 +53,16 @@
     "icon.svg"
   ],
   "scripts": {
+    "build": "tsdown",
     "test": "node tools/check-all.mjs",
     "test:installed": "node tools/check-all.mjs --installed",
     "test:safety": "node tools/check-all.mjs --safety",
-    "test:vivado": "node tools/check-all.mjs --vivado"
+    "test:vivado": "node tools/check-all.mjs --vivado",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-settings": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2",
-    "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-settings": ">=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.2"
   },
   "dsh": {
@@ -57,8 +70,9 @@
       "patch": "./cordis.patch.yml"
     },
     "manifestVersion": 1,
+    "//compatibility": "仅供市场展示，**不影响加载**。宿主 app-boot 的 unmetRequirements() 只读 engines.dsh（有它时 peerDependencies 全部忽略）；没有 engines.dsh 才逐个匹配 peer。这里与 engines.dsh / peer 内容重复，升级时要三处一起改。",
     "compatibility": {
-      "dsh": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2",
+      "dsh": ">=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2",
       "dshReleases": {
         "0.1.7-rc.2": "compatible",
         "0.2.0-rc.1": "compatible",

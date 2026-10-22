@@ -26,6 +26,50 @@ export const MCP_PATH_KEY = "vivadoMcpPath";
 /** 工具名前缀里用的服务器名;最终工具形如 `mcp__vivado__vivado_start`。 */
 export const MCP_SERVER_NAME = "vivado";
 
+/** 路径检查结果。`ok` 为 false 时 `reason` 是给人看的一句话。 */
+interface McpPathInspection {
+  ok: boolean;
+  reason: string;
+}
+
+/** 传给宿主 mcp-client 的配置形状（只列本插件用到的字段）。 */
+interface McpClientConfig {
+  transport: "stdio";
+  serverName: string;
+  command: string;
+  args: string[];
+  failOnStartupError: boolean;
+  toolCallTimeoutMs: number;
+  reconnect: { enabled: boolean; initialDelayMs: number; maxDelayMs: number; maxAttempts: number };
+}
+
+/** 挂载状态：记住当前 fiber 与路径。 */
+interface McpMountState {
+  fiber: unknown;
+  path: string | undefined;
+}
+
+/** 宿主 mcp-client 模块的最小形状（`apply` / `inject` / `Config`）。 */
+interface HostMcpClient {
+  apply?: (...args: unknown[]) => unknown;
+  inject?: unknown;
+  Config?: unknown;
+}
+
+/** 可注入依赖（自检用；生产调用不传）。 */
+interface McpDeps {
+  inspectMcpPath?: (path: unknown) => McpPathInspection;
+  loadHostMcpClient?: (ctx: unknown) => Promise<HostMcpClient | undefined>;
+}
+
+/** Cordis 上下文里本文件用到的那几个成员。 */
+interface McpContext {
+  plugin?: (spec: unknown, config: unknown) => unknown;
+  baseUrl?: string;
+  fiber?: { ctx?: { baseUrl?: string } };
+  [key: string]: unknown;
+}
+
 /**
  * 判断一个路径看起来是不是可用的 MCP 服务器可执行文件。
  *
@@ -34,7 +78,7 @@ export const MCP_SERVER_NAME = "vivado";
  * @param path - 用户填的路径。
  * @returns `{ ok, reason }`;`ok` 为 false 时 `reason` 是给人看的一句话。
  */
-export function inspectMcpPath(path) {
+export function inspectMcpPath(path: unknown): McpPathInspection {
   const text = String(path ?? "").trim();
   if (text === "") return { ok: false, reason: "未设置" };
   let stat;
@@ -55,7 +99,7 @@ export function inspectMcpPath(path) {
  * @param path - 已确认可用的可执行文件路径。
  * @returns mcp-client 的 Config 对象。
  */
-export function mcpConfigFor(path) {
+export function mcpConfigFor(path: string): McpClientConfig {
   return {
     transport: "stdio",
     serverName: MCP_SERVER_NAME,
@@ -84,7 +128,7 @@ export function mcpConfigFor(path) {
  *
  * 用 WeakMap 挂在 state 上而不是模块级:每个调用方(每个预设作用域)各有各的链,互不阻塞。
  */
-const syncChains = new WeakMap();
+const syncChains = new WeakMap<McpMountState, Promise<void>>();
 
 /**
  * 在当前上下文里挂载/更新/卸载 MCP 客户端。
@@ -100,7 +144,12 @@ const syncChains = new WeakMap();
  *   `{ inspectMcpPath, loadHostMcpClient }` —— 让测试能不打真宿主就覆盖挂载/卸载流程。
  * @returns 一条给人看的状态说明。
  */
-export async function syncMcpClient(ctx, path, state, deps = {}) {
+export async function syncMcpClient(
+  ctx: McpContext,
+  path: unknown,
+  state: McpMountState,
+  deps: McpDeps = {}
+): Promise<string> {
   const previous = syncChains.get(state) ?? Promise.resolve();
   const run = () => syncMcpClientNow(ctx, path, state, deps);
   const current = previous.then(run, run);
@@ -123,7 +172,12 @@ export async function syncMcpClient(ctx, path, state, deps = {}) {
  * @param deps - 可注入的依赖(见 {@link syncMcpClient})。
  * @returns 状态说明。
  */
-async function syncMcpClientNow(ctx, path, state, deps = {}) {
+async function syncMcpClientNow(
+  ctx: McpContext,
+  path: unknown,
+  state: McpMountState,
+  deps: McpDeps = {}
+): Promise<string> {
   const inspect = deps.inspectMcpPath ?? inspectMcpPath;
   const wanted = String(path ?? "").trim();
   const inspection = inspect(wanted);
@@ -156,13 +210,20 @@ async function syncMcpClientNow(ctx, path, state, deps = {}) {
   if (typeof mcpClient?.apply !== "function") {
     return "宿主的 dsh-mcp-client 没有 apply —— 这项能力不可用,其余功能照常";
   }
+  // 类型上 `plugin` 是可选的；运行时 Cordis 上下文一定有它。
+  // 缺了它就是"这个作用域不支持挂插件"，如实报告而不是抛。
+  if (typeof ctx.plugin !== "function") {
+    return "当前上下文不能挂载 MCP 客户端 —— 这项能力不可用,其余功能照常";
+  }
 
-  let fiber;
+  /** Cordis 的 fiber：可 await、有 dispose。 */
+  type FiberLike = { dispose?: () => Promise<unknown> } & PromiseLike<unknown>;
+  let fiber: FiberLike | undefined;
   try {
     fiber = ctx.plugin(
       { name: "fpga-workbench-vivado-mcp", apply: mcpClient.apply, inject: mcpClient.inject, Config: mcpClient.Config },
       mcpConfigFor(wanted)
-    );
+    ) as FiberLike;
     // **先记下再 await**:`await fiber` 可能抛(例如 serverName 撞车),那时 fiber 本身
     // 可能已经建出来并活着。旧写法在 catch 里只清 state 不 dispose,留下一个**活着的
     // fiber** —— 工具留在工具表里、服务器进程不退,而 state 已忘掉它,再也卸不掉。
@@ -172,7 +233,7 @@ async function syncMcpClientNow(ctx, path, state, deps = {}) {
     return previousPath === undefined ? "已连接" : `已切换到 ${wanted}`;
   } catch (error) {
     // 失败时把已经建出来的 fiber 一并收掉,别留半活状态。
-    if (fiber !== undefined) {
+    if (fiber !== undefined && typeof fiber.dispose === "function") {
       try {
         await fiber.dispose();
       } catch {
@@ -181,7 +242,8 @@ async function syncMcpClientNow(ctx, path, state, deps = {}) {
     }
     state.fiber = undefined;
     state.path = undefined;
-    return `启动失败:${String(error?.message ?? error)}`;
+    const message = error instanceof Error ? error.message : String(error);
+    return `启动失败:${message}`;
   }
 }
 
@@ -201,12 +263,15 @@ async function syncMcpClientNow(ctx, path, state, deps = {}) {
  * @param ctx - 插件上下文。
  * @returns 模块命名空间,或 undefined。
  */
-async function loadHostMcpClient(ctx) {
+async function loadHostMcpClient(ctx: McpContext): Promise<HostMcpClient | undefined> {
   for (const specifier of hostMcpClientSpecifiers(ctx)) {
     try {
-      const loaded = await import(specifier);
-      if (typeof loaded?.apply === "function") return loaded;
-      if (typeof loaded?.default?.apply === "function") return loaded.default;
+      const loaded = (await import(specifier)) as {
+        apply?: unknown;
+        default?: { apply?: unknown };
+      };
+      if (typeof loaded?.apply === "function") return loaded as HostMcpClient;
+      if (typeof loaded?.default?.apply === "function") return loaded.default as HostMcpClient;
     } catch {
       // 这个位置没有,试下一个
     }
@@ -219,8 +284,8 @@ async function loadHostMcpClient(ctx) {
  * @param ctx - 插件上下文。
  * @returns 说明符数组。
  */
-function hostMcpClientSpecifiers(ctx) {
-  const out = [];
+function hostMcpClientSpecifiers(ctx: McpContext): string[] {
+  const out: string[] = [];
   const appDir = process.env.DSH_APP_DIR;
   if (typeof appDir === "string" && appDir !== "") {
     // 用 pathToFileURL 而不是手拼 file:// —— Windows 的盘符与反斜杠手拼必错。
@@ -248,10 +313,11 @@ function hostMcpClientSpecifiers(ctx) {
 }
 
 /** 卸载当前挂载的 MCP 客户端,不抛异常。 */
-async function unload(state) {  const fiber = state.fiber;
+async function unload(state: McpMountState): Promise<void> {
+  const fiber = state.fiber as { dispose?: () => Promise<unknown> } | undefined;
   state.fiber = undefined;
   state.path = undefined;
-  if (fiber === undefined) return;
+  if (fiber === undefined || typeof fiber.dispose !== "function") return;
   try {
     await fiber.dispose();
   } catch {
@@ -260,7 +326,7 @@ async function unload(state) {  const fiber = state.fiber;
 }
 
 /** 供自检使用:路径填了但文件不在,是要报出来的一条。 */
-export function mcpPathProblem(path) {
+export function mcpPathProblem(path: unknown): string | undefined {
   const inspection = inspectMcpPath(path);
   return inspection.ok || inspection.reason === "未设置" ? undefined : inspection.reason;
 }

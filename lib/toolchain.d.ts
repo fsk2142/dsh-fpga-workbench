@@ -713,16 +713,11 @@ export declare function readdirNames(dir: string): string[];
  * @returns 每项 `{ field, tool, label, path, source }`;`source` 为 `"known"` 或 `"path"`。
  *   带版本查询的项另有 `version` / `versionError` / `versionNote`(只如实报,不判定)。
  */
-export declare function detectTools(probe?: typeof probeFilesystem, list?: typeof readdirNames, env?: NodeJS.ProcessEnv, readVersion?: typeof queryVersion, fields?: undefined): {
-  field: string;
-  tool: string;
-  label: string;
-  path: string;
-  source: string;
-  version?: unknown;
-  versionError?: unknown;
-  versionNote?: string;
-}[];
+export declare function detectTools(probe?: (path: string, kind?: string) => boolean, list?: (dir: string) => string[], env?: NodeJS.ProcessEnv, readVersion?: (path: string, command: {
+  args: string[];
+  pattern: RegExp;
+  timeoutMs?: number;
+}) => unknown, fields?: string[] | undefined): Array<Record<string, unknown>>;
 /**
  * 每个工具「没装时怎么办」的安装指引。
  *

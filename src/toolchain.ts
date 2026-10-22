@@ -2236,12 +2236,12 @@ function pathDirs(env: NodeJS.ProcessEnv): string[] {
  *   带版本查询的项另有 `version` / `versionError` / `versionNote`(只如实报,不判定)。
  */
 export function detectTools(
-  probe = probeFilesystem,
-  list = readdirNames,
-  env = process.env,
-  readVersion = queryVersion,
-  fields = undefined
-) {
+  probe: (path: string, kind?: string) => boolean = probeFilesystem,
+  list: (dir: string) => string[] = readdirNames,
+  env: NodeJS.ProcessEnv = process.env,
+  readVersion: (path: string, command: { args: string[]; pattern: RegExp; timeoutMs?: number }) => unknown = queryVersion,
+  fields: string[] | undefined = undefined
+): Array<Record<string, unknown>> {
   const hits: Array<{ field: string; tool: string; label: string; path: string; source: string; version?: unknown; versionError?: unknown; versionNote?: string }> = [];
   const seen = new Set<string>();
   const exists = (path: string, kind = "file"): boolean => {

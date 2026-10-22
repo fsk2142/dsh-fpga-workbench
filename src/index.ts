@@ -64,7 +64,8 @@ interface HttpRequest {
   url?: string;
   headers?: Record<string, string | string[] | undefined>;
   setEncoding?: (encoding: string) => void;
-  on?: (event: string, listener: (...args: never[]) => void) => void;
+  /** Node 的 IncomingMessage 一定有 on —— 标必选，调用处不必判空。 */
+  on: (event: string, listener: (...args: never[]) => void) => void;
 }
 
 /** `json()` 目标：`res.writeHead` + `res.end` 就够了。 */
@@ -117,7 +118,14 @@ interface SettingsFacade {
  * 且 describe() 只列出带 volatile 字段的行。普通字段会在保存时被直接拒绝。
  */
 export const SettingsSchema = z.object(
-  Object.fromEntries(FIELDS.map((field) => [field.key, z.string().default(field.default ?? "").volatile()]))
+  Object.fromEntries(
+    FIELDS.map((field) => {
+      // `FIELDS` 是若干字面量形状的联合，不是每个成员都有 `default`
+      // （模板字段 / 能力偏好字段就没有）。用 `in` 收窄，别硬取。
+      const fallback = "default" in field ? String(field.default ?? "") : "";
+      return [field.key, z.string().default(fallback).volatile()];
+    })
+  )
 );
 
 /**
@@ -209,10 +217,12 @@ function readJsonBody(req: HttpRequest, limit = 1024 * 1024): Promise<Record<str
  * @returns 要覆盖的字段值;查询串坏掉时为空对象。
  */
 function pendingOverrides(req: HttpRequest): Record<string, unknown> {
-  const overrides = {};
+  const overrides: Record<string, string> = {};
   try {
     const params = new URL(req.url ?? "", "http://localhost").searchParams;
     for (const field of FIELDS) {
+      // `field.key` 在联合类型里不是每个成员都有（有 key 是 string）—— 先判。
+      if (typeof field.key !== "string") continue;
       const value = params.get(field.key);
       if (value !== null) overrides[field.key] = value;
     }
@@ -277,7 +287,7 @@ function createSettingsFacade(ctx: HostContext, initial: Record<string, unknown>
     service = candidate;
     if (typeof candidate.configure === "function") {
       try {
-        ctx.effect(() => candidate.configure({ auto: false }, ctx.fiber), "fpga-workbench: settings page policy");
+        ctx.effect(() => candidate.configure?.({ auto: false }, ctx.fiber), "fpga-workbench: settings page policy");
       } catch (error) {
         note(ctx, "warn", `fpga-workbench: 关闭自动设置表单失败:${String(error)}`);
       }
@@ -299,7 +309,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
   // 把改名前的旧键搬进新键(一次性,幂等)。等 Loader 把本行 settings face 挂好再迁移,
   // 否则新 API 还没有 describe/update 可用,迁移只改到进程内临时值。
   const migrate = () => migrateLegacyKeys(settings, ctx);
-  Promise.resolve(ctx.loader?.await?.()).then(migrate, migrate);
+  // `ctx.loader` 是宿主可选提供的（旧版本没有）。用窄断言取它，缺了就同步迁移。
+  const loader = (ctx as { loader?: { await?: () => Promise<unknown> } }).loader;
+  Promise.resolve(loader?.await?.()).then(migrate, migrate);
 
   // 预设由 cordis.patch.yml 里的 @deepseek-ai/dsh-agent-preset 行注册,不再往用户预设目录写副本。
 
@@ -353,12 +365,16 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
             }
             try {
               const body = await readJsonBody(req);
-              const patch = body?.patch;
+              // `body` 是 Record<string, unknown>；`patch` 取出来是 unknown，
+              // 下面的 typeof/Array.isArray 检查把它收窄成普通对象。
+              const patch = (body as { patch?: unknown }).patch;
               if (patch === null || typeof patch !== "object" || Array.isArray(patch)) {
                 json(res, { error: "patch 必须是普通对象" }, 400);
                 return;
               }
-              const values = await settings.update(patch);
+              // 上面的 typeof / Array.isArray 已把它收窄成"非数组对象"，
+              // 这里显式断言成 Record —— `settings.update` 要的就是普通对象。
+              const values = await settings.update(patch as Record<string, unknown>);
               // 设置刚改过:清掉路径探测缓存,让界面与会话提示**立刻**反映新路径,
               // 而不是等 5 秒 TTL 过期(见 toolchain.js 的 probeFilesystem)。
               clearProbeCache();
@@ -500,7 +516,15 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
             } catch {
               field = undefined;
             }
-            json(res, { found: detectTools(undefined, undefined, undefined, undefined, field === undefined ? undefined : [field]) });
+            json(res, {
+              found: detectTools(
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                field === undefined ? undefined : [field]
+              )
+            });
           }
         }),
       "fpga-workbench: tool detection route"
@@ -533,7 +557,8 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
                 libraryRoot: String(values?.templateLibraryPath ?? "")
               }));
             } catch (error) {
-              const suggested = Number(error?.status);
+              // `error` 是 unknown；`template-library` 会抛带 `status` 的错误，取它当 HTTP 码。
+              const suggested = Number((error as { status?: unknown } | undefined)?.status);
               const status = Number.isInteger(suggested) && suggested >= 400 && suggested <= 599 ? suggested : 500;
               json(res, { error: error instanceof Error ? error.message : "模板读取失败" }, status);
             }

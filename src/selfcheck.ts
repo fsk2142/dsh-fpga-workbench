@@ -337,8 +337,8 @@ export function runSelfCheck(
   const toolFields = FIELDS.filter(
     (field) => "tool" in field && "kind" in field && field.tool !== undefined && field.kind !== undefined
   );
-  const registered = toolFields.filter((field) => String(values[field.key] ?? "").trim() !== "");
-  const broken = registered.filter((field) => !existsSync(String(values[field.key]).trim()));
+  const registered = toolFields.filter((field) => String(values[String(field.key)] ?? "").trim() !== "");
+  const broken = registered.filter((field) => !existsSync(String(values[String(field.key)]).trim()));
   checks.push(
     entry(
       "tools",
@@ -360,7 +360,7 @@ export function runSelfCheck(
   // 所以它不是"少查一条",而是这一档判据整个失效(2026-10-21 修正,回归断言在
   // tools/check-selfcheck.mjs 的 ⑪)。
   const libraryField = FIELDS.find((field) => field.key === "templateLibraryPath");
-  const libraryRoot = libraryField === undefined ? "" : String(values[libraryField.key] ?? "").trim();
+  const libraryRoot = libraryField === undefined ? "" : String(values[String(libraryField.key)] ?? "").trim();
   /** 字段定义没了就说明模型自己漂了 —— 报出来,别静默退化成"没填"。 */
   const libraryFieldMissing = libraryField === undefined;
   checks.push(

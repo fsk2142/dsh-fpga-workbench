@@ -28,7 +28,8 @@ interface HttpRequest {
   url?: string;
   headers?: Record<string, string | string[] | undefined>;
   setEncoding?: (encoding: string) => void;
-  on?: (event: string, listener: (...args: never[]) => void) => void;
+  /** Node 的 IncomingMessage 一定有 on —— 标必选，调用处不必判空。 */
+  on: (event: string, listener: (...args: never[]) => void) => void;
 }
 /** `json()` 目标：`res.writeHead` + `res.end` 就够了。 */
 interface HttpResponse {

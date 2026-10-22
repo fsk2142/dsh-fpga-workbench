@@ -105,7 +105,9 @@ function readValues(ctx: ModeContext): unknown {
  */
 function sectionText(ctx: ModeContext): string {
   try {
-    return describeEnv(readValues(ctx), probeFilesystem);
+    // `readValues` 返回 unknown（设置形状不可信）；`describeEnv` 只读字符串字段，
+    // 传空对象等价于"什么都没配"，与旧行为一致。
+    return describeEnv((readValues(ctx) ?? {}) as Record<string, unknown>, probeFilesystem);
   } catch (error) {
     try {
       ctx.logger?.warn?.(`fpga-workbench: 工具链提示段组装失败:${String(error)}`);

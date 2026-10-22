@@ -1,4 +1,3 @@
-//#region src/version.d.ts
 /**
  * 读本包的清单。读不到时抛 —— 版本号读不出来,后面所有判断都没有意义。
  * @returns package.json 解析结果。
@@ -97,5 +96,4 @@ export declare function checkForUpdate(fetchImpl?: FetchLike | undefined, timeou
  * @returns {@link updateStateOf} 的形状。
  */
 export declare function checkForUpdateWithCookie(baseUrl: string, cookie?: string, timeoutMs?: number): Promise<UpdateState>;
-//#endregion
 export {};

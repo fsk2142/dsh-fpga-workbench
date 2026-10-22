@@ -1,4 +1,3 @@
-//#region src/selfcheck.d.ts
 /**
  * 四棵子树里**按名字被运行时读**的固定文件(不只是"目录在不在")。
  *
@@ -39,5 +38,4 @@ export interface SelfCheckReport {
  * @returns `{ ranAt, ok, failed, warned, checks }` —— `checks` 每项 `{ id, label, status, detail }`。
  */
 export declare function runSelfCheck(values?: Record<string, unknown>, packageRoot?: string): SelfCheckReport;
-//#endregion
 export { REQUIRED_PRESET_FILES };

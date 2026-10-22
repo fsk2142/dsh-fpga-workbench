@@ -1,6 +1,5 @@
 import { NS, legacyMigrationPatch, statusOf } from "./toolchain.js";
 import z from "@deepseek-ai/schemastery";
-//#region src/index.d.ts
 /** 设置页读工具状态的路由。与 lib/client.js 里的常量必须一致。 */
 export declare const STATUS_PATH = "/plugins/fpga-workbench/toolchain";
 /** 设置页「浏览…」列目录的路由(弹不出系统对话框时的备选)。与 lib/client.js 里的常量必须一致。 */
@@ -95,5 +94,4 @@ export declare const Config: z<Schemastery.ObjectS<any>, Schemastery.ObjectT<any
 export declare function apply(ctx: HostContext, config?: Record<string, unknown>): void;
 export declare const name = "fpga-workbench";
 export declare const inject: string[];
-//#endregion
 export { NS, legacyMigrationPatch, statusOf };

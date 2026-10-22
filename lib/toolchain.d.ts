@@ -1,4 +1,3 @@
-//#region src/toolchain.d.ts
 /** 设置命名空间,同时也是客户端设置页认领的那个 key。两边必须写同一个值。 */
 export declare const NS = "fpga-workbench";
 /**
@@ -761,4 +760,3 @@ export declare const MINIMAL_SETUP: string[];
  * @returns 提示行数组;没有对应指引时为空数组。
  */
 export declare function installGuidance(toolKey: string): string[];
-//#endregion

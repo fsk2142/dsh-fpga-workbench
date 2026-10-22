@@ -1,4 +1,3 @@
-//#region src/mode.d.ts
 /** Cordis 上下文里本文件真正用到的那几个成员。 */
 interface ModeContext {
   get: (name: string) => unknown;
@@ -29,5 +28,4 @@ export declare const inject: string[];
  * @param ctx - 预设作用域内的插件上下文。
  */
 export declare function apply(ctx: ModeContext): void;
-//#endregion
 export {};

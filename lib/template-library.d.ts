@@ -1,4 +1,3 @@
-//#region src/template-library.d.ts
 /**
  * 一个模板分类（{@link TEMPLATE_CATEGORIES} 的一项）。
  *
@@ -111,4 +110,3 @@ export declare function resolveTemplateSelection({ selection, category, tool, li
  * 用户自己的绝对路径、library: 选择和已经规范化的 builtin: ID 原样保留。
  */
 export declare function canonicalTemplateSelection(selection: unknown, category: string): string;
-//#endregion

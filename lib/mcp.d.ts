@@ -1,4 +1,3 @@
-//#region src/mcp.d.ts
 /** 设置里保存 MCP 可执行文件路径的字段名(与 toolchain.js 的 FIELDS 一致)。 */
 export declare const MCP_PATH_KEY = "vivadoMcpPath";
 /** 工具名前缀里用的服务器名;最终工具形如 `mcp__vivado__vivado_start`。 */
@@ -85,5 +84,4 @@ export declare function mcpConfigFor(path: string): McpClientConfig;
 export declare function syncMcpClient(ctx: McpContext, path: unknown, state: McpMountState, deps?: McpDeps): Promise<string>;
 /** 供自检使用:路径填了但文件不在,是要报出来的一条。 */
 export declare function mcpPathProblem(path: unknown): string | undefined;
-//#endregion
 export {};

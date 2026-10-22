@@ -277,7 +277,7 @@ function firstUsableColor(
  * 读它等于拿自己上一轮写下的结论当证据 —— 主题真变了也翻不过来。
  * @returns `"dark"` / `"light"`,或 undefined(两个元素上都没有可认的标记)。
  */
-function markerTheme(): "dark" | "light" {
+function markerTheme(): "dark" | "light" | undefined {
   for (const node of [document.documentElement, document.body]) {
     if (node === null || node === undefined) continue;
     const values = typeof node.className === "string" ? [node.className] : [];
@@ -312,7 +312,7 @@ function markerTheme(): "dark" | "light" {
  * @returns `"dark"` 或 `"light"`。**任何异常都不许往外抛**(不能为了一个主题把设置页弄崩):
  *   每个信号各自 try/catch,一个读不出来只跳过它,四个都没结论才回到 `"light"`。
  */
-function themeOf(element: Element | null): "dark" | "light" {
+function themeOf(element: Element | null): "dark" | "light" | undefined {
   try {
     const ink = firstUsableColor(element, "color", true);
     if (ink !== undefined) return brightness(ink) >= 128 ? "dark" : "light";
@@ -370,7 +370,7 @@ function chipMark(size: number): ReturnType<typeof h> {
 }
 
 /** 把长说明收进可用鼠标或键盘打开的小问号。 */
-function helpBubble(key: string, text: string): ReturnType<typeof h> {
+function helpBubble(key: string, text: string): ReturnType<typeof h> | null {
   if (typeof text !== "string" || text.trim() === "") return null;
   const id = `fpga-help-${String(key)}`;
   // 页面上几十个问号:aria-label 全都叫"查看说明"时,读屏用户分不出是哪一个。
@@ -435,9 +435,32 @@ interface PreviewPayload {
 
 /** 分类模板扫描的响应。 */
 interface TemplateScanPayload {
-  groups?: Array<Record<string, unknown>>;
-  data?: { values?: Record<string, string>; [extra: string]: unknown };
+  /** 这次扫描属于哪张能力卡。 */
+  capability?: string;
+  groups?: TemplateScanGroup[];
+  data?: { values?: Record<string, string>; groups?: TemplateScanGroup[]; [extra: string]: unknown };
   errors?: string[];
+  [extra: string]: unknown;
+}
+
+/** 一个分类的扫描结果（宿主 `scanTemplates` 的 group）。 */
+interface TemplateScanGroup {
+  key?: string;
+  label?: string;
+  items?: Array<{ id?: string; label?: string; path?: string; [extra: string]: unknown }>;
+  errors?: string[];
+  [extra: string]: unknown;
+}
+
+/** 能力卡里的一个模板槽位（客户端读到的形状）。 */
+interface CapabilityTemplateSlot {
+  key: string;
+  label?: string;
+  category?: string;
+  selection?: string;
+  state?: string;
+  present?: boolean;
+  summary?: string;
   [extra: string]: unknown;
 }
 
@@ -514,7 +537,48 @@ interface DetectedTool {
   [extra: string]: unknown;
 }
 
-/** 一张工具卡（宿主 `toolCards` 的一项）。 */
+/** 工具卡区块的交互句柄（在组件里构造，往下传给 renderFields）。 */
+interface ToolUi {
+  expandedTool?: string;
+  showToolSettings: boolean;
+  toggleToolSettings: () => void;
+  expandedAuxGroup?: string;
+  toggleAuxGroup: (group: string) => void;
+  state: (card: ToolCard) => string;
+  dirty: (card: ToolCard) => boolean;
+  open: (card: ToolCard) => void;
+  close: (card: ToolCard) => void;
+  cancel: (card: ToolCard) => void;
+  save: (card: ToolCard) => void;
+  saveFields: (keys: string[], onSaved?: () => void) => void;
+  revertFields: (keys: string[]) => void;
+  saving: boolean;
+  saveError?: string;
+}
+
+/** 能力卡区块的交互句柄。 */
+interface CapabilityUi {
+  expandedCapability?: string;
+  templateScan: TemplateScanPayload | null;
+  open: (capability: CapabilityCard) => void;
+  close: (capability: CapabilityCard) => void;
+  cancel: (capability: CapabilityCard) => void;
+  save: (capability: CapabilityCard) => void;
+  dirty: (capability: CapabilityCard) => boolean;
+  saving: boolean;
+}
+
+/** 检测区块的渲染工具。 */
+interface DetectContext {
+  /** 渲染一组检测结果的小标题。参数是分组名（字符串）。 */
+  head: (group: unknown) => ReturnType<typeof h>;
+  /** 渲染一条检测说明（命中多条时返回多个节点）。 */
+  note: (entry: Record<string, unknown>) => ReturnType<typeof h> | Array<ReturnType<typeof h>> | null;
+  /** 当前这次检测的逐字段结果。 */
+  perField: Array<Record<string, unknown>>;
+}
+
+/** 一张工具卡（宿主 toolCards 的一项）。 */
 interface ToolCard {
   key: string;
   label?: string;
@@ -536,13 +600,22 @@ interface CapabilityCard {
   label?: string;
   section?: string;
   fieldKeys?: string[];
-  templates?: Array<{ key: string; label?: string; [extra: string]: unknown }>;
+  templates?: CapabilityTemplateSlot[];
   /** "用哪个工具"的字段名。 */
   toolKey?: string;
   /** 这次选中的工具。 */
   tool?: string;
   /** 宿主给的当前状态。 */
   state?: string;
+  /** 已保存的工具选择（`auto` / `none` / 具体工具键）。 */
+  selection?: string;
+  /** 这个能力可选的工具（下拉项）。 */
+  toolOptions?: Array<{ value?: unknown; label?: string; disabled?: boolean }>;
+  /** 当前工具的展示名。 */
+  toolLabel?: string;
+  /** 提示/说明（能力卡底部那句）。 */
+  hint?: string;
+  /** 这个能力当前的工具是否有问题（缺路径等）。 */
   [extra: string]: unknown;
 }
 
@@ -554,6 +627,14 @@ interface ClientField extends Record<string, unknown> {
   label?: string;
   options?: Array<{ value: string; label?: string }>;
   fieldKeys?: string[];
+  /** 归属的区块（module / project）。 */
+  section?: string;
+  /** 归属的能力卡键（普通字段没有）。 */
+  capability?: string;
+  /** 分组标题（宿主给的字符串）。 */
+  group?: string;
+  /** 这个字段能不能自动检测。 */
+  detectable?: boolean;
 }
 
 /** 目录浏览的本地状态（不是宿主响应，是页面上的草稿）。 */
@@ -565,13 +646,6 @@ interface BrowseState {
   [extra: string]: unknown;
 }
 
-/** `detectCtx`：把检测相关的渲染工具传给下层。 */
-interface DetectContext {
-  head?: unknown;
-  note?: unknown;
-  perField?: unknown;
-  [extra: string]: unknown;
-}
 
 /** 设置页:标题 + 状态警告 + 各字段。 */
 function SettingsPanel(): ReturnType<typeof h> | null {
@@ -646,6 +720,9 @@ function SettingsPanel(): ReturnType<typeof h> | null {
   React.useEffect(() => {
     const apply = () => {
       const scheme = themeOf(rootRef.current);
+      // 判不出主题就**不写**（保持原样）。注意不能写空串 —— 那是"清掉已有声明"，
+      // 与"不改"是两回事。
+      if (scheme === undefined) return;
       if (rootRef.current?.style !== undefined) rootRef.current.style.colorScheme = scheme;
       if (document.documentElement?.style !== undefined) document.documentElement.style.colorScheme = scheme;
     };
@@ -867,9 +944,9 @@ function SettingsPanel(): ReturnType<typeof h> | null {
       });
   };
 
-  /** 一组普通字段的标题行。 */
-  const renderGroupHead = (group: Record<string, unknown>): ReturnType<typeof h> =>
-    h("div", { className: "fpga-set-group", key: `group-${String(group)}` }, h("span", null, group));
+  /** 一组普通字段的标题行。`group` 就是分组名（宿主给的字符串标签）。 */
+  const renderGroupHead = (group: unknown): ReturnType<typeof h> =>
+    h("div", { className: "fpga-set-group", key: `group-${String(group)}` }, h("span", null, String(group)));
 
   /**
    * 一项检测结果上的**版本信息**,接在同一行检测结论的后面。
@@ -903,7 +980,13 @@ function SettingsPanel(): ReturnType<typeof h> | null {
    * @param entry - `{ key, tool, hits }`(来自 {@link runDetect});`undefined` = 这个字段不参与检测。
    * @returns React 节点,或 null。
    */
-  const detectNote = (entry: { key?: string; tool?: string; loading?: boolean; hits?: DetectedTool[]; error?: string }): ReturnType<typeof h> | null => {
+  const detectNote = (entry: {
+    key?: string;
+    tool?: string;
+    loading?: boolean;
+    hits?: DetectedTool[];
+    error?: string;
+  }): ReturnType<typeof h> | Array<ReturnType<typeof h>> | null => {
     if (entry === undefined) return null;
     if (entry.loading === true) {
       return h("span", { className: "fpga-set-detect-row fpga-set-hint" }, "正在检测这个工具…");
@@ -1004,7 +1087,9 @@ function SettingsPanel(): ReturnType<typeof h> | null {
     setSaveError(undefined);
     setDetect(null);
     const pathField = fields.find((field) => field.key === card.pathKey);
-    if (pathField?.detectable === true && card.pathKey !== undefined) runDetect(card.pathKey, card.label);
+    if (pathField?.detectable === true && card.pathKey !== undefined) {
+      runDetect(card.pathKey, String(card.label ?? ""));
+    }
   };
   const closeTool = () => {
     // 在途的检测/浏览答复不许再写回状态(与 closeCapability 的 templateSeq 同一手法):
@@ -1202,9 +1287,9 @@ function SettingsPanel(): ReturnType<typeof h> | null {
             null,
             h(
               "p",
-              { className: selfCheck.result.ok === true ? "fpga-set-good" : "fpga-set-bad" },
-              `${selfCheck.result?.ok === true ? "通过" : "有阻塞项"}:共 ${String(selfCheck.result.checks.length)} 项,` +
-                `${String(selfCheck.result.failed)} 项失败、${String(selfCheck.result.warned)} 项提醒`
+              { className: selfCheck.result?.ok === true ? "fpga-set-good" : "fpga-set-bad" },
+              `${selfCheck.result?.ok === true ? "通过" : "有阻塞项"}:共 ${String(selfCheck.result?.checks?.length ?? 0)} 项,` +
+                `${String(selfCheck.result?.failed)} 项失败、${String(selfCheck.result?.warned)} 项提醒`
             ),
             h(
               "ul",
@@ -1248,7 +1333,9 @@ function SettingsPanel(): ReturnType<typeof h> | null {
       h(
         "p",
         { className: "fpga-set-hint" },
-        version === undefined || version === ""
+        // `version` 是宿主返回的对象（读不到时是 undefined），不是字符串 ——
+        // 所以判"没有"只看 undefined，不是 `=== ""`。
+        version === undefined
           ? "当前版本:读取中…"
           : `当前版本 ${String(version.version ?? "")}。兼容 DSH:${String(version.dshRange ?? "")}。`
       ),
@@ -1352,7 +1439,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
 function renderFields(
   status: ToolchainStatus | null,
   fields: ClientField[],
-  values: Record<string, string>,
+  values: Record<string, unknown>,
   ready: boolean,
   browse: BrowseState | null,
   browseTo: (key: string, path: string) => void,
@@ -1362,8 +1449,8 @@ function renderFields(
   stage: (key: string, value: string) => void,
   detectCtx: DetectContext,
   preview: PreviewPayload | undefined,
-  toolUi: Record<string, unknown>,
-  capabilityUi: Record<string, unknown>
+  toolUi: ToolUi,
+  capabilityUi: CapabilityUi
 ): Array<ReturnType<typeof h> | null> {
   const sections = status?.sections ?? [];
   const visible = fields.filter((field) => field.control !== "hidden");
@@ -1377,7 +1464,7 @@ function renderFields(
       : state === "pending"
         ? "正在检查"
         : "未配置";
-  const stateClass = (state) => state === "ready"
+  const stateClass = (state: unknown): string => state === "ready"
     ? "fpga-set-tool-state fpga-set-tool-state-ready"
     : state === "invalid"
       ? "fpga-set-tool-state fpga-set-tool-state-invalid"
@@ -1385,16 +1472,16 @@ function renderFields(
         ? "fpga-set-tool-state fpga-set-tool-state-pending"
         : "fpga-set-tool-state fpga-set-hint";
 
-  const commonFields = (sectionKey) => {
-    const cards = status?.toolCards ?? [];
-    const groups = status?.toolGroups ?? [];
-    if (cards.length === 0 || toolUi === undefined) {
-      const nodes = [];
-      let group;
+  const commonFields = (sectionKey: string): Array<ReturnType<typeof h> | null> => {
+    const cards = (status?.toolCards ?? []) as ToolCard[];
+    const groups = (status?.toolGroups ?? []) as Array<{ key: string; label?: string }>;
+    if (cards.length === 0) {
+      const nodes: Array<ReturnType<typeof h> | null> = [];
+      let group: unknown;
       for (const field of visible.filter((entry) => entry.section === sectionKey && entry.capability === undefined)) {
         if (field.group !== group) {
           group = field.group;
-          nodes.push(detectCtx.head(group));
+          nodes.push(detectCtx.head(group as Record<string, unknown>));
         }
         nodes.push(row(field));
       }
@@ -1472,9 +1559,16 @@ function renderFields(
 
     const cardFieldKeys = new Set(cards.flatMap((card) => card.fieldKeys ?? []));
     const auxiliary = visible.filter(
-      (field) => field.section === sectionKey && field.capability === undefined && !cardFieldKeys.has(field.key)
+      (field) =>
+        field.section === sectionKey &&
+        field.capability === undefined &&
+        (field.key === undefined || !cardFieldKeys.has(field.key))
     );
-    const auxiliaryGroups = [...new Set(auxiliary.map((field) => field.group))];
+    // `field.group` 在 ClientField 里是 unknown（宿主给的形状宽松）——
+    // 这里只用来分组显示，统一按字符串处理。
+    const auxiliaryGroups = [...new Set(auxiliary.map((field) => String(field.group ?? "")))].filter(
+      (group) => group !== ""
+    );
     return [
       h(
         "div",
@@ -1491,7 +1585,8 @@ function renderFields(
           const templateLibrary = groupFields.find(
             (field) => field.key === status?.templateLibrary?.fieldKey
           );
-          const templateDirty = templateLibrary !== undefined && drafts[templateLibrary.key] !== undefined;
+          const templateKey = templateLibrary?.key ?? "";
+          const templateDirty = templateLibrary !== undefined && drafts[templateKey] !== undefined;
           return h(
             "div",
             { className: "fpga-set-aux", key: `aux-${String(group)}` },
@@ -1527,7 +1622,7 @@ function renderFields(
                         type: "button",
                         className: "fpga-set-btn",
                         disabled: !templateDirty || toolUi.saving,
-                        onClick: () => toolUi.revertFields([templateLibrary.key])
+                        onClick: () => toolUi.revertFields([templateKey])
                       },
                       "取消"
                     ),
@@ -1537,7 +1632,7 @@ function renderFields(
                         type: "button",
                         className: "fpga-set-btn",
                         disabled: !templateDirty || toolUi.saving,
-                        onClick: () => toolUi.saveFields([templateLibrary.key])
+                        onClick: () => toolUi.saveFields([templateKey])
                       },
                       toolUi.saving ? "保存中…" : "保存路径"
                     )
@@ -1549,14 +1644,18 @@ function renderFields(
     ];
   };
 
-  const capabilityCards = (sectionKey) => (status?.capabilities ?? [])
+  const capabilityCards = (sectionKey: string): Array<ReturnType<typeof h> | null> => ((status?.capabilities ?? []) as CapabilityCard[])
     .filter((capability) => capability.section === sectionKey)
     .map((capability) => {
       const expanded = capabilityUi?.expandedCapability === capability.key;
+      // `toolKey` 在宿主形状里是 string；这里统一取成字符串再当索引键。
+      const toolKey = String(capability.toolKey ?? "");
       const selectedTool = String(
-        drafts[capability.toolKey] ?? values[capability.toolKey] ?? capability.selection ?? "auto"
+        drafts[toolKey] ?? values[toolKey] ?? capability.selection ?? "auto"
       );
-      const previewCapability = preview?.capabilities?.find((entry) => entry.key === capability.key);
+      const previewCapability = (preview?.capabilities as CapabilityCard[] | undefined)?.find(
+        (entry: CapabilityCard) => entry.key === capability.key
+      );
       const alignedPreview = previewCapability !== undefined && String(previewCapability.selection) === selectedTool
         ? previewCapability
         : undefined;
@@ -1573,13 +1672,14 @@ function renderFields(
         (currentCapability.state === "missing" || currentCapability.state === "invalid" || selectedOption?.disabled === true);
       const scan = capabilityUi?.templateScan?.capability === capability.key ? capabilityUi.templateScan : null;
       const scanGroups = scan?.data?.groups ?? [];
-      const templateSelection = (template) => String(
+      const templateSelection = (template: CapabilityTemplateSlot): string => String(
         drafts[template.key] ?? values[template.key] ?? template.selection ?? ""
       );
-      const scannedItem = (template, selection) => scanGroups
-        .find((group) => group.key === template.category)?.items
-        ?.find((item) => String(item.id) === selection);
-      const effectiveTemplate = (template) => {
+      const scannedItem = (template: CapabilityTemplateSlot, selection: string) =>
+        scanGroups
+          .find((group) => group.key === template.category)?.items
+          ?.find((item) => String(item.id) === selection);
+      const effectiveTemplate = (template: CapabilityTemplateSlot): CapabilityTemplateSlot => {
         const selection = templateSelection(template);
         const candidate = alignedPreview?.templates?.find((entry) => entry.key === template.key);
         if (candidate !== undefined && String(candidate.selection ?? "") === selection) return candidate;
@@ -1602,7 +1702,7 @@ function renderFields(
           "div",
           { className: "fpga-set-capability-head" },
           h("span", null, capability.label),
-          helpBubble(`capability-${String(capability.key)}`, capability.hint),
+          helpBubble(`capability-${String(capability.key)}`, String(capability.hint ?? "")),
           h(
             "button",
             {
@@ -1654,7 +1754,7 @@ function renderFields(
                 value: selectedTool,
                 disabled: !ready,
                 "aria-label": `${String(capability.label)}工具`,
-                onChange: (event) => {
+                onChange: (event: React.SyntheticEvent<HTMLSelectElement>) => {
                   const next = String(event.target.value ?? "auto");
                   stage(String(capability.toolKey ?? ""), next);
                   // 工具交给 AI / 明确不用 时，模板只能「由 AI 自行决定」
@@ -1703,7 +1803,7 @@ function renderFields(
       ? shownSelection
       : "",
                   "aria-label": `${String(capability.label)}${String(template.label)}`,
-                  onChange: (event) => stage(template.key, String(event.target.value ?? ""))
+                  onChange: (event: React.SyntheticEvent<HTMLSelectElement>) => stage(template.key, String(event.target.value ?? ""))
                 },
                 h("option", { key: "default", value: "" }, "由 AI 自行决定"),
                 // 工具交给 AI 时模板只能「由 AI 自行决定」；指定工具后只列兼容模板
@@ -1831,7 +1931,7 @@ function readyBadge(draft: Record<string, unknown>): ReturnType<typeof h> {
  */
 function renderField(
   field: ClientField,
-  values: Record<string, string>,
+  values: Record<string, unknown>,
   ready: boolean,
   browse: BrowseState | null,
   browseTo: (key: string, path: string) => void,
@@ -1866,7 +1966,7 @@ function renderField(
         value: shown,
         disabled: !ready,
         "aria-label": field.label,
-        onChange: (event) => commit(String(event.target.value ?? ""))
+        onChange: (event: React.SyntheticEvent<HTMLInputElement>) => commit(String(event.target.value ?? ""))
       },
       ...(field.options ?? []).map((option) => h("option", { key: option.value, value: option.value }, option.label))
     );
@@ -1882,7 +1982,7 @@ function renderField(
       placeholder: pathField
         ? effective.kind === "directory" ? "例如 C:\\...\\某目录" : "例如 C:\\...\\工具.exe"
         : field.control === "textarea" ? "补充命令、参数或限制" : "请输入名称",
-      onChange: (event) => commit(event.target.value ?? "")
+      onChange: (event: React.SyntheticEvent<HTMLInputElement>) => commit(event.target.value ?? "")
     });
     control = pathField
       ? h(
@@ -2078,8 +2178,8 @@ function renderBrowser(
       autoFocus: true,
       placeholder: "打字过滤当前目录,回车选中唯一匹配项",
       value: String(browse.filter ?? ""),
-      onChange: (event) => setBrowse({ key: browse.key, listing, filter: event.target.value ?? "" }),
-      onKeyDown: (event) => {
+      onChange: (event: React.SyntheticEvent<HTMLInputElement>) => setBrowse({ key: browse.key, listing, filter: event.target.value ?? "" }),
+      onKeyDown: (event: React.SyntheticEvent<HTMLInputElement>) => {
         if (event.key !== "Enter") return;
         // 只剩一项就直接选中 —— 这是"打字找文件"最省事的收尾
         if (entries.length === 1) choose(entries[0]);

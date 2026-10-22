@@ -64,6 +64,22 @@ declare module "react" {
 
   function useEffect(effect: EffectCallback, deps?: DependencyList): void;
 
+  /**
+   * DOM 事件的最小形状。
+   *
+   * 客户端只在 `onChange` / `onClick` / `onKeyDown` 里读 `target.value` 与
+   * `key`，所以这里只声明这些 —— 完整的事件类型（鼠标坐标、修饰键、
+   * 合成事件池…）这个插件用不上。
+   */
+  interface SyntheticEvent<T extends EventTarget = EventTarget> {
+    target: T & { value?: string; checked?: boolean };
+    currentTarget: T;
+    key?: string;
+    preventDefault: () => void;
+    stopPropagation: () => void;
+    nativeEvent?: unknown;
+  }
+
   /** 默认导出：客户端用 `import React from "react"`。 */
   const React: {
     createElement: typeof createElement;
@@ -74,5 +90,5 @@ declare module "react" {
   export default React;
 
   export { createElement, useEffect, useRef, useState };
-  export type { DependencyList, Dispatch, EffectCallback, MutableRefObject, ReactElement, ReactNode, SetStateAction };
+  export type { DependencyList, Dispatch, EffectCallback, MutableRefObject, ReactElement, ReactNode, SetStateAction, SyntheticEvent };
 }

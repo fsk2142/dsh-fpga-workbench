@@ -147,6 +147,13 @@ if (lockText !== "") {
     /^autoInstallPeers:\s*false/mu.test(workspaceText),
     "pnpm-workspace.yaml 顶层写着 autoInstallPeers: false（pnpm 11 只从这里读）"
   );
+  // N5（第六轮审查）：`nodeLinker: hoisted` 是防御性选择 —— 本机没能复现报告所说的
+  // 链接损坏，但它让安装不依赖软链接，而本仓库（5 个 devDeps、零运行时依赖、无
+  // workspace）从 isolated 布局里得不到任何好处。锁住它，免得以后被当成"多余设置"删掉。
+  ok(
+    /^nodeLinker:\s*hoisted/mu.test(workspaceText),
+    "pnpm-workspace.yaml 顶层写着 nodeLinker: hoisted（安装不依赖软链接）"
+  );
 }
 
 console.log("");

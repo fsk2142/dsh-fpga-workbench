@@ -26,3 +26,31 @@
 # 不含 package.json 里的 peerDependencies。
 
 autoInstallPeers: false
+
+# ## 依赖布局：hoisted（2026-10-22 第六轮审查后加）
+#
+# 用**平铺**布局（像 npm）而不是 pnpm 默认的 isolated 布局。
+#
+# ### 为什么
+#
+# 第六轮审查报告称：`autoInstallPeers: false` 会触发 pnpm 的链接建立缺陷 ——
+# `.pnpm/` 下内容目录齐全但一个链接都不建，install 静默退 0，随后 build 挂在
+# `ERR_MODULE_NOT_FOUND: tinyexec`。
+#
+# **我在本机没能复现**（pnpm 11.24.0 / node 24.19.0）：
+#   · 全新克隆 + 空 store，重复 4 次，tsdown 虚拟目录都是 16 项、build 全过；
+#   · A/B 对照（false / true / 不写）：三者链接数完全相同（tsdown 16 / .pnpm 34 / 顶层 7）。
+# 所以这更像是**审查环境特有**的问题（沙箱或 Windows 链接权限），不是本仓库的缺陷。
+#
+# ### 那为什么还是加
+#
+# 因为代价极小、收益是"换一个不依赖软链接的布局"：
+#   · 本仓库只有 5 个 devDependencies、**零**运行时依赖、无 workspace ——
+#     isolated 布局的版本隔离在这里没有实际价值；
+#   · 平铺布局不建依赖间软链接，因此**不受那类链接问题影响**；
+#   · `pnpm-lock.yaml` 不受影响（nodeLinker 不进 lockfile），可复现性不变。
+#
+# 换句话说：这不是"修一个不存在的 bug"，而是**在当前收益/成本下选一个更抗环境的选项**。
+# 若将来这个仓库长成多包 workspace，再评估回 isolated。
+nodeLinker: hoisted
+

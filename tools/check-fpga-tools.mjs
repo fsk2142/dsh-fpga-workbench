@@ -2652,6 +2652,37 @@ check(
   hasIssue(nameRuleIssues("    always_ff @(posedge rst_n) begin end"), /复位极性/u),
   "`posedge rst_n` 这种写法进「复位极性」(命名与用法矛盾;第五轮 3.3)"
 );
+// 2026-10-22 审查 H2:注释里出现违规字样**不算**代码。
+// AGENTS.fpga.md 第 9 条要求"已有工程按实际约定来，要改先说明理由"——
+// 在注释里写明理由（可能正好含 `negedge rst_n`）不该被判 FAIL。
+check(
+  !hasIssue(nameRuleIssues('    // NOTE: 本项目约定如此，never write "negedge rst_n" here.'), /复位极性/u),
+  "注释里的 `negedge rst_n` 不触发「复位极性」(审查 H2)"
+);
+check(
+  !hasIssue(nameRuleIssues("    // 这里不要用 always_ff @(posedge clk or negedge rst_n)"), /always_ff/u),
+  "注释里的 `always_ff` + `negedge` 不触发「always_ff」(审查 H2 同源)"
+);
+// 2026-10-22 审查 M4:字符串里可以出现 `//`。
+// 先按 `//` 截断会把字符串截断 —— 要么漏掉后面的真实违规，要么把字符串内容当代码。
+// 注意两点：nameRuleIssues 把这些行塞进端口列表（`$fwrite` 在那里不合法），
+// 且「数据比对」规则**只查测试平台**，所以这里单独写文件并按 testbench 检查。
+const m4File = join(SANDBOX, `rtl-m4-${stamp}.sv`);
+const m4Issues = (line, isTb = true) => {
+  writeFileSync(
+    m4File,
+    ["`resetall", "`default_nettype none", "module m;", line, "endmodule", "`default_nettype wire", ""].join("\n")
+  );
+  return checkFile(m4File, isTb).map((issue) => `${issue.rule}|${issue.message}`);
+};
+check(
+  hasIssue(m4Issues('  initial $fwrite(fd, "data//dump"); if (dut_data != exp_data) err_cnt++;'), /数据比对/u),
+  "字符串后的真实 `!=` 违规仍被查到(审查 M4 漏检)"
+);
+check(
+  !hasIssue(m4Issues("  initial $fwrite(fd, \"val '0 // ...\");"), /字面量写法/u),
+  "字符串内部的 `'0` 不当代码报字面量(审查 M4 误报)"
+);
 // 第五轮 3.4:模块名只收一段 —— 带路径分隔符的模块名要退 2(以前会拼出 rtl/a/b.sv)
 const nameProbeRoot = join(SANDBOX, `name-rule-${stamp}`);
 mkdirSync(nameProbeRoot, { recursive: true });

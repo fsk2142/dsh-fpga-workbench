@@ -66,11 +66,14 @@ description: 综合 FPGA 模块并检查资源、约束、CDC 与 post_synth 时
 node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> --template "<约束模板路径>"
 ```
 
-**再起综合脚本**(不用给模块名 —— 顶层模块名在脚本里,由脚本从 spec 填):
+**再起综合脚本**(模块名照给 —— 它是必填位置参数;脚本再从 spec 读器件型号填进去):
 
 ```
 node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> --kind synth-script
 ```
+
+模块名虽然会被 spec 里的顶层模块名覆盖,但**命令这一位不能省**:省了它报用法错误退 2
+(`synth-script` 与其它 `--kind` 一样要求 `<模块根> <模块名>`)。
 
 落 `<模块根>/synth/run_synth.tcl`,**器件型号从工程 spec(或本模块 spec)读、顶层模块名也从那里读**,
 填进那两行 —— 器件只写一处,别再手抄。**读不到器件就拒绝生成**(退出码 2),不会把模板的默认器件留下;

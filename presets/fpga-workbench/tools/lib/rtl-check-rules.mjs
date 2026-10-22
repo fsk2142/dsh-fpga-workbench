@@ -108,14 +108,38 @@ export function checkFile(file, isTestbench) {
   const issues = [];
   const add = (rule, line, message) => issues.push({ rule, line, message });
 
-  /** 一行的代码部分(去掉行内注释):注释里出现的字样不算代码。 */
-  const codeOf = (line) => line.split("//")[0];
   /**
-   * 代码部分再去掉字符串字面量。
-   * `$display("ALL TESTS PASSED (err_cnt=0)")` 里那个 `err_cnt=0` 只是字形:
-   * 判断"有没有引用 err_cnt / 哪一侧是期望值"时不能把它算进去。
+   * 剥掉字符串字面量（内容替换成 `""`），**只用于需要忽略字符串内容的地方**。
+   *
+   * `$display("ALL TESTS PASSED (err_cnt=0)")` 里的 `err_cnt=0` 只是字形，
+   * 判断"有没有引用 err_cnt / 哪一侧是期望值"时不能算进去。
+   * @param text - 原始行。
+   * @returns 字符串内容已替换成 `""` 的行。
    */
-  const codeOnly = (line) => codeOf(line).replace(/"(?:[^"\\]|\\.)*"/gu, '""');
+  const stripStrings = (text) => text.replace(/"(?:[^"\\]|\\.)*"/gu, '""');
+
+  /**
+   * 一行的**代码部分**：去掉行内注释，**保留字符串原文**。
+   *
+   * 先剥一遍字符串再找 `//`，但**用于定位**而不是用来返回值 —— 这样字符串里的
+   * `//` 不会被误当注释起点（2026-10-22 修的 M4 漏检/误报），而返回值仍带字符串，
+   * 供"打印串里有没有某个标记"这类规则使用（例如 SUCCESS_MARKER 就在字符串里）。
+   *
+   * 若直接返回剥完字符串的结果，"无条件打印 ALL TESTS PASSED"这条规则会永远
+   * 找不到标记、静默失效 —— check-fpga-tools 抓到了这个回归。
+   * @param line - 原始行。
+   * @returns 去掉注释、保留字符串的行。
+   */
+  const codeOf = (line) => {
+    const masked = stripStrings(line);
+    const cut = masked.indexOf("//");
+    return cut >= 0 ? line.slice(0, cut) : line;
+  };
+
+  /**
+   * 代码部分再去掉字符串字面量（用于"只看代码语义"的规则）。
+   */
+  const codeOnly = (line) => stripStrings(codeOf(line));
 
   // ── 行尾统一:全 CRLF 或全 LF 都行,只有混用才报(警告) ──
   const crlf = (raw.match(/\r\n/gu) ?? []).length;
@@ -207,12 +231,16 @@ export function checkFile(file, isTestbench) {
     }
 
     // ── always_ff 只用 posedge ──
-    if (line.includes("always_ff") && line.includes("negedge")) {
+    // 用 codeOf 而不是原始 line：注释里写「这里不要用 negedge」也会被误判成违规。
+    const codeLine = codeOf(line);
+    if (codeLine.includes("always_ff") && codeLine.includes("negedge")) {
       add("always_ff", number, "always_ff 里用了 negedge(只允许 posedge)");
     }
 
     // ── 复位一律高有效(2026-09-02 裁决) ──
-    const lowReset = /if\s*\(\s*[!~]\s*rst\w*\b|negedge\s+rst\w*\b|if\s*\(\s*~?\s*rst_n\b|posedge\s+rst_n\b/u.exec(line);
+    // 同上：AGENTS.fpga.md 第 9 条要求「按工程实际约定来，要改先说明理由」——
+    // 在注释里写明这条理由（可能正好含 `negedge rst_n` 字样）不该被判 FAIL。
+    const lowReset = /if\s*\(\s*[!~]\s*rst\w*\b|negedge\s+rst\w*\b|if\s*\(\s*~?\s*rst_n\b|posedge\s+rst_n\b/u.exec(codeLine);
     if (lowReset !== null) {
       add("复位极性", number, `低有效复位用法:「${lowReset[0]}」(本项目 rst/rst_* 一律高有效)`);
     }

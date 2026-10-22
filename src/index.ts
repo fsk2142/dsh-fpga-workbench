@@ -66,6 +66,15 @@ interface HttpRequest {
   setEncoding?: (encoding: string) => void;
   /** Node 的 IncomingMessage 一定有 on —— 标必选，调用处不必判空。 */
   on: (event: string, listener: (...args: never[]) => void) => void;
+  /**
+   * 直接掐断这条连接（可选：`IncomingMessage` 有，但测试替身不一定给）。
+   *
+   * 请求体超限时必须用它 —— 只 `reject` 的话对端还会继续灌数据，
+   * 而 `data` 监听器仍在拼字符串，进程内存会无界增长。
+   */
+  destroy?: () => void;
+  removeAllListeners?: (event?: string) => void;
+  pause?: () => void;
 }
 
 /** `json()` 目标：`res.writeHead` + `res.end` 就够了。 */
@@ -189,12 +198,31 @@ function migrateLegacyKeys(settings: SettingsFacade, ctx: HostContext): void {
 function readJsonBody(req: HttpRequest, limit = 1024 * 1024): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let text = "";
+    /**
+     * 已经 reject 过就不再收数据（2026-10-22 审查后修）。
+     *
+     * 原来超限时只 `reject`：Promise 定了，但 `data` 监听器还挂着，
+     * 对端继续发多久、`text` 就继续长多久 —— 内存无界增长，而且没人再管这条连接。
+     * 现在超限即停：置标志、卸监听、掐断 socket。
+     */
+    let settled = false;
+    const abort = (reason: string) => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(reason));
+      req.pause?.();
+      req.removeAllListeners?.("data");
+      req.destroy?.();
+    };
     req.setEncoding?.("utf8");
     req.on("data", (chunk: string) => {
+      if (settled) return;
       text += chunk;
-      if (text.length > limit) reject(new Error("请求体过大"));
+      if (text.length > limit) abort("请求体过大");
     });
     req.on("end", () => {
+      if (settled) return;
+      settled = true;
       if (text.trim() === "") return resolve({});
       try {
         resolve(JSON.parse(text));
@@ -202,7 +230,11 @@ function readJsonBody(req: HttpRequest, limit = 1024 * 1024): Promise<Record<str
         reject(new Error(`请求体不是合法 JSON:${String(error)}`));
       }
     });
-    req.on("error", reject);
+    req.on("error", (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
   });
 }
 
@@ -460,7 +492,27 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
                 hostname === "[::1]" ||
                 hostname === "::1";
               const scheme = forwarded === "https" || forwarded === "http" ? forwarded : isLoopback ? "http" : "https";
+              /**
+               * **只接受回环 Host**（2026-10-22 审查后补的纵深防线）。
+               *
+               * 这个路由会把**浏览器带来的 DSH 会话 Cookie**原样转发给
+               * `${base}/dsh-market/api/v1/updates`，而 `base` 里的 Host 由请求方完全控制。
+               * 宿主侧 `isTrustedApiRequest` 目前会挡掉非回环 Host（403），但插件不该把
+               * 正确性全押在宿主闸门上 —— 旧版宿主、反向代理改写、或闸门未覆盖插件路由的
+               * 部署形态下，一个外部页面 `no-cors` fetch 一次即可完成「Cookie 外送」。
+               *
+               * 拒绝时**不回显** base，避免把这条错误变成探测侧信道。
+               */
+              if (!isLoopback) {
+                json(res, { error: "更新检查只接受来自本机界面的请求" }, 403);
+                return;
+              }
               const base = host === "" ? "" : `${scheme}://${host}`;
+              if (base === "") {
+                // HTTP/1.0 没有 Host 头：`fetch` 会拒绝相对 URL，报出来却是"网络失败"，容易误导。
+                json(res, { error: "请求缺少 Host 头，无法确定更新源地址" }, 400);
+                return;
+              }
               const cookie = typeof req.headers?.cookie === "string" ? req.headers.cookie : undefined;
               const result = await checkForUpdateWithCookie(base, cookie);
               json(res, { ...packageInfo(), ...result });

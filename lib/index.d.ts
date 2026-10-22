@@ -30,6 +30,15 @@ interface HttpRequest {
   setEncoding?: (encoding: string) => void;
   /** Node 的 IncomingMessage 一定有 on —— 标必选，调用处不必判空。 */
   on: (event: string, listener: (...args: never[]) => void) => void;
+  /**
+   * 直接掐断这条连接（可选：`IncomingMessage` 有，但测试替身不一定给）。
+   *
+   * 请求体超限时必须用它 —— 只 `reject` 的话对端还会继续灌数据，
+   * 而 `data` 监听器仍在拼字符串，进程内存会无界增长。
+   */
+  destroy?: () => void;
+  removeAllListeners?: (event?: string) => void;
+  pause?: () => void;
 }
 /** `json()` 目标：`res.writeHead` + `res.end` 就够了。 */
 interface HttpResponse {

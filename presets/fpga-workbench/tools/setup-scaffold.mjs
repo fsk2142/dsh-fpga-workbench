@@ -361,6 +361,16 @@ const VALUE_FLAGS = ["--kind", "--modules"];
 function parseArgs(argv) {
   const positional = [];
   const stray = [];
+  /**
+   * `--flag=value` 形式的取值（2026-10-22 修）。
+   *
+   * 原来只认 `--kind project`（空格分隔）：写成 `--kind=project` 时 `VALUE_FLAGS`
+   * 匹配不上，那个参数被当成未知选项**静默忽略**，kind 退回默认 `module` ——
+   * 于是生成 module 骨架并写入 `"kind": "module"` 锚点；等用户再跑正确写法时，
+   * 会被「根锚点类型不一致」硬拒绝，只能手工删锚点补救。
+   * 「写错就静默降级」比报错危险得多，这里把它堵掉。
+   */
+  const equalsForm = new Map();
   let seenOption = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -369,22 +379,34 @@ function parseArgs(argv) {
       continue;
     }
     seenOption = true;
-    if (VALUE_FLAGS.includes(arg)) index += 1;
+    if (VALUE_FLAGS.includes(arg)) {
+      index += 1;
+      continue;
+    }
+    const eq = arg.indexOf("=");
+    if (eq > 0) equalsForm.set(arg.slice(0, eq), arg.slice(eq + 1));
   }
+
+  /** 取一个可带值的选项：空格写法优先，其次等号写法。 */
+  const valueOf = (flag) => {
+    const at = argv.indexOf(flag);
+    return at >= 0 ? argv[at + 1] : equalsForm.get(flag);
+  };
+
   const error = positional.length > 1
     ? `根目录只能给一个(收到 ${positional.length} 个:${positional.map((arg) => JSON.stringify(arg)).join("、")})`
     : stray.length > 0
       ? `位置参数要写在选项前面 —— 选项后面这些得是选项:${stray.map((arg) => JSON.stringify(arg)).join("、")}`
       : undefined;
   const root = positional[0];
-  const kind = argv.includes("--kind") ? argv[argv.indexOf("--kind") + 1] : "module";
+  const kind = valueOf("--kind") ?? "module";
   return {
     root,
     error,
     kind,
-    modulesOption: argv.includes("--modules"),
-    force: argv.includes("--force"),
-    dryRun: argv.includes("--dry-run")
+    modulesOption: argv.includes("--modules") || equalsForm.has("--modules"),
+    force: argv.includes("--force") || equalsForm.has("--force"),
+    dryRun: argv.includes("--dry-run") || equalsForm.has("--dry-run")
   };
 }
 

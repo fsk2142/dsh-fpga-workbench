@@ -18,7 +18,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { spawnSync } from "./lib/spawn.mjs";
 import { dirname, join, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { desktopElectron } from "./lib/host.mjs";
 
@@ -35,7 +35,7 @@ const INSTALLED = join(PROFILE_DIR, "node_modules", PACKAGE_NAME);
 const checkOnly = process.argv.includes("--check");
 
 /** 恢复命令:无论在哪一步失败,用户都可以靠这一条把状态修回来。 */
-const RECOVERY = `dsh plugin --profile ${PROFILE_NAME} add file:${ROOT}`;
+const RECOVERY = `dsh plugin --profile ${PROFILE_NAME} add file:${pathToFileURL(ROOT).pathname}`;
 
 /** 文件名安全的时间戳(备份 / 半成品改名用)。 */
 const timestamp = () => new Date().toISOString().replace(/[:.]/gu, "-");
@@ -89,18 +89,64 @@ function smokeRunner() {
 }
 
 /**
+ * Windows 上 `dsh` 的**真实 JS 入口**，找不到就是 null。
+ *
+ * 为什么绕这一圈（2026-10-22 审查发现本文件复制了仓库自己记载过的坑）：
+ * `dsh` 在 Windows 上是 `.cmd` shim，而 Node **不能不经 shell 执行 .cmd**；
+ * 退回 `shell: true` 又触发 DEP0190（参数只拼接、不转义），**路径含空格就会被拆错** ——
+ * `file:C:\Users\John Doe\…` 在 cmd 拼接后截断，刷新安装直接不可用。
+ * 所以用 `where.exe`（真实 .exe，不经 shell）找到 shim，再从它旁边解析出真正的
+ * `node_modules/…/dsh` JS 入口，之后一律用 node 直接跑：没有 shell、没有拼接、空格安全。
+ *
+ * 同一套解法 `tools/check-install-safety.mjs` 里白纸黑字写着 —— 那边是"检查"，
+ * 这边是"执行"，两边该用同一个。
+ * @returns dsh 的 JS 入口绝对路径，或 null（非 Windows / 没找到）。
+ */
+function dshJsEntry() {
+  if (process.platform !== "win32") return null;
+  const found = spawnSync("where.exe", ["dsh"], { encoding: "utf8" });
+  const shims = `${found.stdout ?? ""}`
+    .split(/\r?\n/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  for (const shim of shims) {
+    for (const candidate of [
+      join(dirname(shim), "node_modules", "@deepseek-ai", "dsh", "bin", "dsh.mjs"),
+      join(dirname(shim), "node_modules", "@deepseek-ai", "dsh", "bin", "dsh.js")
+    ]) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
  * 调用 dsh 安装/重装。
  * @returns 是否成功。
  */
 function runAdd() {
-  console.log(`\n安装: dsh plugin --profile ${PROFILE_NAME} add file:${ROOT}\n`);
-  const added = spawnSync("dsh", ["plugin", "--profile", PROFILE_NAME, "add", `file:${ROOT}`], {
+  // `file:` 后面必须是**合法的 file URL**（`pathToFileURL` 负责转义反斜杠与空格）。
+  // 手拼 `file:${ROOT}` 能跑通只是靠 dsh CLI 的容错。
+  const spec = `file:${pathToFileURL(ROOT).pathname}`;
+  console.log(`\n安装: dsh plugin --profile ${PROFILE_NAME} add ${spec}\n`);
+  const jsEntry = dshJsEntry();
+  // 找得到真实入口就用 node 直跑（无 shell）；找不到才退回 shell 形态。
+  const useShellFallback = jsEntry === null && process.platform === "win32";
+  const command = jsEntry === null ? "dsh" : process.execPath;
+  const args = jsEntry === null
+    ? ["plugin", "--profile", PROFILE_NAME, "add", spec]
+    : [jsEntry, "plugin", "--profile", PROFILE_NAME, "add", spec];
+  const added = spawnSync(command, args, {
     stdio: "inherit",
-    shell: process.platform === "win32",
+    shell: useShellFallback,
     windowsHide: true
   });
   if (added.error !== undefined) {
     console.error(`\n调用 dsh 失败:${added.error.message}`);
+    if (jsEntry === null && process.platform === "win32") {
+      console.error("没找到 dsh 的 JS 入口（where.exe dsh）—— 退回 shell 形态在路径含空格时会失败。");
+      console.error(`请确认 dsh 在 PATH 上，或手动执行：dsh plugin --profile ${PROFILE_NAME} add ${spec}`);
+    }
     return false;
   }
   if ((added.status ?? 1) !== 0) {

@@ -1,5 +1,11 @@
-# lib/ 是源码而不是构建产物:客户端 bundle 是手写的懒 CJS,
-# 这个仓库没有构建步骤,所以不能让任何 diff/语言统计规则把它藏起来。
+# lib/ 是**构建产物**(tsdown 从 src/*.ts 生成),但它**提交入库**:
+# 宿主直接加载 lib/,克隆下来即可用,不必先装 devDependencies 再 build。
+#
+# 所以用 linguist-generated=false 让它照常出现在 diff / 语言统计里 ——
+# 产物真变了一眼就看得见(配合 CI 的「重建后 lib/ 必须无差异」防线)。
+#
+# ⚠️ **不要手改 lib/**:改了会被下一次 build 覆盖,CI 也会报 lib 与 src 不同步。
+#    要改就改 src/*.ts 再 `npm run build`。
 lib/** linguist-generated=false
 *.js text eol=lf
 *.json text eol=lf

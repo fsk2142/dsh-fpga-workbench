@@ -1152,12 +1152,18 @@ function SettingsPanel(): ReturnType<typeof h> | null {
     browseTo(String(field.key), startDir(field, current));
   };
 
-  /** 当前草稿下的一张工具卡状态；路径刚改而预演未返回时显示“正在检查”。 */
+  /**
+   * 当前草稿下的一张工具卡状态；路径刚改而预演未返回时显示“正在检查”。
+   *
+   * 预演**失败**时返回 `"unknown"` 而不是 `"invalid"`（2026-10-22 修）：
+   * `invalid` 会让保存按钮禁用，而失败只表示"没能核对"，不代表"路径确实不可用"
+   * —— 那样用户既存不下去、也不知道为什么，只能手动再改一次触发重试。
+   */
   const toolState = (card: ToolCard): string => {
     const changedPath = card.pathKey === undefined ? false : drafts[card.pathKey] !== undefined;
     if (!changedPath) return card.state ?? "pending";
     if (String(drafts[card.pathKey ?? ""] ?? "").trim() === "") return "unconfigured";
-    if (previewError !== undefined) return "invalid";
+    if (previewError !== undefined) return "unknown";
     return String((preview?.toolCards as ToolCard[] | undefined)?.find((entry) => entry.key === card.key)?.state ?? "pending");
   };
   const toolCardDirty = (card: ToolCard): boolean => (card.fieldKeys ?? []).some((key) => drafts[key] !== undefined);
@@ -1476,7 +1482,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
     ),
     ...renderFields(
       status, fields as ClientField[], values, ready, browse, browseTo, setBrowse, startPick,
-      drafts, stage, detectCtx, preview, toolUi, capabilityUi
+      drafts, stage, detectCtx, preview, previewError, toolUi, capabilityUi
     ),
     previewError === undefined ? null : h("p", { className: "fpga-set-bad", role: "alert" }, previewError),
     pickNote === undefined ? null : h("p", { className: "fpga-set-hint" }, pickNote),
@@ -1528,13 +1534,15 @@ function renderFields(
   stage: (key: string, value: string) => void,
   detectCtx: DetectContext,
   preview: PreviewPayload | undefined,
+  /** 预演失败的原因（透传给 renderField，用于区分"没能核对"与"路径无效"）。 */
+  previewError: string | undefined,
   toolUi: ToolUi,
   capabilityUi: CapabilityUi
 ): Array<ReturnType<typeof h> | null> {
   const sections = status?.sections ?? [];
   const visible = fields.filter((field) => field.control !== "hidden");
   const row = (field: ClientField) =>
-    renderField(field, values, ready, browse, browseTo, setBrowse, pick, drafts, stage, preview, detectCtx);
+    renderField(field, values, ready, browse, browseTo, setBrowse, pick, drafts, stage, preview, previewError, detectCtx);
 
   const stateLabel = (state: unknown): string => state === "ready"
     ? "已就绪"
@@ -1542,7 +1550,10 @@ function renderFields(
       ? "路径不可用"
       : state === "pending"
         ? "正在检查"
-        : "未配置";
+        // 预演失败：没能核对，不等于路径不可用（也不等于未配置）。
+        : state === "unknown"
+          ? "未能核对"
+          : "未配置";
   const stateClass = (state: unknown): string => state === "ready"
     ? "fpga-set-tool-state fpga-set-tool-state-ready"
     : state === "invalid"
@@ -1839,6 +1850,29 @@ function renderFields(
                   // 工具交给 AI / 明确不用 时，模板只能「由 AI 自行决定」
                   if (next === "auto" || next === "none") {
                     for (const t of capability.templates ?? []) stage(t.key, "");
+                  } else {
+                    /**
+                     * 换到**另一个具体工具**时，清掉与它不兼容的模板草稿（2026-10-22 修）。
+                     *
+                     * 原来只在 auto/none 时重置，于是：
+                     *   选模板 T（兼容 V）→ 工具改成 W（T 与 W 不兼容）→ 下拉显示"由 AI 决定"
+                     *   但 drafts 里仍留着 T → 点保存把 **W + T** 一起写进设置。
+                     * 刷新后 select 显示"由 AI 决定"、已存值却是 T，永久脱节。
+                     *
+                     * 判定口径与渲染层一致：看该模板扫描项里的 `compatibleTools`
+                     * （`"*"` 表示与工具无关；扫描结果拿不到时就**不**清，宁可留着也别误删用户的选择）。
+                     */
+                    for (const t of capability.templates ?? []) {
+                      const current = String(drafts[t.key] ?? t.selection ?? "");
+                      if (current === "") continue;
+                      const item = scanGroups
+                        .find((group) => group.key === t.category)?.items
+                        ?.find((entry) => String(entry.id) === current);
+                      const compatible = item?.compatibleTools;
+                      if (!Array.isArray(compatible)) continue;
+                      if (compatible.includes("*") || compatible.includes(next)) continue;
+                      stage(t.key, "");
+                    }
                   }
                 }
               },
@@ -2031,6 +2065,8 @@ function renderField(
   drafts: Record<string, string>,
   stage: (key: string, value: string) => void,
   preview: PreviewPayload | undefined,
+  /** 预演失败的原因（有值表示"没能核对"，而不是"路径无效"）。 */
+  previewError: string | undefined,
   detectCtx: DetectContext
 ): ReturnType<typeof h> | null {
   const isSelect = field.control === "select";
@@ -2043,7 +2079,21 @@ function renderField(
   const current = values[fieldKey] ?? field.default ?? "";
   const draft = drafts?.[fieldKey];
   const shown = draft === undefined ? String(current) : String(draft);
-  const pendingPath = pathField && draft !== undefined && shown.trim() !== "" && previewField === undefined;
+  /**
+   * 还在等预演答复。
+   *
+   * **必须排除预演失败的情况**（2026-10-22 修）：预演请求失败时 `preview` 保持
+   * `undefined`，若只看 `previewField === undefined` 就永远显示「正在检查…」；
+   * 而同一份 `previewError` 又让 `toolState` 返回 `invalid` 并禁用保存，
+   * 于是"正在检查"与"路径无效"两种自相矛盾的状态同时挂在页面上，
+   * 且不会自动恢复（effect 依赖只有 `[drafts, reload]`）。
+   */
+  const pendingPath =
+    pathField &&
+    draft !== undefined &&
+    shown.trim() !== "" &&
+    previewField === undefined &&
+    previewError === undefined;
   const configured = draft === undefined ? effective.configured === true : shown.trim() !== "";
   const usable = draft === undefined ? effective.present === true : previewField?.present === true;
   const invalidPath = pathField && configured && !pendingPath && !usable && effective.inactive !== true;
@@ -2101,6 +2151,13 @@ function renderField(
     ? null
     : pendingPath
       ? h("span", { className: "fpga-set-hint" }, "正在检查…")
+    // 预演失败：明确说"没查到"，不要伪装成"路径无效"（那是确切结论，这里只是没答上来）。
+    : configured && previewError !== undefined && draft !== undefined && previewField === undefined
+      ? h(
+          "span",
+          { className: "fpga-set-bad" },
+          `⚠ 没能核对这条路径 —— ${String(previewError)}（改动仍可保存）`
+        )
     : configured
       ? usable
         ? readyBadge(draft)
@@ -2173,7 +2230,11 @@ function renderField(
 function dirOf(path: string): string {
   const text = String(path ?? "").trim();
   const cut = Math.max(text.lastIndexOf("\\"), text.lastIndexOf("/"));
-  return cut > 0 ? text.slice(0, cut) : "";
+  const parent = cut > 0 ? text.slice(0, cut) : "";
+  // 盘根（`C:\x.exe` → `C:`）要补回分隔符：`C:` 不是绝对路径，宿主会拒绝，
+  // 「浏览…」就必报错。2026-10-22 审查指出这一点（L7）。
+  if (/^[A-Za-z]:$/u.test(parent)) return `${parent}\\`;
+  return parent;
 }
 
 /**

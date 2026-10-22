@@ -56,15 +56,38 @@ function main() {
   // 测试平台与验证脚本放 <模块根>/verif/(与结果同目录,按文件名区分)。
   // 扩展名跟设置里选的仿真语言走:.sv / .v 都能认,.vhd 不认(见下面的提示)。
   const verifDir = join(moduleRoot, "verif");
-  const testbenches = existsSync(verifDir)
-    ? readdirSync(verifDir).filter((name) => TESTBENCH.test(name)).map((name) => join(verifDir, name)).sort()
-    : [];
+  const verifNames = existsSync(verifDir) ? readdirSync(verifDir) : [];
+  const testbenches = verifNames
+    .filter((name) => TESTBENCH.test(name))
+    .map((name) => join(verifDir, name))
+    .sort();
+  /**
+   * `verif/` 下**不叫 `tb_*`** 的 HDL 文件（BFM / 参考模型 / 辅助模块）。
+   *
+   * 它们会被 `modelsim_run.do` 一起编译（仿真会跑），但本检查器不查它们 ——
+   * 2026-10-22 审查指出：原来这些文件既不入列也不进 `skippedFiles`，
+   * coverage 仍报 `full`，等于"仿真会跑、检查永远不查、也不告诉你没查"。
+   * VHDL 的处理是对的（进 skippedFiles）；这里把 SV/Verilog 补齐同一口径。
+   *
+   * 口径依据 `comparison-and-evidence.md`：「仿真模型放 verif/ 下」。
+   */
+  const verifSideFiles = verifNames
+    .filter((name) => !TESTBENCH.test(name) && /\.(sv|v)$/iu.test(name))
+    .map((name) => join(verifDir, name))
+    .sort();
 
   const targets = [...collectHdl(rtlDir).map((file) => [file, false]), ...testbenches.map((file) => [file, true])];
   // 第九轮复审②:未检查的 VHDL **两个范围都要数**(原来只数 verif/ → `rtl/good.sv + rtl/broken.vhd`
   // 也能打印 PASS)。定性判据与工程级共用 tools/lib/rtl-coverage.mjs,避免两边再漂移。
   const skippedVhdl = uncheckedVhdl([rtlDir, verifDir], collectHdl);
-  const verdict = coverageVerdict(targets.length, skippedVhdl);
+  /**
+   * 全部"未做机械检查"的文件 = VHDL + `verif/` 下的非 tb HDL。
+   *
+   * 后者必须计入 verdict:否则 `rtl/good.sv` + `verif/bfm_helper.sv`(带违规）
+   * 会打印 `ok` + `coverage: full`，读的人以为全都查过了。
+   */
+  const skippedFiles = [...skippedVhdl, ...verifSideFiles];
+  const verdict = coverageVerdict(targets.length, skippedFiles);
   if (targets.length === 0) {
     // 只有 VHDL 时不能说"没有源码"(那会让人以为目录是空的);说清本检查器不覆盖 VHDL
     if (verdict === "none") {
@@ -103,7 +126,7 @@ function main() {
       // 第九轮复审⑤:已检查文件数只数**HDL 文件**,IP 时序卡是虚拟项、单列出来。
       checkedFiles: targets.map(([file]) => relative(moduleRoot, file).split(sep).join("/")),
       ipCards: ipCards.map((entry) => entry.file),
-      skippedFiles: skippedVhdl.map((file) => relative(moduleRoot, file).split(sep).join("/")),
+      skippedFiles: skippedFiles.map((file) => relative(moduleRoot, file).split(sep).join("/")),
       coverage: verdict === "full" ? "full" : "partial",
       failures: failures.length,
       warnings: warnings.length
@@ -111,12 +134,18 @@ function main() {
   } else {
     printEntryLines(report);
     if (verdict === "partial") {
-      console.log(`注意:另有 ${skippedVhdl.length} 个 VHDL 未做机械检查(${shortenList(skippedVhdl)})—— 本检查器只覆盖 .sv/.v,不要把结论当成全覆盖`);
+      // 分两类说清"为什么没查":VHDL（本检查器不支持）与 verif/ 下的非 tb 文件（口径上不查）。
+      if (skippedVhdl.length > 0) {
+        console.log(`注意:另有 ${skippedVhdl.length} 个 VHDL 未做机械检查(${shortenList(skippedVhdl)})—— 本检查器只覆盖 .sv/.v,不要把结论当成全覆盖`);
+      }
+      if (verifSideFiles.length > 0) {
+        console.log(`注意:verif/ 下还有 ${verifSideFiles.length} 个非 tb_* 的 HDL 未检查(${shortenList(verifSideFiles)})—— 它们会被仿真编译,但不在本检查范围内`);
+      }
     }
     if (failures.length > 0) {
-      console.log(`\nFAIL (${failures.length} 项阻塞,${warnings.length} 项警告)` + (verdict === "partial" ? `;另有 ${skippedVhdl.length} 个 VHDL 未检查` : ""));
+      console.log(`\nFAIL (${failures.length} 项阻塞,${warnings.length} 项警告)` + (verdict === "partial" ? `;另有 ${skippedFiles.length} 个文件未检查` : ""));
     } else if (verdict === "partial") {
-      console.log(`\nPARTIAL: ${report.length} 个文件已检查、${warnings.length} 项警告;另有 ${skippedVhdl.length} 个 VHDL **未检查**(本检查器只覆盖 .sv/.v) —— 这**不是**全覆盖通过`);
+      console.log(`\nPARTIAL: ${report.length} 个文件已检查、${warnings.length} 项警告;另有 ${skippedFiles.length} 个文件 **未检查** —— 这**不是**全覆盖通过`);
     } else {
       console.log(`\nPASS: ${report.length} 个文件,${warnings.length} 项警告(不阻塞)`);
     }

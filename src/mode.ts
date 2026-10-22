@@ -19,6 +19,46 @@ import { NS, describeEnv, probeFilesystem } from "./toolchain.js";
 const SECTION = "fpga-workbench:toolchain";
 
 /**
+ * 本文件用到的设置服务形状。
+ *
+ * 为什么自己声明而不引宿主的类型:这里刻意**动态**取服务(拿不到就退化成"读不到值"),
+ * 所以只关心这两个方法存不存在,不关心宿主类型的完整形状。声明得越窄,宿主换版本时
+ * 越不容易因为类型漂移而报错。
+ */
+interface SettingsLike {
+  describe?: (options?: { redactSecrets?: boolean }) => ReadonlyArray<{ ns?: string; value?: unknown }> | undefined;
+  get?: (ns: string) => unknown;
+}
+
+/** Cordis 上下文里本文件真正用到的那几个成员。 */
+interface ModeContext {
+  get: (name: string) => unknown;
+  on?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  effect?: (factory: () => unknown, label?: string) => unknown;
+  inject?: (deps: string[], callback: (ctx: ModeContext) => void) => unknown;
+  /** 提示注册表：本行只依赖它。 */
+  systemPrompt?: {
+    section: (options: { name: string; order: number; text: () => string }) => unknown;
+  };
+  /** 宿主注入的日志器（可选，连不上也不能因此崩）。 */
+  logger?: { info?: (message: string) => void; warn?: (message: string) => void };
+  /** MCP 客户端上下文透传用（`syncMcpClient` 自己会识别形状）。 */
+  [key: string]: unknown;
+}
+
+/** MCP 挂载状态：记住当前 fiber 与路径，避免重复起会话。 */
+interface McpState {
+  fiber: unknown;
+  path: string | undefined;
+}
+
+/** 设置快照：一条 descriptor。 */
+interface SettingsDescriptor {
+  ns?: string;
+  value?: unknown;
+}
+
+/**
  * 段落位置:紧随人设之后。
  *
  * dsh-system-prompt 的 SECTION_ORDERS 里人设是 0,工具说明从 1000(TOOL_BASH)起,
@@ -39,11 +79,13 @@ export const inject = ["systemPrompt"];
  * @param ctx - 本行的插件上下文。
  * @returns 解析后的设置值,或 undefined。
  */
-function readValues(ctx) {
+function readValues(ctx: ModeContext): unknown {
   try {
-    const settings = ctx.get("settings");
+    const settings = ctx.get("settings") as SettingsLike | undefined;
     if (typeof settings?.describe === "function") {
-      const descriptor = settings.describe({ redactSecrets: true })?.find((entry) => entry?.ns === NS);
+      const descriptor = settings
+        .describe({ redactSecrets: true })
+        ?.find((entry: SettingsDescriptor) => entry?.ns === NS);
       if (descriptor?.value !== null && typeof descriptor?.value === "object") return descriptor.value;
     }
     return settings?.get?.(NS);
@@ -61,7 +103,7 @@ function readValues(ctx) {
  * @param ctx - 预设作用域内的插件上下文。
  * @returns 提示段正文,失败时为空串。
  */
-function sectionText(ctx) {
+function sectionText(ctx: ModeContext): string {
   try {
     return describeEnv(readValues(ctx), probeFilesystem);
   } catch (error) {
@@ -78,11 +120,11 @@ function sectionText(ctx) {
  * 挂载模式半侧。
  * @param ctx - 预设作用域内的插件上下文。
  */
-export function apply(ctx) {
+export function apply(ctx: ModeContext): void {
   // text 传函数:每次组装提示时重新取值,用户在设置页改完路径立刻生效,不用重启会话。
-  ctx.effect(
+  ctx.effect?.(
     () =>
-      ctx.systemPrompt.section({
+      ctx.systemPrompt?.section({
         name: SECTION,
         order: ORDER,
         text: () => sectionText(ctx)
@@ -98,20 +140,20 @@ export function apply(ctx) {
   //
   // 设置是运行时值,`!!js` 在加载期求值读不到它,所以只能在这里读设置再动态挂载
   // (细节见 lib/mcp.js 的文件头)。
-  const mcpState = { fiber: undefined, path: undefined };
+  const mcpState: McpState = { fiber: undefined, path: undefined };
   // `settings/document-updated` 是宿主设置服务在 describe() 发现变更时发出的事件
   // (见 dsh-settings 的 describe 实现)。保存本插件的设置会让它触发一次,于是这里
   // 重新读一遍路径 —— 改了路径不必重启,清空了就卸载。
   if (typeof ctx.on === "function") {
-    ctx.on("settings/document-updated", (ns) => {
+    ctx.on("settings/document-updated", (ns: unknown) => {
       if (ns === undefined || ns === NS) void applyMcp(ctx, mcpState);
     });
   }
   // 首次挂载:不 await,避免拖慢预设激活;连上了会在下一次工具列表刷新时出现。
   void applyMcp(ctx, mcpState);
-  ctx.effect(
+  ctx.effect?.(
     () => () => {
-      void syncMcpClient(ctx, "", mcpState);
+      void syncMcpClient(ctx as never, "", mcpState as never);
     },
     "fpga-workbench: vivado mcp teardown"
   );
@@ -122,12 +164,12 @@ export function apply(ctx) {
  * @param ctx - 预设作用域的插件上下文。
  * @param state - 记住当前挂载的 fiber 与路径。
  */
-async function applyMcp(ctx, state) {
+async function applyMcp(ctx: ModeContext, state: McpState): Promise<void> {
   try {
     const values = readValues(ctx);
-    const wanted = String(values?.[MCP_PATH_KEY] ?? "").trim();
+    const wanted = String((values as Record<string, unknown> | undefined)?.[MCP_PATH_KEY] ?? "").trim();
     if (wanted === state.path) return; // 没变:不重启 MCP 会话
-    const status = await syncMcpClient(ctx, wanted, state);
+    const status = await syncMcpClient(ctx as never, wanted, state as never);
     if (wanted !== "" && status !== "已连接") {
       ctx.logger?.info?.(`fpga-workbench: Vivado MCP ${status}`);
     }

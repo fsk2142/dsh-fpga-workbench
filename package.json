@@ -48,9 +48,9 @@
     "test:vivado": "node tools/check-all.mjs --vivado"
   },
   "peerDependencies": {
-    "@deepseek-ai/schemastery": "^3.18.2",
     "@deepseek-ai/dsh-settings": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2",
-    "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2"
+    "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.2"
   },
   "dsh": {
     "bundle": {
@@ -73,5 +73,11 @@
       ],
       "platform": "web"
     }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsdown": "^0.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
   }
 }

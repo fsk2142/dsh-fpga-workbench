@@ -54,8 +54,62 @@ export type ToolLevel = "module" | "project" | "shared";
  */
 export const LEVEL_DIRS: Record<ToolLevel, string> = { module: "module", project: "project", shared: "" };
 
+/**
+ * 设置页一个字段的形状。
+ *
+ * 为什么这么多可选：FIELDS 里的字段来自几张不同的表（工具路径 / 模板 / 能力偏好），
+ * 有些字段没有 `section` / `group` / `default`。下面那段 `for (const field of FIELDS)`
+ * 会给缺的补默认值 —— 所以这些成员必须**可写且可选**，否则 TS 按字面量推断成
+ * `undefined`，赋值就报 TS2322（实测踩到）。
+ */
+/** TOOL_CATALOG 的一项：工具的展示名、路径字段名等。 */
+export interface ToolCatalogEntry {
+  /** 表里每一项都有这四个 —— 改成必选后 `key: definition.pathKey` 不必断言。 */
+  role: string;
+  label: string;
+  /** 路径字段名：表里每一项都有它（FIELDS 展开时当 key 用）。 */
+  pathKey: string;
+  kind: string;
+  /** 提示文案：自定义工具那三条没有，所以可选。 */
+  hint?: string;
+  usage?: (path: string) => string[];
+  /** 自定义工具用的两个字段名（名字 / 备注）：只有自定义项才有。 */
+  nameKey?: string;
+  notesKey?: string;
+  [extra: string]: unknown;
+}
+
+/** LEGACY_CUSTOM 的一项：旧版"自定义工具"映射到新字段。 */
+export interface LegacyCustomEntry {
+  tool?: string;
+  pathKey?: string;
+  nameKey?: string;
+  notesKey?: string;
+  [extra: string]: unknown;
+}
+
+export interface FieldSpec {
+  /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
+  key: string;
+  tool?: string;
+  kind?: string;
+  label?: string;
+  hint?: string;
+  control?: string;
+  default?: unknown;
+  section?: string;
+  sectionLabel?: string;
+  group?: string;
+  blankNote?: string;
+  required?: boolean;
+  skips?: string[];
+  usage?: (path: string) => string[];
+  templateLevel?: unknown;
+  [extra: string]: unknown;
+}
+
 /** 命令名的级别前缀(`shared` 不加前缀 —— 它两级都用,加了反而误导)。 */
-const LEVEL_PREFIX = { module: "module-", project: "project-", shared: "" };
+const LEVEL_PREFIX: Record<ToolLevel, string> = { module: "module-", project: "project-", shared: "" };
 
 /**
  * 自带命令。两类:两级共用的骨架,以及模块级的检查/起文件。
@@ -108,12 +162,12 @@ export const TOOLS = [
 ];
 
 /** 命令的绝对路径(级别落到目录上,所以路径要拼出来)。 */
-export function toolPath(tool) {
+export function toolPath(tool: { level: ToolLevel; file: string }): string {
   return join(BUNDLED_TOOLS_DIR, LEVEL_DIRS[tool.level] ?? "", tool.file);
 }
 
 /** 命令名应有的级别前缀(守卫用它校验"名字带级别")。 */
-export function toolLevelPrefix(tool) {
+export function toolLevelPrefix(tool: { level: ToolLevel }): string {
   return LEVEL_PREFIX[tool.level] ?? "";
 }
 
@@ -152,14 +206,14 @@ const SECTION_LABELS = Object.fromEntries(SETTINGS_SECTIONS.map((section) => [se
  * 本机工具登记表。路径、路径类型、调用提示只在这里定义一次,设置、探测、状态与会话提示共用。
  * 自定义槽位只有用户明确选择时才参与某个环节;没有调用说明时只承诺“路径可用”。
  */
-export const TOOL_CATALOG = {
+export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   python: {
     role: "script",
     label: "Python 3",
     pathKey: "pythonPath",
     kind: "file",
     hint: "python.exe；用于参考模型、测试向量和日志比对。检测只如实报告版本；这里只登记路径，不保证宿主终端强制使用它。",
-    usage: (path) => [`跑脚本:${usagePath(path)} <脚本.py>(依赖要安装到这个解释器对应的环境中)`]
+    usage: (path: string) => [`跑脚本:${usagePath(path)} <脚本.py>(依赖要安装到这个解释器对应的环境中)`]
   },
   verilator: {
     role: "compiler",
@@ -167,7 +221,7 @@ export const TOOL_CATALOG = {
     pathKey: "verilatorPath",
     kind: "file",
     hint: "填写 verilator_bin.exe；MSYS2 常见位置是 C:\\msys64\\mingw64\\bin。",
-    usage: (path) => [
+    usage: (path: string) => [
       `快速 lint:${usagePath(path)} --lint-only -Wall --top-module <顶层模块> <文件...>`,
       "优先使用 verilator_bin.exe 本体；无扩展名的 verilator 是 Perl 包装脚本。"
     ]
@@ -178,7 +232,7 @@ export const TOOL_CATALOG = {
     pathKey: "iverilogPath",
     kind: "file",
     hint: "填写 iverilog.exe；可用于编译检查和配合 vvp 仿真，但 SystemVerilog 支持有限。",
-    usage: (path) => [`编译检查:${usagePath(path)} -g2012 -o <临时输出文件> <文件...>`, "需要运行结果时再配合同目录的 vvp。"]
+    usage: (path: string) => [`编译检查:${usagePath(path)} -g2012 -o <临时输出文件> <文件...>`, "需要运行结果时再配合同目录的 vvp。"]
   },
   modelsim: {
     role: "simulator",
@@ -186,7 +240,7 @@ export const TOOL_CATALOG = {
     pathKey: "modelsimPath",
     kind: "file",
     hint: "填写 ModelSim 的 vsim.exe，而不是会直接打开图形界面的 modelsim.exe。",
-    usage: (path) => [
+    usage: (path: string) => [
       `非交互仿真:${usagePath(path)} -c -do "do <脚本.do>; quit -f"`,
       "-c 表示命令行模式；日志和波形应放到当前验证环节目录。"
     ]
@@ -197,7 +251,7 @@ export const TOOL_CATALOG = {
     pathKey: "questaPath",
     kind: "file",
     hint: "填写 QuestaSim 的 vsim.exe；它与 ModelSim 分开登记、分开检测。",
-    usage: (path) => [
+    usage: (path: string) => [
       `非交互仿真:${usagePath(path)} -c -do "do <脚本.do>; quit -f"`,
       "-c 表示命令行模式；日志和波形应放到当前验证环节目录。"
     ]
@@ -208,7 +262,7 @@ export const TOOL_CATALOG = {
     pathKey: "xsimPath",
     kind: "directory",
     hint: "填写 Vivado 的 bin 目录；xvlog、xelab、xsim 三个入口都应在其中。",
-    usage: (path) => [
+    usage: (path: string) => [
       `三步走:"${pad(path)}xvlog" -sv <源码...> → "${pad(path)}xelab" -debug typical <顶层> -s tb_sim → "${pad(path)}xsim" tb_sim -runall`,
       "这里登记的是 Vivado bin 目录，不是某一个可执行文件。"
     ]
@@ -219,7 +273,7 @@ export const TOOL_CATALOG = {
     pathKey: "vivadoPath",
     kind: "file",
     hint: "Windows 填写 vivado.bat；用批处理模式执行综合、实现、时序和 bitstream 工作。",
-    usage: (path) => [
+    usage: (path: string) => [
       `非交互批处理:${usagePath(path)} -mode batch -source <脚本.tcl> -log <日志路径> -journal <记录路径>`,
       "不加 -mode batch 会启动图形界面。"
     ]
@@ -231,7 +285,7 @@ export const TOOL_CATALOG = {
     kind: "file",
     hint: "填写 quartus_sh.exe。插件可以登记和检测路径，但当前没有承诺完整的 Quartus 工程流程。",
     supportNote: "当前只保证路径与检测，不代表已有完整工程流程。",
-    usage: (path) => [`非交互批处理:${usagePath(path)} -t <脚本.tcl>`, "具体综合、实现和烧录命令须按当前 Quartus 工程确认。"]
+    usage: (path: string) => [`非交互批处理:${usagePath(path)} -t <脚本.tcl>`, "具体综合、实现和烧录命令须按当前 Quartus 工程确认。"]
   },
   "custom-compiler": {
     role: "compiler",
@@ -300,16 +354,16 @@ export const STAGES = [
   { key: "project-release", section: "project", label: "发布", bindings: ["projectReleaseFpga"] }
 ];
 
-const STAGE_BY_KEY = Object.fromEntries(STAGES.map((stage) => [stage.key, stage]));
+export const STAGE_BY_KEY = Object.fromEntries(STAGES.map((stage) => [stage.key, stage]));
 
-const ROLE_TOOLS = {
+const ROLE_TOOLS: Record<string, string[]> = {
   script: ["python"],
   compiler: ["verilator", "iverilog", "custom-compiler"],
   simulator: ["modelsim", "questa", "xsim", "custom-simulator"],
   fpga: ["vivado", "quartus", "custom-fpga"]
 };
 
-const bind = (key, section, stage, label, role) => ({
+const bind = (key: string, section: string, stage: string, label: string, role: string) => ({
   key,
   section,
   stage,
@@ -436,7 +490,7 @@ export const CAPABILITIES = [
   }
 ];
 
-const CAPABILITY_BY_KEY = Object.fromEntries(CAPABILITIES.map((capability) => [capability.key, capability]));
+export const CAPABILITY_BY_KEY = Object.fromEntries(CAPABILITIES.map((capability) => [capability.key, capability]));
 
 /** 把目录形式的路径补成可拼接的前缀(XSim 的路径是一个目录)。 */
 function pad(path) {
@@ -450,7 +504,7 @@ function pad(path) {
  * 判断的空间。所有字段都是可选能力,缺一项只影响显式绑定它的环节,不会形成全局门禁。
  * 语言、库映射和模板仍属于通用区。旧全局键隐藏保留一个迁移周期。
  */
-export const FIELDS = [
+export const FIELDS: FieldSpec[] = [
   // 通用区只登记“这台机器有什么”。每个工具一个独立路径,切换环节首选时不会互相覆盖。
   ...[
     ["python", "脚本工具"],
@@ -562,7 +616,7 @@ export const FIELDS = [
     kind: "file",
     required: false,
     skips: [],
-    usage: (path) => [
+    usage: (path: string) => [
       `厂商库 / IP 库能不能用,看这份文件的 [Library] 段:${promptScalar(path)}`,
       "改映射用 vmap;`vmap` 不带参数会列出**当前生效**的全部映射。注意查找顺序:MODELSIM 环境变量 → 当前目录的 modelsim.ini → 安装目录那份 —— 工作目录里冒出一份就会盖掉这份。"
     ]
@@ -579,7 +633,7 @@ export const FIELDS = [
     kind: "file",
     required: false,
     skips: [],
-    usage: (path) => [
+    usage: (path: string) => [
       `QuestaSim 厂商库 / IP 库映射文件:${promptScalar(path)}`,
       "库名与目录以 [Library] 段为准；使用前应确认当前工作目录没有另一份 modelsim.ini 覆盖它。"
     ]
@@ -717,7 +771,7 @@ const LEGACY_STAGE_TARGETS = {
   python: ["moduleSpecScriptTool", "moduleVerifScriptTool", "projectSpecScriptTool", "projectSyssimScriptTool"]
 };
 
-const LEGACY_CUSTOM = {
+const LEGACY_CUSTOM: Record<string, LegacyCustomEntry> = {
   compiler: { tool: "custom-compiler", pathKey: "customCompilerPath", nameKey: "customCompilerName", notesKey: "customCompilerNotes" },
   simulator: { tool: "custom-simulator", pathKey: "customSimulatorPath", nameKey: "customSimulatorName", notesKey: "customSimulatorNotes" },
   synthesizer: { tool: "custom-fpga", pathKey: "customFpgaToolPath", nameKey: "customFpgaToolName", notesKey: "customFpgaToolNotes" }

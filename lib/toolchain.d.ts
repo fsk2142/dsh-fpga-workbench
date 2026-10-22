@@ -22,6 +22,57 @@ export type ToolLevel = "module" | "project" | "shared";
  */
 export declare const LEVEL_DIRS: Record<ToolLevel, string>;
 /**
+ * 设置页一个字段的形状。
+ *
+ * 为什么这么多可选：FIELDS 里的字段来自几张不同的表（工具路径 / 模板 / 能力偏好），
+ * 有些字段没有 `section` / `group` / `default`。下面那段 `for (const field of FIELDS)`
+ * 会给缺的补默认值 —— 所以这些成员必须**可写且可选**，否则 TS 按字面量推断成
+ * `undefined`，赋值就报 TS2322（实测踩到）。
+ */
+/** TOOL_CATALOG 的一项：工具的展示名、路径字段名等。 */
+export interface ToolCatalogEntry {
+  /** 表里每一项都有这四个 —— 改成必选后 `key: definition.pathKey` 不必断言。 */
+  role: string;
+  label: string;
+  /** 路径字段名：表里每一项都有它（FIELDS 展开时当 key 用）。 */
+  pathKey: string;
+  kind: string;
+  /** 提示文案：自定义工具那三条没有，所以可选。 */
+  hint?: string;
+  usage?: (path: string) => string[];
+  /** 自定义工具用的两个字段名（名字 / 备注）：只有自定义项才有。 */
+  nameKey?: string;
+  notesKey?: string;
+  [extra: string]: unknown;
+}
+/** LEGACY_CUSTOM 的一项：旧版"自定义工具"映射到新字段。 */
+export interface LegacyCustomEntry {
+  tool?: string;
+  pathKey?: string;
+  nameKey?: string;
+  notesKey?: string;
+  [extra: string]: unknown;
+}
+export interface FieldSpec {
+  /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
+  key: string;
+  tool?: string;
+  kind?: string;
+  label?: string;
+  hint?: string;
+  control?: string;
+  default?: unknown;
+  section?: string;
+  sectionLabel?: string;
+  group?: string;
+  blankNote?: string;
+  required?: boolean;
+  skips?: string[];
+  usage?: (path: string) => string[];
+  templateLevel?: unknown;
+  [extra: string]: unknown;
+}
+/**
  * 自带命令。两类:两级共用的骨架,以及模块级的检查/起文件。
  *
  * **没有"看波形"这类交互入口**:要看波形用已经确认过的仿真脚本起 GUI。
@@ -33,9 +84,14 @@ export declare const TOOLS: {
   what: string;
 }[];
 /** 命令的绝对路径(级别落到目录上,所以路径要拼出来)。 */
-export declare function toolPath(tool: any): string;
+export declare function toolPath(tool: {
+  level: ToolLevel;
+  file: string;
+}): string;
 /** 命令名应有的级别前缀(守卫用它校验"名字带级别")。 */
-export declare function toolLevelPrefix(tool: any): any;
+export declare function toolLevelPrefix(tool: {
+  level: ToolLevel;
+}): string;
 /**
  * 模板种类 → 字段名与文件名。字段填了就优先用用户那份,留空或不存在就用自带。
  *
@@ -64,97 +120,7 @@ export declare const SETTINGS_SECTIONS: {
  * 本机工具登记表。路径、路径类型、调用提示只在这里定义一次,设置、探测、状态与会话提示共用。
  * 自定义槽位只有用户明确选择时才参与某个环节;没有调用说明时只承诺“路径可用”。
  */
-export declare const TOOL_CATALOG: {
-  python: {
-    role: string;
-    label: string;
-    pathKey: string;
-    kind: string;
-    hint: string;
-    usage: (path: any) => string[];
-  };
-  verilator: {
-    role: string;
-    label: string;
-    pathKey: string;
-    kind: string;
-    hint: string;
-    usage: (path: any) => string[];
-  };
-  iverilog: {
-    role: string;
-    label: string;
-    pathKey: string;
-    kind: string;
-    hint: string;
-    usage: (path: any) => string[];
-  };
-  modelsim: {
-    role: string;
-    label: string;
-    pathKey: string;
-    kind: string;
-    hint: string;
-    usage: (path: any) => string[];
-  };
-  questa: {
-    role: string;
-    label: string;
-    pathKey: string;
-    kind: string;
-    hint: string;
-    usage: (path: any) => string[];
-  };
-  xsim: {
-    role: string;
-    label: string;
-    pathKey: string;
-    kind: string;
-    hint: string;
-    usage: (path: any) => string[];
-  };
-  vivado: {
-    role: string;
-    label: string;
-    pathKey: string;
-    kind: string;
-    hint: string;
-    usage: (path: any) => string[];
-  };
-  quartus: {
-    role: string;
-    label: string;
-    pathKey: string;
-    kind: string;
-    hint: string;
-    supportNote: string;
-    usage: (path: any) => string[];
-  };
-  "custom-compiler": {
-    role: string;
-    label: string;
-    pathKey: string;
-    nameKey: string;
-    notesKey: string;
-    kind: string;
-  };
-  "custom-simulator": {
-    role: string;
-    label: string;
-    pathKey: string;
-    nameKey: string;
-    notesKey: string;
-    kind: string;
-  };
-  "custom-fpga": {
-    role: string;
-    label: string;
-    pathKey: string;
-    nameKey: string;
-    notesKey: string;
-    kind: string;
-  };
-};
+export declare const TOOL_CATALOG: Record<string, ToolCatalogEntry>;
 /** 工具设置卡片的固定分类；顺序只用于展示，不表示调用顺序。 */
 export declare const TOOL_GROUPS: {
   key: string;
@@ -174,15 +140,30 @@ export declare const STAGES: ({
   bindings: never[];
   note: string;
 })[];
+export declare const STAGE_BY_KEY: {
+  [k: string]: {
+    key: string;
+    section: string;
+    label: string;
+    bindings: string[];
+    note?: undefined;
+  } | {
+    key: string;
+    section: string;
+    label: string;
+    bindings: never[];
+    note: string;
+  };
+};
 export declare const BINDINGS: {
-  key: any;
-  section: any;
-  stage: any;
-  label: any;
-  role: any;
+  key: string;
+  section: string;
+  stage: string;
+  label: string;
+  role: string;
   toolKey: string;
   pathKey: string;
-  tools: any;
+  tools: string[];
 }[];
 /**
  * 新设置页按“能力”选择工具，不按开发阶段重复登记路径。
@@ -210,6 +191,28 @@ export declare const CAPABILITIES: {
     hint: string;
   })[];
 }[];
+export declare const CAPABILITY_BY_KEY: {
+  [k: string]: {
+    key: string;
+    section: string;
+    label: string;
+    hint: string;
+    role: string;
+    toolKey: string;
+    tools: string[];
+    templates: ({
+      key: string;
+      category: string;
+      label: string;
+      hint?: undefined;
+    } | {
+      key: string;
+      category: string;
+      label: string;
+      hint: string;
+    })[];
+  };
+};
 /**
  * 扁平设置 schema。客户端再按 section / stage 元数据组合成三个顶层区和环节卡。
  *
@@ -217,149 +220,7 @@ export declare const CAPABILITIES: {
  * 判断的空间。所有字段都是可选能力,缺一项只影响显式绑定它的环节,不会形成全局门禁。
  * 语言、库映射和模板仍属于通用区。旧全局键隐藏保留一个迁移周期。
  */
-export declare const FIELDS: ({
-  key: any;
-  tool: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: any;
-  hint: any;
-  blankNote: string;
-  kind: any;
-  required: boolean;
-  skips: never[];
-} | {
-  tool: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: any;
-  control: string;
-  label: string;
-  hint: string;
-} | {
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  options: {
-    value: string;
-    label: string;
-  }[];
-  required: boolean;
-  skips: never[];
-  usage?: undefined;
-  defaultPath?: undefined;
-  blankNote?: undefined;
-  kind?: undefined;
-} | {
-  options?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  kind: string;
-  required: boolean;
-  skips: never[];
-  usage: (path: any) => string[];
-  defaultPath?: undefined;
-  default?: undefined;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  defaultPath: string;
-  kind: string;
-  required: boolean;
-  skips: never[];
-  default?: undefined;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  defaultPath?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  kind: string;
-  required: boolean;
-  skips: never[];
-  default?: undefined;
-} | {
-  section: string;
-  sectionLabel: string;
-  capability: string;
-  capabilityLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  options: ({
-    value: string;
-    label: string;
-  } | {
-    value: string;
-    label: any;
-    supportNote: any;
-  })[];
-} | {
-  section: string;
-  sectionLabel: string;
-  capability: string;
-  capabilityLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: string;
-  category: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  defaultPath?: undefined;
-  section?: undefined;
-  sectionLabel?: undefined;
-  blankNote?: undefined;
-  kind?: undefined;
-  key: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  required: boolean;
-  skips: never[];
-})[];
+export declare const FIELDS: FieldSpec[];
 export declare const SETTINGS_MODEL_VERSION = "3";
 /**
  * 把 v1 全局设置或 v2 阶段设置一次性迁到“顶部工具登记 + 七张能力卡”。即使已经是 v3，
@@ -451,465 +312,42 @@ export declare function resolveCapabilityTemplates(values: any, capability: any,
  * @returns 每项 `{ key, label, hint, kind, skips, path, configured, present }`。
  */
 export declare function inspectTools(values: any, probe: any): ({
-  key: any;
-  tool: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: any;
-  hint: any;
-  blankNote: string;
-  kind: any;
-  required: boolean;
-  skips: never[];
+  /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
+  key: string;
+  tool?: string;
+  kind?: string;
+  label?: string;
+  hint?: string;
+  control?: string;
+  default?: unknown;
+  section?: string;
+  sectionLabel?: string;
+  group?: string;
+  blankNote?: string;
+  required?: boolean;
+  skips?: string[];
+  usage?: (path: string) => string[];
+  templateLevel?: unknown;
   path: string;
   configured: boolean;
   present: any;
 } | {
-  tool: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: any;
-  control: string;
-  label: string;
-  hint: string;
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
+  /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
   key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  options: {
-    value: string;
-    label: string;
-  }[];
-  required: boolean;
-  skips: never[];
-  usage?: undefined;
-  defaultPath?: undefined;
-  blankNote?: undefined;
-  kind?: undefined;
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
-  options?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  kind: string;
-  required: boolean;
-  skips: never[];
-  usage: (path: any) => string[];
-  defaultPath?: undefined;
-  default?: undefined;
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  defaultPath: string;
-  kind: string;
-  required: boolean;
-  skips: never[];
-  default?: undefined;
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  defaultPath?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  kind: string;
-  required: boolean;
-  skips: never[];
-  default?: undefined;
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
-  section: string;
-  sectionLabel: string;
-  capability: string;
-  capabilityLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  options: ({
-    value: string;
-    label: string;
-  } | {
-    value: string;
-    label: any;
-    supportNote: any;
-  })[];
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
-  section: string;
-  sectionLabel: string;
-  capability: string;
-  capabilityLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: string;
-  category: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  defaultPath?: undefined;
-  section?: undefined;
-  sectionLabel?: undefined;
-  blankNote?: undefined;
-  kind?: undefined;
-  key: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  required: boolean;
-  skips: never[];
-  path: string;
-  configured: boolean;
-  present: any;
-} | {
-  key: any;
-  tool: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: any;
-  hint: any;
-  blankNote: string;
-  kind: any;
-  required: boolean;
-  skips: never[];
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  tool: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: any;
-  control: string;
-  label: string;
-  hint: string;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  options: {
-    value: string;
-    label: string;
-  }[];
-  required: boolean;
-  skips: never[];
-  usage?: undefined;
-  defaultPath?: undefined;
-  blankNote?: undefined;
-  kind?: undefined;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  section: string;
-  sectionLabel: string;
-  capability: string;
-  capabilityLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  options: ({
-    value: string;
-    label: string;
-  } | {
-    value: string;
-    label: any;
-    supportNote: any;
-  })[];
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  section: string;
-  sectionLabel: string;
-  capability: string;
-  capabilityLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: string;
-  category: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  defaultPath?: undefined;
-  section?: undefined;
-  sectionLabel?: undefined;
-  blankNote?: undefined;
-  kind?: undefined;
-  key: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  required: boolean;
-  skips: never[];
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  tool: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: any;
-  control: string;
-  label: string;
-  hint: string;
-  kind: any;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  options: {
-    value: string;
-    label: string;
-  }[];
-  required: boolean;
-  skips: never[];
-  usage?: undefined;
-  defaultPath?: undefined;
-  blankNote?: undefined;
-  kind: any;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  options?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  required: boolean;
-  skips: never[];
-  usage: (path: any) => string[];
-  defaultPath?: undefined;
-  default?: undefined;
-  kind: any;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  defaultPath: string;
-  required: boolean;
-  skips: never[];
-  default?: undefined;
-  kind: any;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  defaultPath?: undefined;
-  key: string;
-  section: string;
-  sectionLabel: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  blankNote: string;
-  required: boolean;
-  skips: never[];
-  default?: undefined;
-  kind: any;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  section: string;
-  sectionLabel: string;
-  capability: string;
-  capabilityLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  options: ({
-    value: string;
-    label: string;
-  } | {
-    value: string;
-    label: any;
-    supportNote: any;
-  })[];
-  kind: any;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  section: string;
-  sectionLabel: string;
-  capability: string;
-  capabilityLabel: string;
-  group: string;
-  required: boolean;
-  skips: never[];
-  key: string;
-  category: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  kind: any;
-  path: string;
-  configured: boolean;
-  present: boolean;
-  inactive: boolean;
-  unused: boolean;
-} | {
-  options?: undefined;
-  usage?: undefined;
-  defaultPath?: undefined;
-  section?: undefined;
-  sectionLabel?: undefined;
-  blankNote?: undefined;
-  key: string;
-  group: string;
-  control: string;
-  label: string;
-  hint: string;
-  default: string;
-  required: boolean;
-  skips: never[];
-  kind: any;
+  tool?: string;
+  kind?: string;
+  label?: string;
+  hint?: string;
+  control?: string;
+  default?: unknown;
+  section?: string;
+  sectionLabel?: string;
+  group?: string;
+  blankNote?: string;
+  required?: boolean;
+  skips?: string[];
+  usage?: (path: string) => string[];
+  templateLevel?: unknown;
   path: string;
   configured: boolean;
   present: boolean;
@@ -935,497 +373,42 @@ export declare function isMissing(tool: any): boolean;
  */
 export declare function statusOf(values: any, probe?: typeof probeFilesystem): {
   tools: ({
-    key: any;
-    tool: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: any;
-    hint: any;
-    blankNote: string;
-    kind: any;
-    required: boolean;
-    skips: never[];
+    /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
+    key: string;
+    tool?: string;
+    kind?: string;
+    label?: string;
+    hint?: string;
+    control?: string;
+    default?: unknown;
+    section?: string;
+    sectionLabel?: string;
+    group?: string;
+    blankNote?: string;
+    required?: boolean;
+    skips?: string[];
+    templateLevel?: unknown;
     path: string;
     configured: boolean;
     present: any;
     detectable: boolean;
     install: any;
   } | {
-    tool: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: any;
-    control: string;
-    label: string;
-    hint: string;
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
+    /** 字段唯一标识：每个字段都有（原来推成 string | undefined 是因为我漏看 place spread）。 */
     key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    options: {
-      value: string;
-      label: string;
-    }[];
-    required: boolean;
-    skips: never[];
-    defaultPath?: undefined;
-    blankNote?: undefined;
-    kind?: undefined;
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    blankNote: string;
-    kind: string;
-    required: boolean;
-    skips: never[];
-    defaultPath?: undefined;
-    default?: undefined;
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    blankNote: string;
-    defaultPath: string;
-    kind: string;
-    required: boolean;
-    skips: never[];
-    default?: undefined;
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    defaultPath?: undefined;
-    key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    blankNote: string;
-    kind: string;
-    required: boolean;
-    skips: never[];
-    default?: undefined;
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
-    section: string;
-    sectionLabel: string;
-    capability: string;
-    capabilityLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    options: ({
-      value: string;
-      label: string;
-    } | {
-      value: string;
-      label: any;
-      supportNote: any;
-    })[];
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
-    section: string;
-    sectionLabel: string;
-    capability: string;
-    capabilityLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: string;
-    category: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    defaultPath?: undefined;
-    section?: undefined;
-    sectionLabel?: undefined;
-    blankNote?: undefined;
-    kind?: undefined;
-    key: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    required: boolean;
-    skips: never[];
-    path: string;
-    configured: boolean;
-    present: any;
-    detectable: boolean;
-    install: any;
-  } | {
-    key: any;
-    tool: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: any;
-    hint: any;
-    blankNote: string;
-    kind: any;
-    required: boolean;
-    skips: never[];
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    tool: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: any;
-    control: string;
-    label: string;
-    hint: string;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    options: {
-      value: string;
-      label: string;
-    }[];
-    required: boolean;
-    skips: never[];
-    defaultPath?: undefined;
-    blankNote?: undefined;
-    kind?: undefined;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    section: string;
-    sectionLabel: string;
-    capability: string;
-    capabilityLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    options: ({
-      value: string;
-      label: string;
-    } | {
-      value: string;
-      label: any;
-      supportNote: any;
-    })[];
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    section: string;
-    sectionLabel: string;
-    capability: string;
-    capabilityLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: string;
-    category: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    defaultPath?: undefined;
-    section?: undefined;
-    sectionLabel?: undefined;
-    blankNote?: undefined;
-    kind?: undefined;
-    key: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    required: boolean;
-    skips: never[];
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    tool: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: any;
-    control: string;
-    label: string;
-    hint: string;
-    kind: any;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    options: {
-      value: string;
-      label: string;
-    }[];
-    required: boolean;
-    skips: never[];
-    defaultPath?: undefined;
-    blankNote?: undefined;
-    kind: any;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    blankNote: string;
-    required: boolean;
-    skips: never[];
-    defaultPath?: undefined;
-    default?: undefined;
-    kind: any;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    blankNote: string;
-    defaultPath: string;
-    required: boolean;
-    skips: never[];
-    default?: undefined;
-    kind: any;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    defaultPath?: undefined;
-    key: string;
-    section: string;
-    sectionLabel: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    blankNote: string;
-    required: boolean;
-    skips: never[];
-    default?: undefined;
-    kind: any;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    section: string;
-    sectionLabel: string;
-    capability: string;
-    capabilityLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    options: ({
-      value: string;
-      label: string;
-    } | {
-      value: string;
-      label: any;
-      supportNote: any;
-    })[];
-    kind: any;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    section: string;
-    sectionLabel: string;
-    capability: string;
-    capabilityLabel: string;
-    group: string;
-    required: boolean;
-    skips: never[];
-    key: string;
-    category: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    kind: any;
-    path: string;
-    configured: boolean;
-    present: boolean;
-    inactive: boolean;
-    unused: boolean;
-    detectable: boolean;
-    install: any;
-  } | {
-    options?: undefined;
-    defaultPath?: undefined;
-    section?: undefined;
-    sectionLabel?: undefined;
-    blankNote?: undefined;
-    key: string;
-    group: string;
-    control: string;
-    label: string;
-    hint: string;
-    default: string;
-    required: boolean;
-    skips: never[];
-    kind: any;
+    tool?: string;
+    kind?: string;
+    label?: string;
+    hint?: string;
+    control?: string;
+    default?: unknown;
+    section?: string;
+    sectionLabel?: string;
+    group?: string;
+    blankNote?: string;
+    required?: boolean;
+    skips?: string[];
+    templateLevel?: unknown;
     path: string;
     configured: boolean;
     present: boolean;
@@ -1444,7 +427,7 @@ export declare function statusOf(values: any, probe?: typeof probeFilesystem): {
     groupLabel: string;
     label: string;
     pathKey: string;
-    fieldKeys: any[];
+    fieldKeys: string[];
     kind: string;
     path: string;
     configured: boolean;

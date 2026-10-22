@@ -62,6 +62,7 @@ node tools/check-mcp.mjs            # Vivado MCP 接入层:设置字段/路径�
 node tools/check-mcp-mount.mjs      # MCP 挂载层的并发、幂等、失败清理与卸载(注入假依赖,不起真进程)
 node tools/check-version.mjs        # 版本比较 + 检查更新行为(走市场 API)+「不自动联网」的静态守卫
 node tools/check-install-hints.mjs  # 缺工具时给的安装指引:覆盖、可执行、两种提示场景
+node tools/check-skill-docs.mjs     # 技能文档与代码:文档里给的命令参数必须被代码接受、frontmatter name 对得上
 node tools/check-docs.mjs           # 文档准确性:提到的路径/命令/npm script/技能名是否真实存在
 node tools/check-vivado.mjs         # 真跑一次 Vivado 模块综合(没装 Vivado 记 SKIP,不是通过)
 node tools/check-installed.mjs      # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)

@@ -15,7 +15,7 @@ name: test
 #
 # 这个仓库实际就是用 pnpm 装的（`node_modules/.pnpm`、`pnpm-lock.yaml` 都在）。
 # 所以：CI 用 pnpm + `--frozen-lockfile`，并把 `pnpm-lock.yaml` 提交入库 ——
-# lockfile 进版本库才能保证"CI 装到的依赖版本与开发者一��"，也是 `--frozen-lockfile` 的前提。
+# lockfile 进版本库才能保证"CI 装到的依赖版本与开发者一致"，也是 `--frozen-lockfile` 的前提。
 #
 # ## 防线
 #
@@ -32,9 +32,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          # 与本地一致（本地实测 pnpm v11.24.0；锁大版本即可，小版本由 lockfile 决定）。
-          version: 11
+        # **不要写 `version:`**（2026-10-22 审查 N3）。
+        #
+        # 这个 action 的版本判定是**字符串全等**：只要 `version` 和 `packageManager`
+        # 同时存在且不逐字相等，它就抛
+        #   `Multiple versions of pnpm specified: ...`
+        # 然后整个 job 在第一步就红。
+        #
+        # 我们 package.json 里已经有 `packageManager: "pnpm@11.24.0"`，action 会自读它。
+        # 再写 `version: 11` → `"11" !== "11.24.0"` → 抛错；
+        # 写 `version: 11.24.0` 则变成两处手工同步，迟早漂移。
+        # 所以唯一的正确做法是**留空**，只保留 packageManager 这一处来源。
       - uses: actions/setup-node@v4
         with:
           node-version: 22

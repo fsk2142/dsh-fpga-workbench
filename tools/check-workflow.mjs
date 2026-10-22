@@ -93,6 +93,62 @@ ok(
 // ── 5. 装了依赖就该跑测试 ─────────────────────────────────────────────
 ok(/run:\s*pnpm\s+test/u.test(text) || /run:\s*npm\s+test/u.test(text), "workflow 会跑测试");
 
+// ── 6. N4：lockfile 的 importers 段不能把 peerDependencies 当实依赖 ──────
+//
+// 2026-10-22 第五轮审查发现：pnpm 默认 `autoInstallPeers: true`，生成 lockfile 时
+// 把 3 个 peerDependencies 连同**整个宿主依赖树**写进 `importers..dependencies`
+// —— 当时 lockfile 1695 行、"cordis" 出现 271 次。
+//
+// 危害不只是文件大：插件包会连宿主一起被安装（重复 cordis 实例 → 挂不到同一个插件
+// 系统），而且 `--frozen-lockfile` 校验的是一份其实不需要的依赖图。
+//
+// 关掉 `autoInstallPeers` 的正确位置是 `pnpm-workspace.yaml` 顶层（pnpm 11 起不再读
+// `.npmrc`，实测放 `settings:` 子键也无效）。这条断言同时守住"配置在了"与"结果对了"。
+const peers = Object.keys(PKG.peerDependencies ?? {});
+const lockPath = join(ROOT, "pnpm-lock.yaml");
+let lockText = "";
+try {
+  lockText = readFileSync(lockPath, "utf8");
+} catch {
+  // 没有 lockfile 时由上面第 3 条断言负责报错，这里不重复 FAIL。
+}
+if (lockText !== "") {
+  ok(/autoInstallPeers:\s*false/u.test(lockText), "pnpm-lock.yaml 的 settings 里 autoInstallPeers=false");
+
+  // 取 importers 的 `.:` 段（到下一个顶层键为止）。
+  const importersAt = lockText.search(/^importers:/mu);
+  const nextTopAt = lockText.slice(importersAt + 1).search(/^\S/mu);
+  const importerBlock =
+    importersAt < 0
+      ? ""
+      : lockText.slice(importersAt, nextTopAt < 0 ? undefined : importersAt + 1 + nextTopAt);
+  const depLine = importerBlock.search(/^ {4}dependencies:/mu);
+  const depSection =
+    depLine < 0 ? "" : importerBlock.slice(depLine).split(/^ {4}devDependencies:/mu)[0];
+  const leakedPeers = peers.filter((name) => depSection.includes(`'${name}'`) || depSection.includes(`"${name}"`));
+
+  ok(
+    leakedPeers.length === 0,
+    `lockfile 的 dependencies 段不含 peerDependencies（泄漏 ${String(leakedPeers.length)} 个：${leakedPeers.join(", ") || "无"}）`
+  );
+  ok(
+    !/cordis/iu.test(lockText),
+    `lockfile 里没有宿主依赖树（"cordis" 命中 ${String((lockText.match(/cordis/giu) ?? []).length)} 次）`
+  );
+
+  // 防复发：开关必须真的写在 pnpm-workspace.yaml 顶层。
+  let workspaceText = "";
+  try {
+    workspaceText = readFileSync(join(ROOT, "pnpm-workspace.yaml"), "utf8");
+  } catch {
+    workspaceText = "";
+  }
+  ok(
+    /^autoInstallPeers:\s*false/mu.test(workspaceText),
+    "pnpm-workspace.yaml 顶层写着 autoInstallPeers: false（pnpm 11 只从这里读）"
+  );
+}
+
 console.log("");
 if (failures.length === 0) {
   console.log("PASS: CI workflow 关键约束全部成立");

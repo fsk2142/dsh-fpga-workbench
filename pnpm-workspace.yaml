@@ -1,0 +1,28 @@
+# pnpm 的安装行为（2026-10-22 审查 N4）
+#
+# ## 为什么要关掉 autoInstallPeers
+#
+# 本插件的三个 `peerDependencies`（`@deepseek-ai/dsh-settings` /
+# `dsh-system-prompt` / `schemastery`）**运行时由宿主提供** —— 插件声明它们
+# 只是表达"我要求宿主有这些"，绝不能真装进自己的依赖树。
+#
+# pnpm 默认 `autoInstallPeers: true`：peer 缺失就替你装。于是生成 lockfile 时
+# 三个 peer 连同**整个宿主依赖树**（cordis / dsh-app-boot / dsh-session …）都被
+# 写进 `importers..dependencies` —— 当时的 lockfile 有 1695 行、"cordis" 出现 271 次。
+# 关掉后是 971 行、0 次。
+#
+# 后果不只是"文件难看"：
+#   · 插件包会连宿主一起被安装（重复的 cordis 实例 → 挂不到同一个插件系统）；
+#   · CI/新机器上的安装变慢，且容易因宿主包的可见性而失败；
+#   · `--frozen-lockfile` 校验的是一份"其实不需要的"依赖图。
+#
+# ## 为什么写在这里而不是 .npmrc
+#
+# pnpm 11 起，这个开关不再从 `.npmrc` 读（实测：`.npmrc` 里写
+# `auto-install-peers=false` 无效），而是**只认 `pnpm-workspace.yaml` 顶层**，
+# 且键名必须是 camelCase。「放在 `settings:` 子键下」实测也无效。
+#
+# 校验：`node tools/check-workflow.mjs` 会断言 lockfile 的 `importers` 段
+# 不含 package.json 里的 peerDependencies。
+
+autoInstallPeers: false

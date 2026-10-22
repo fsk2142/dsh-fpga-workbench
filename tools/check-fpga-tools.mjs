@@ -3005,10 +3005,13 @@ check(
 // Q4-13:真机检查表在仓库里,且覆盖那几件"自检跑不到"的事
 const checklistPath = join(ROOT, "docs", "CLIENT_CHECKLIST.md");
 const checklistText = existsSync(checklistPath) ? readFileSync(checklistPath, "utf8") : "";
+/** 清单条数：表格里形如 `| 3 | …` 的行。文案里不写死数字 —— 加一条检查不该让措辞过期。 */
+const checklistRows = checklistText.split("\n").filter((line) => /^\|\s*\d+\s*\|/u.test(line)).length;
 check(
-  checklistText.split("\n").filter((line) => /^\|\s*\d+\s*\|/u.test(line)).length >= 9 &&
+  // 9 是底线（v0.6.0 之后是 11 条，但只要求"至少覆盖到那几件事"）。
+  checklistRows >= 9 &&
     /重启 DSH Desktop/u.test(checklistText) && /NOT_TESTED/u.test(checklistText),
-  "docs/CLIENT_CHECKLIST.md 存在、有 9 条检查、并写着 NOT_TESTED 的记账方式(第四轮 Q4-13)"
+  `docs/CLIENT_CHECKLIST.md 存在、有 ${String(checklistRows)} 条检查、并写着 NOT_TESTED 的记账方式(第四轮 Q4-13)`
 );
 // 场景 G:sync-installed 半途失败 → 必须说清"混合状态"、退出码非 0(第三轮复审 N-10)
 //   造法:在沙箱 profile 里把本该写文件的位置**放成目录**(copyFileSync 对它必然 EPERM),

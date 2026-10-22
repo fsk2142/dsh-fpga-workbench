@@ -144,7 +144,7 @@ const HOST_WARN =
     : undefined;
 
 /** 源码级检查:不依赖本机 DSH 安装与 profile。 */
-const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-selfcheck.mjs", "check-mcp.mjs", "check-mcp-mount.mjs", "check-version.mjs", "check-install-hints.mjs", "check-package.mjs"];
+const SOURCE_CHECKS = ["check-toolchain.mjs", "check-fpga-tools.mjs", "check-selfcheck.mjs", "check-mcp.mjs", "check-mcp-mount.mjs", "check-version.mjs", "check-install-hints.mjs", "check-docs.mjs", "check-package.mjs"];
 
 /** 环境级检查:需要本机装好的 DSH(缺了就 SKIP)。
  *  check-patch-file 用的是**宿主那份** js-yaml 与 cordis-plugin-include schema,

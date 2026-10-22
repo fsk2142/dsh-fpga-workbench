@@ -41,6 +41,12 @@ node tools/check-fpga-tools.mjs     # 自带命令的判定正确性 + 自带模
 node tools/check-selfcheck.mjs      # 设置页自检的判据:故意少拷模板/技能/引用资源/命令,必须报 fail
 node tools/check-preset-root.mjs    # 预设声明行 + 组装结构 + 模式行 + 自带技能
 node tools/check-patch-file.mjs     # 补丁字节合法 + 形状
+node tools/check-package.mjs        # npm 包内容:files 白名单、必需/禁止进包的文件
+node tools/check-mcp.mjs            # Vivado MCP 接入层:设置字段/路径判定/配置形状/挂载位置/许可证边界
+node tools/check-mcp-mount.mjs      # MCP 挂载层的并发、幂等、失败清理与卸载(注入假依赖,不起真进程)
+node tools/check-version.mjs        # 版本比较 + 检查更新行为(走市场 API)+「不自动联网」的静态守卫
+node tools/check-install-hints.mjs  # 缺工具时给的安装指引:覆盖、可执行、两种提示场景
+node tools/check-docs.mjs           # 文档准确性:提到的路径/命令/npm script/技能名是否真实存在
 node tools/check-vivado.mjs         # 真跑一次 Vivado 模块综合(没装 Vivado 记 SKIP,不是通过)
 node tools/check-installed.mjs      # 已装副本与源逐字节一致(支持 DSH_PROFILE_DIR 覆盖)
 node tools/smoke-installed.mjs      # 已装副本在真实解析环境里能否加载(装完/重启前跑)
@@ -49,6 +55,37 @@ node tools/check-install-safety.mjs # 依赖与锁文件安全:装本插件不�
 
 `sync-installed.mjs`(装/同步已装副本;`--prune` 现在只**列出**已装副本里多出来的旧文件、**不删**)、
 `install.mjs`(装完自动跑 `smoke-installed`)按需跑。`tools/shipped.mjs` 是内部模块,不是命令。
+
+前 11 项属于源码级(`check-all.mjs` 的 `SOURCE_CHECKS`,但 `check-load-contract` / `check-preset-root` /
+`check-patch-file` 需要宿主环境,算宿主级)。后 4 项分别按 `--vivado` / `--installed` / `--safety` 开关打开。
+
+## 一次性排查脚本(`tools/probes/`,已 gitignore)
+
+`tools/probes/` 放的是查具体问题时写的一次性脚本,**不提交**:
+
+| 脚本 | 用途 |
+|---|---|
+| `probe-mcp-e2e.mjs` | 真起 Vivado → 跑 Tcl → 关闭,验证 MCP 通道能干活(需要 `VIVADO_MCP_EXE`) |
+| `probe-mcp-steps.mjs` | 逐场景测挂载的并发/幂等/泄漏 |
+| `probe-dsh-mcp-client.mjs` | 验证 `dsh-mcp-client` 把工具注册成 `mcp__vivado__*` |
+| `bench-plugin.mjs` | 量加载耗时、内存、包体积 |
+| `bench-prompt.mjs` | 解剖会话提示,看每节占多少、哪里重复 |
+| `audit-approvals.mjs` | 核对待批准删除请求:目标还在不在、能不能删 |
+
+它们依赖本机的 AMD 二进制与宿主 asar,换台机器未必原样跑得起来 —— 所以是"查问题时用一下",
+不是"长期维护的公共接口"。
+
+## 提交历史清理(`scripts/`)
+
+公开仓库的提交信息里不该出现「用户 2026-10-21：…」这类对话框架。`scripts/` 有配套工具,
+操作单见 [`SCRUB-COMMIT-HISTORY.md`](SCRUB-COMMIT-HISTORY.md)。
+
+```powershell
+node scripts/scrub-history.mjs             # 只读扫描
+node scripts/scrub-history.mjs --preview   # 看一条样例的改写前后
+node scripts/verify-scrub.mjs              # 全量预演验证(不落盘)
+node scripts/scrub-history.mjs --apply     # 真改写(自动建备份分支 + 校验文件未变)
+```
 
 **自检自己收尾(零删除)**:会建 fixture 的几项(`check-toolchain` / `check-fpga-tools` / `check-selfcheck`)跑完
 **不删** `.tmp/` 下的临时目录,只把残留清单打出来让人自己处置 —— 那一区会一直涨,这是零删除的代价。

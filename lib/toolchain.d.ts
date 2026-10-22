@@ -497,8 +497,10 @@ export interface DetectTarget {
     fallback?: boolean;
   }>;
   fields?: string[];
-  /** 候选可执行文件名（相对 glob 目录）。 */
+  /** 候选可执行文件名（相对 glob 目录）。只有走 PATH 回退时会用到。 */
   exe?: string;
+  /** 该目标的路径类型（文件 / 目录）。 */
+  kind?: string;
   [extra: string]: unknown;
 }
 /** 一个内置模板槽位（{@link TEMPLATE_FIELDS} 的一项）。 */
@@ -579,10 +581,7 @@ export declare function isMissing(tool: InspectedField): boolean;
  * @param values - 设置解析后的值。
  * @returns `{ tools, sections, stages, bindings, missing, ok }`。
  */
-export declare function statusOf(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): {
-  fields: InspectedField[];
-  [extra: string]: unknown;
-};
+export declare function statusOf(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): Record<string, unknown>;
 /**
  * MSYS2 装的 Verilator 在原生 Windows 上必须带 `VERILATOR_ROOT` —— 把可照抄的那一行给会话。
  *
@@ -720,6 +719,9 @@ export declare function detectTools(probe?: typeof probeFilesystem, list?: typeo
   label: string;
   path: string;
   source: string;
+  version?: unknown;
+  versionError?: unknown;
+  versionNote?: string;
 }[];
 /**
  * 每个工具「没装时怎么办」的安装指引。
@@ -763,5 +765,5 @@ export declare const MINIMAL_SETUP: string[];
  * @param toolKey - TOOL_CATALOG 的键(如 `vivado`)。
  * @returns 提示行数组;没有对应指引时为空数组。
  */
-export declare function installGuidance(toolKey: string): string | undefined;
+export declare function installGuidance(toolKey: string): string[];
 //#endregion

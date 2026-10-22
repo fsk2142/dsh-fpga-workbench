@@ -1032,7 +1032,7 @@ export function legacyMigrationPatch(values: Record<string, unknown>): Record<st
     const registered = current(definition.pathKey);
     if (registered === "" && unique.length === 1) {
       remember(definition.pathKey, unique[0], true);
-    } else if (unique.length > 1 || (registered !== "" && unique.some((path) => comparablePath(path) !== comparablePath(registered)))) {
+    } else if (unique.length > 1 || (registered !== "" && unique.some((path) => comparablePath(String(path)) !== comparablePath(registered)))) {
       warn(`${definition.label} 存在不同的旧阶段路径，请在工具设置中手动确认。`);
     }
   }
@@ -1366,8 +1366,10 @@ export interface DetectTarget {
   /** 候选路径的 glob 列表（每个探测目标都有，可能为空数组）。 */
   globs: Array<{ root: string; pattern: string; fallback?: boolean }>;
   fields?: string[];
-  /** 候选可执行文件名（相对 glob 目录）。 */
+  /** 候选可执行文件名（相对 glob 目录）。只有走 PATH 回退时会用到。 */
   exe?: string;
+  /** 该目标的路径类型（文件 / 目录）。 */
+  kind?: string;
   [extra: string]: unknown;
 }
 
@@ -1502,7 +1504,7 @@ export function isMissing(tool: InspectedField): boolean {
  * @param values - 设置解析后的值。
  * @returns `{ tools, sections, stages, bindings, missing, ok }`。
  */
-export function statusOf(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean = probeFilesystem): { fields: InspectedField[]; [extra: string]: unknown } {
+export function statusOf(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean = probeFilesystem): Record<string, unknown> {
   const tools = inspectTools(values, probe)
     // 隐藏字段只供迁移使用,不发给设置页。
     .filter((tool) => tool.control !== "hidden")
@@ -1745,7 +1747,7 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
   const seenTemplatePaths = new Map();
   for (const sectionKey of ["module", "project"]) {
     const section = SETTINGS_SECTIONS.find((entry) => entry.key === sectionKey);
-    const sectionLines = [`${String(section.label ?? "")}能力偏好（可以按任务反复切换，不表示先后）:`];
+    const sectionLines = [`${String(section?.label ?? "")}能力偏好（可以按任务反复切换，不表示先后）:`];
     for (const capability of resolved.filter((entry) => entry.section === sectionKey)) {
       const head = `- ${capability.label}`;
       if (capability.state === "auto") {
@@ -1821,7 +1823,7 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
       "  两级共用的(如 setup-scaffold)不加级别前缀,在 `tools/` 顶层。",
       ...TOOLS.map((tool) => {
         const level = tool.level === "shared" ? "两级共用" : tool.level === "module" ? "模块级" : "工程级";
-        return `- [${level} / ${tool.stage}] ${tool.what}:node "${toolPath(tool)}" <根目录>`;
+        return `- [${level} / ${tool.stage}] ${tool.what}:node "${toolPath({ level: tool.level as ToolLevel, file: tool.file })}" <根目录>`;
       })
     ].join("\n")
   );
@@ -1867,22 +1869,23 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
  * @param tools - {@link inspectTools} 的结果。
  * @returns 提示段里的一节。
  */
-function choiceLines(tools: InspectedField[]): string[] {
+function choiceLines(tools: InspectedField[]): string {
   const byKey = new Map(tools.filter((tool) => tool.control === "select").map((tool) => [tool.key, tool]));
-  const labelOf = (tool: Record<string, unknown>): string | undefined => tool?.options?.find((option) => option.value === tool.path)?.label ?? String(tool?.path ?? "");
+  const labelOf = (tool: FieldSpec | undefined): string =>
+  tool?.options?.find((option: { value: string; label?: string }) => option.value === tool.path)?.label ?? String(tool?.path ?? "");
   const rtl = byKey.get("rtlLangStd");
   const sim = byKey.get("simLangStd");
   const simLabel = sim?.path === "same" ? `与 RTL 相同(${labelOf(rtl)})` : labelOf(sim);
 
   return [
     "语言与标准(按设置来,不要自己换一套):",
-    `- RTL:${labelOf(rtl)} —— 文件扩展名 ${EXTENSIONS[rtl?.path] ?? ".sv"}`,
+    `- RTL:${labelOf(rtl)} —— 文件扩展名 ${EXTENSIONS[String(rtl?.path ?? "")] ?? ".sv"}`,
     `- 仿真语言:${simLabel}`
   ].join("\n");
 }
 
 /** 语言 → 文件扩展名。写代码时按它决定 .sv / .v / .vhd。 */
-const EXTENSIONS = {
+const EXTENSIONS: Record<string, string> = {
   "sv-2017": ".sv / .svh",
   "sv-2012": ".sv / .svh",
   v2001: ".v",
@@ -2187,14 +2190,14 @@ export function readdirNames(dir: string): string[] {
  * @param list - `(dir) => string[]`,列子目录名。
  * @returns 候选绝对路径(不保证存在,交给 probe 判)。
  */
-function expandPattern(root: string, pattern: string, list: string[]): string[] {
+function expandPattern(root: string, pattern: string, list: (dir: string) => string[]): string[] {
   let current = [root];
   for (const segment of String(pattern).split("\\")) {
     if (segment === "") continue;
     const next = [];
     for (const dir of current) {
       if (segment.includes("*")) {
-        for (const name of list(dir)) if (matchesPattern(name, segment)) next.push(join(dir, name));
+        for (const name of list(dir)) if (matchesPattern(String(name), segment)) next.push(join(dir, name));
       } else {
         next.push(join(dir, segment));
       }
@@ -2239,8 +2242,8 @@ export function detectTools(
   readVersion = queryVersion,
   fields = undefined
 ) {
-  const hits = [];
-  const seen = new Set();
+  const hits: Array<{ field: string; tool: string; label: string; path: string; source: string; version?: unknown; versionError?: unknown; versionNote?: string }> = [];
+  const seen = new Set<string>();
   const exists = (path: string, kind = "file"): boolean => {
     try {
       return probe(path, kind) === true;
@@ -2251,7 +2254,7 @@ export function detectTools(
   /** 展开一组模式,留下真实存在的(同一个路径只留一次)。 */
   const expand = (globs: Array<{ root: string; pattern: string }>): string[] =>
     globs
-      .flatMap((glob) => expandPattern(expandEnv(glob.root, env), expandEnv(glob.pattern, env), list))
+      .flatMap((glob: { root: string; pattern: string }) => expandPattern(expandEnv(glob.root, env), expandEnv(glob.pattern, env), list))
       .filter((path, index, all) => exists(path) && all.indexOf(path) === index);
 
   /**
@@ -2260,11 +2263,11 @@ export function detectTools(
    * 只报实测到的东西:不做"版本够不够"的判定(没有字段声明硬要求了 —— 带 `expected` 的
    * 那套判定随终端字段一起删了,2026-09-21;用户对 Python 3 没有统一版本约束)。
    */
-  const versionInfo = (target: string, path: string): Record<string, unknown> => {
+  const versionInfo = (target: DetectTarget, path: string): Record<string, unknown> => {
     if (target.version === undefined) return {};
-    let queried;
+    let queried: { version?: unknown; error?: unknown };
     try {
-      queried = readVersion(path, target.version) ?? {};
+      queried = (readVersion(path, target.version) ?? {}) as { version?: unknown; error?: unknown };
     } catch (error) {
       queried = { error: String((error as { message?: string })?.message ?? error) };
     }
@@ -2278,7 +2281,7 @@ export function detectTools(
   // 只报**机器上找到了什么**,不报"你已经填了什么" —— 已保存的设置与页面上**未保存的改动**
   // 可能不是一回事(用户刚换了工具还没保存),由宿主来回声旧值就会出现
   // "换完工具点检测,报的还是我原来填的那条路径"。填没填、在不在,设置页自己知道。
-  const wanted = Array.isArray(fields) ? new Set(fields.map(String)) : undefined;
+  const wanted = Array.isArray(fields) ? new Set((fields as unknown[]).map(String)) : undefined;
   const targets = wanted === undefined
     ? DETECT_TARGETS
     : DETECT_TARGETS.filter((target) => wanted.has(target.field));
@@ -2288,6 +2291,7 @@ export function detectTools(
     const present = known.map((path) => ({ path, source: "known" }));
     if (present.length === 0) {
       for (const dir of pathDirs(env)) {
+        if (target.exe === undefined) break;
         const path = join(dir, target.exe);
         if (exists(path)) present.push({ path, source: "path" });
       }
@@ -2419,7 +2423,7 @@ export const MINIMAL_SETUP = [
  * @param toolKey - TOOL_CATALOG 的键(如 `vivado`)。
  * @returns 提示行数组;没有对应指引时为空数组。
  */
-export function installGuidance(toolKey: string): string | undefined {
+export function installGuidance(toolKey: string): string[] {
   const hint = INSTALL_HINTS[toolKey];
   if (hint === undefined) return [];
   const cost = hint.free === true ? "免费" : "商业授权";

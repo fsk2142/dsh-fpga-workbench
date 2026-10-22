@@ -1932,6 +1932,32 @@ check(
   /backup === undefined[\s\S]{0,600}?renameSync\(INSTALLED, stray\)/u.test(installSource2),
   "首次安装失败时把坏副本**改名隔离**(没有旧版本可恢复,也不留在盘上;Q4-05)"
 );
+// ── 设置 facade 的并发安全依赖「get() 每次都 sync()」────────────────────────
+//
+// `createSettingsFacade().update` 的结构是:
+//     const next = { ...current, ...patch };   // 用当前内存值算新值
+//     await service.update(NS, patch);         // 中间有 await
+//     current = next;                          // 再用【旧 current + 自己的 patch】覆盖
+//
+// 两个并发 update 各自基于同一个旧 current 算 next,后者会把前者的改动从**内存**里抹掉。
+// 落盘不会错(传给宿主的是增量 patch)。真正兜住这个漏洞的是 `get()` 里那句 `sync()` ——
+// 它每次都从宿主 describe 重新读,把错的内存值覆盖掉。
+//
+// 也就是说:**这条链的并发正确性是靠间接机制保证的**。所以盯住它:
+// get() 必须调用 sync(),否则并发保存会表现为「保存成功但界面显示旧值」。
+{
+  const hostSource = stripComments(readFileSync(join(ROOT, "lib", "index.js"), "utf8"));
+  const facadeBody = /function createSettingsFacade\([\s\S]*?\n\}/u.exec(hostSource)?.[0] ?? "";
+  check(
+    /get:\s*\(\)\s*=>\s*\{[\s\S]{0,200}?sync\(\)/u.test(facadeBody),
+    "设置 facade 的 get() 每次都 sync() 从宿主重读（并发保存靠它兜底，见脚本注释）"
+  );
+  check(
+    /service\.update\(NS,\s*patch\)/u.test(facadeBody),
+    "设置 facade 传给宿主的是**增量 patch**(不是整行),否则并发会互相覆盖"
+  );
+}
+
 // ── 用到的 node:fs 符号必须都导入(第四轮复审 1.1 的根因守卫)──────────────────
 //
 // 实测踩过:`lib/index.js` 里加了 `renameSync(...)` 却忘了加进 `import {...} from "node:fs"` ——

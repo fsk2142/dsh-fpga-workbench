@@ -211,7 +211,17 @@ check(
 );
 check(modeRow?.disabled !== true, "模式行没有被 disabled");
 const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-check(manifest.exports?.["./mode"] === "./lib/mode.js", "package.json 声明了 exports['./mode']");
+// `./mode` 的写法在迁移到 tsdown 后变了：原来是裸字符串 `"./lib/mode.js"`，
+// 现在是带类型的条件导出 `{ types, default }`。两种都该认 —— 断言要守的是
+// 「`./mode` 指向 lib/mode.js 这个文件」，不是某种 JSON 形状。
+{
+  const modeExport = manifest.exports?.["./mode"];
+  const target = typeof modeExport === "string" ? modeExport : modeExport?.default;
+  check(
+    target === "./lib/mode.js",
+    `package.json 声明了 exports['./mode'] 指向 ./lib/mode.js（实际 ${JSON.stringify(modeExport)}）`
+  );
+}
 check((manifest.files ?? []).includes("lib"), "files 白名单含 lib(mode 半侧才装得进去)");
 
 // 自带技能目录用 customSkillDirs 声明;!!js 的 baseUrl 是**预设目录**(与官方 cordis 预设

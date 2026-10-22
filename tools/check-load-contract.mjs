@@ -295,20 +295,39 @@ for (const name of readdirSync(LIB).filter((entry) => entry.endsWith(".js"))) {
 check(linkProblems.length === 0, "lib/ 内部相对 import 都能解析", linkProblems.join("\n        "));
 
 // ── 3. 客户端 bundle 契约 ───────────────────────────────────────────────────
-const client = read("lib/client.js");
-const clientCode = client
+// 源码文本断言读 **src/**，不读 lib/（2026-10-22 迁移到 tsdown 后调整）。
+//
+// 这些断言验的是"源码写对了"——比如 `/export function apply/`、`/export const inject =/`。
+// 迁移后 lib/ 是编译产物，导出被聚合成 `export { apply, inject, ... }`，源码语法全变了，
+// 断言会全部失效（误报"缺失"）。判据本身没错，只是目标该指向源码。
+// 客户端有**两类**断言，目标不同，别搞混（2026-10-22 迁移时踩过）：
+//
+//   · **产物**类：loader id、`exports.apply`、无 static import、CSS 文本 —— 这些
+//     只能读 `lib/client.js`。迁移前源码里手写过那层包装，所以读源码也碰巧能过；
+//     迁移后源码是标准 ESM、包装由 tsdown 生成，只有产物里才有这些特征。
+//   · **源码**类：业务逻辑里的字符串常量（见文件后半段）。
+//
+// 早先我把这一整段都改成读 src/，结果 5 条产物断言全红 —— 它们本来就该读产物。
+const clientBundle = read("lib/client.js");
+const clientCode = clientBundle
   .replace(/\/\*[\s\S]*?\*\//gu, " ")
   .split("\n")
   .filter((line) => !line.trim().startsWith("//"))
   .join("\n");
-const loaderId = /__ModuleLoader__\.load\(\{[\s\S]{0,120}?id:\s*"([^"]+)"/u.exec(client)?.[1];
+const client = read("src/client/index.ts");
+const loaderId = /__ModuleLoader__\.load\(\{[\s\S]{0,120}?id:\s*"([^"]+)"/u.exec(clientBundle)?.[1];
 check(loaderId === manifest.name, `bundle 的 loader id 等于包名(实际 ${String(loaderId)} vs ${manifest.name})`);
-check(/exports\.inject\s*=\s*\[/u.test(client), "exports.inject 是数组(写成对象会让整行不激活)");
-check(!/exports\.inject\s*=\s*\{/u.test(client), "exports.inject 不是对象字面量");
-check(/exports\.apply\s*=/u.test(client), "导出 apply");
-check(/exports\.name\s*=/u.test(client), "导出 name");
-check(!/require\(\s*["']\./u.test(client), "bundle 内没有相对 require(会被拼进组合后解析失败)");
-check(!/^\s*import\s/mu.test(client), "bundle 内没有 static import");
+// `inject` 的**形状**要看源码里的定义。
+//
+// tsdown 产物里是 `exports.inject = inject`（引用变量），字面量 `[` 不在那儿 ——
+// 断言"必须是数组"要查 `const inject = [...]` / `export const inject = [...]`。
+// 而"产物里确实导出了 inject 这个名字"由上面那条 `exports.inject =` 守着。
+check(/export\s+const\s+inject\s*=\s*\[/u.test(client), "源码里 inject 是数组字面量(写成对象会让整行不激活)");
+check(!/export\s+const\s+inject\s*=\s*\{/u.test(client), "源码里 inject 不是对象字面量");
+check(/exports\.apply\s*=/u.test(clientBundle), "导出 apply");
+check(/exports\.name\s*=/u.test(clientBundle), "导出 name");
+check(!/require\(\s*["']\./u.test(clientBundle), "bundle 内没有相对 require(会被拼进组合后解析失败)");
+check(!/^\s*import\s/mu.test(clientBundle), "bundle 内没有 static import");
 check(
   /\.fpga-set\s+\.fpga-set-collapsed\s*\{\s*display:\s*none/u.test(client),
   "收起样式的优先级高于工具体与能力卡的 display:flex"
@@ -318,7 +337,7 @@ check(!/settingsScope/u.test(clientCode) && /plugins\.bundle\.config/u.test(clie
 check(/settings\.section/u.test(clientCode), "客户端同时注册设置菜单入口 settings.section");
 
 // ── 4. 宿主半侧 ────────────────────────────────────────────────────────────
-const host = read("lib/index.js");
+const host = read("src/index.ts");
 const hostCode = host
   .replace(/\/\*[\s\S]*?\*\//gu, " ")
   .split("\n")
@@ -358,7 +377,7 @@ check(
 // 这里只钉住新接口的两个关键形状,避免把旧 register 契约误当成当前要求。
 check(/service\.update\(NS, patch\)/u.test(hostCode), "settings 写入按当前行的 NS 调用 update(NS, patch)");
 
-const mode = read("lib/mode.js");
+const mode = read("src/mode.ts");
 check(/export const inject = \["systemPrompt"\]/u.test(mode), `模式半侧 inject 是 ["systemPrompt"]`);
 check(/export function apply/u.test(mode), "模式半侧导出 apply");
 // 0.2.0 的 settings 服务只有 describe/update;会话提示必须从 descriptor 取本插件的真实值。

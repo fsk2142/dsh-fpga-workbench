@@ -92,7 +92,7 @@ check(
 );
 const packageManifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 check(packageManifest.comment === undefined, "package.json 不携带非标准 comment 字段");
-const runtimeToolchainSource = readFileSync(join(ROOT, "lib", "toolchain.js"), "utf8");
+const runtimeToolchainSource = readFileSync(join(ROOT, "src", "toolchain.ts"), "utf8");
 check(
   !/export (?:const|function) (?:CLEANUP_KINDS|cleanupEntry|formatCleanup|TEMP_GRACE_MS|listTempLeftovers)\b/u.test(runtimeToolchainSource),
   "仅开发脚本使用的清理报告逻辑不进入运行时 lib/toolchain.js"
@@ -763,14 +763,14 @@ check(missingKeys(ready).length === 0, "已登记工具不会制造全局缺失�
 // 客户端**不再重复一份字段定义**:标签、说明、下拉选项、默认值、分组全部由宿主那条状态
 // 路由返回。所以这里不再比"两边 hint 是否逐字一致"(那种重复已经没有),改成断言更强的东西:
 // 客户端里**不许出现任何字段名**,它只能照着宿主给的字段渲染。
-const clientSource = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
+const clientSource = readFileSync(new URL("../src/client/index.ts", import.meta.url), "utf8");
 check(clientSource.includes(`"${NS}"`), `客户端命名空间与宿主一致(${NS})`);
 check(clientSource.includes("/plugins/fpga-workbench/toolchain"), "客户端用的状态路由与宿主一致");
 check(clientSource.includes("/plugins/fpga-workbench/detect"), "客户端用的检测路由与宿主一致");
 check(clientSource.includes("/plugins/fpga-workbench/selfcheck"), "客户端用的自检路由与宿主一致");
 // 「运行自检」跑在**用户正在用的宿主进程里**:它必须只读 —— 不起进程、不写文件、不删文件。
 // 真机自检(npm test 那一套,含 Vivado/ModelSim)留在仓库的 tools/ 下,发布包里没有它们。
-const selfCheckSource = readFileSync(new URL("../lib/selfcheck.js", import.meta.url), "utf8");
+const selfCheckSource = readFileSync(new URL("../src/selfcheck.ts", import.meta.url), "utf8");
 const selfCheckForbidden = [
   "spawnSync",
   "execSync",
@@ -787,7 +787,7 @@ const selfCheckForbidden = [
 check(selfCheckForbidden.length === 0, "自检实现是只读的(不起进程、不写/删文件)", selfCheckForbidden.join(", "));
 check(
   /export function runSelfCheck/u.test(selfCheckSource) &&
-    /SELFCHECK_PATH/u.test(readFileSync(new URL("../lib/index.js", import.meta.url), "utf8")),
+    /SELFCHECK_PATH/u.test(readFileSync(new URL("../src/index.ts", import.meta.url), "utf8")),
   "宿主导出 runSelfCheck 并注册自检路由常量"
 );
 const hardcoded = KEYS.filter((key) => clientSource.includes(`"${key}"`));
@@ -889,7 +889,7 @@ check(
 );
 
 // 不再往会话提示里注入任何东西 —— 这是刻意的设计决定
-const hostSource = readFileSync(new URL("../lib/index.js", import.meta.url), "utf8");
+const hostSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 check(!hostSource.includes("systemPrompt"), "宿主不注册 systemPrompt 段");
 // 状态要跟着**页面上那一份**走:带查询串问一次 = 预演未保存的改动;桌面壳由宿主告知页面
 // (靠页面嗅探 UA 实测会失效 —— 在 DSH Desktop 里被当成普通浏览器,退了页面内列表)。
@@ -1400,7 +1400,7 @@ check(
 check(detectTools(detectProbe([]), listStub({}), { PATH: "" }).length === 0, "检测:什么都没有时返回空(不抛、不猜)");
 // 检测**只在版本查询那一处**起进程(R-03):别的地方仍然只读文件系统 —— "点一下检测"
 // 不该变成"可能挂住或跑一堆命令"。所以按源码定位:起进程的调用只许出现在 queryVersion 里。
-const toolchainSource = readFileSync(new URL("../lib/toolchain.js", import.meta.url), "utf8");
+const toolchainSource = readFileSync(new URL("../src/toolchain.ts", import.meta.url), "utf8");
 const toolchainLines = toolchainSource.split("\n");
 const spawnPattern = /child_process|execSync|spawnSync|execFile|spawn\(/u;
 const importLine = toolchainLines.findIndex((line) => spawnPattern.test(line) && line.startsWith("import "));
@@ -1694,8 +1694,10 @@ const vhdlText = describeEnv({ ...prepared, rtlLangStd: "vhdl-2008" }, () => tru
 check(vhdlText.includes("VHDL-2008") && vhdlText.includes(".vhd"), "换语言后扩展名跟着变");
 
 // 注册在**模式半侧**:插件行是全局作用域,普通会话也会看到 FPGA 工具链信息
-const modeSource = readFileSync(new URL("../lib/mode.js", import.meta.url), "utf8");
-check(modeSource.includes("systemPrompt.section("), "模式半侧注册提示段");
+const modeSource = readFileSync(new URL("../src/mode.ts", import.meta.url), "utf8");
+// 迁移到 TS 后改成了可选链 `ctx.systemPrompt?.section(` —— 那个 `?.` 是为了通过
+// `strict`（`systemPrompt` 是可选注入），运行时行为不变。断言认两种写法。
+check(/systemPrompt\??\.section\(/u.test(modeSource), "模式半侧注册提示段");
 check(modeSource.includes('inject = ["systemPrompt"]'), "模式半侧的 inject 是服务名数组(写成对象会让这一行整个不激活)");
 check(modeSource.includes("describeEnv(") && modeSource.includes("probeFilesystem"), "模式半侧复用 lib/toolchain.js 的定义,不另写一份文案");
 check(!modeSource.includes("child_process") && !modeSource.includes("spawn("), "模式半侧不起进程(命令交给 shell 工具跑)");
@@ -1971,7 +1973,7 @@ check(
 // 也就是说:**这条链的并发正确性是靠间接机制保证的**。所以盯住它:
 // get() 必须调用 sync(),否则并发保存会表现为「保存成功但界面显示旧值」。
 {
-  const hostSource = stripComments(readFileSync(join(ROOT, "lib", "index.js"), "utf8"));
+  const hostSource = stripComments(readFileSync(join(ROOT, "src", "index.ts"), "utf8"));
   const facadeBody = /function createSettingsFacade\([\s\S]*?\n\}/u.exec(hostSource)?.[0] ?? "";
   check(
     /get:\s*\(\)\s*=>\s*\{[\s\S]{0,200}?sync\(\)/u.test(facadeBody),

@@ -22,7 +22,19 @@ const FORBIDDEN_PRESET_FILES = [
 ];
 const FORBIDDEN_PREFIXES = ["tools/"];
 
-const npmExecPath = process.env.npm_execpath ?? (() => {
+// **必须确认 `npm_execpath` 真的是 npm**（2026-10-22 迁移后踩到）。
+//
+// 这个变量由包管理器在跑 scripts 时设置。`pnpm test` 跑起来时它指向 **pnpm 自己**的
+// CLI，于是下面会执行 `pnpm pack --dry-run --json --ignore-scripts` —— pnpm 不认识
+// `--ignore-scripts`，直接报 `Unknown option: 'ignore-scripts'`，退出码 1，整项检查假红。
+//
+// 更隐蔽的是：**单独跑 `node tools/check-package.mjs` 是通过的**（那时没有 npm_execpath），
+// 只有经 pnpm/npm 驱动时才失败。所以要按"变量指向的可执行文件是不是 npm"判断，
+// 而不是"变量在不在"。
+const npmExecPath = (() => {
+  const fromEnv = process.env.npm_execpath;
+  // 只接受 `npm-cli.js`（npm 的入口）；pnpm / yarn 的 execpath 一律不认。
+  if (typeof fromEnv === "string" && /npm-cli\.js$/u.test(fromEnv.replaceAll("\\", "/"))) return fromEnv;
   if (process.platform !== "win32") return null;
   const found = spawnSync("where.exe", ["npm"], { encoding: "utf8", windowsHide: true });
   for (const line of `${found.stdout ?? ""}`.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean)) {

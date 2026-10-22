@@ -1895,11 +1895,23 @@ function renderBrowser(field, browse, browseTo, setBrowse, commit) {
 }
 
 /**
- * 挂载客户端半侧:在 DSH 0.1.7 的插件配置页注册本插件的设置卡。
+ * 挂载客户端半侧:把本插件的设置面板挂到**插件详情页**。
+ *
+ * 位置是「侧边栏 → 插件 → dsh-fpga-workbench → 配置」。为什么只在插件页、**不在
+ * 「设置」侧栏再放一份**（2026-10-22 按用户的取舍）:
+ *
+ *   · 这里的配置基本是**装一次就不再动**（工具路径、模板来源、环节偏好），
+ *     不是日常要调的东西，放在「设置」里只是占一格；
+ *   · 宿主本身就把 `plugins.bundle.config` 定义为"插件自己的配置"，
+ *     语义上它就该在插件页，而不是混进全局设置。
+ *
+ * ⚠️ 删掉 `settings.section` 之后，改配置的唯一入口就是这个插件详情页
+ * （或者直接编辑 profile 的 `cordis.patch.yml` 里那段 `config:` 再重启）。
+ * 工具调用、路径探测、会话提示**都不依赖这个 UI** —— 它们走宿主 settings 服务
+ * 与文件系统，所以即使入口找不到也不影响插件工作。
  *
  * 旧版使用 `settings.plugin.item` + `settingsScope`;0.1.7 改为
  * `plugins.bundle.config`,并由宿主设置路由提供当前行值。
- * 同时注册到 `settings.section`,让设置菜单栏也有「FPGA 开发模式」入口。
  * @param ctx - client plugin context carrying `slots`.
  */
 function apply(ctx) {
@@ -1910,17 +1922,6 @@ function apply(ctx) {
         key: "dsh-fpga-workbench",
         order: 500,
         label: () => LABEL
-      },
-      SettingsPanel
-    )
-  );
-  ctx.slots.inject("settings.section", () =>
-    ctx.slots.register(
-      {
-        name: "settings.section",
-        id: NS,
-        order: 500,
-        label: LABEL
       },
       SettingsPanel
     )

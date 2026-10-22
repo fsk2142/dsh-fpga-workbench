@@ -334,7 +334,14 @@ check(
 );
 check(!/settingsScope/u.test(clientCode) && /plugins\.bundle\.config/u.test(clientCode),
   "客户端使用 0.1.7 的 plugins.bundle.config 槽(不再依赖 settingsScope)");
-check(/settings\.section/u.test(clientCode), "客户端同时注册设置菜单入口 settings.section");
+// **不在「设置」侧栏再放一份**（2026-10-22 按用户的取舍）。
+//
+// 这些配置装一次就不怎么动，宿主也把 `plugins.bundle.config` 定义成"插件自己的配置"，
+// 所以只挂在插件详情页。这条断言防的是"以后有人顺手把 settings.section 加回来"。
+check(
+  !/settings\.section/u.test(clientCode),
+  "客户端**不再**注册 settings.section（配置只在「插件 → dsh-fpga-workbench」里改）"
+);
 
 // ── 4. 宿主半侧 ────────────────────────────────────────────────────────────
 const host = read("src/index.ts");

@@ -3,9 +3,65 @@
 // 这里刻意不 import toolchain.js:能力定义由调用方传入，避免模板库与设置模型形成循环依赖。
 // 扫描只发生在设置页展开能力卡时；状态与会话提示只调用 resolveTemplateSelection 做单文件探测。
 
-import { closeSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+/**
+ * 一个模板分类（{@link TEMPLATE_CATEGORIES} 的一项）。
+ *
+ * `directory` 同时决定内置相对路径与用户库目录 —— 不接受请求方自定义目录。
+ */
+export interface CategoryLike {
+  key: string;
+  label: string;
+  directory: string;
+  extensions: string[];
+  [extra: string]: unknown;
+}
+
+/**
+ * 一张能力卡里"我需要哪些分类的模板"的定义。
+ *
+ * 它来自 `toolchain.ts` 的 `CapabilitySpec`，但这里**只声明用到的成员** ——
+ * 两个模块互相引用类型会造成循环依赖，而这个文件只需要 key / templates。
+ */
+export interface CapabilityLike {
+  key: string;
+  templates?: Array<{ key: string; category: string; label?: string; [extra: string]: unknown }>;
+  [extra: string]: unknown;
+}
+
+/** 一个内置模板（{@link BUILTIN_TEMPLATES} 的一项）。 */
+export interface BuiltinTemplate {
+  category: string;
+  id: string;
+  relativePath: string;
+  label: string;
+  compatibleTools: string[];
+  [extra: string]: unknown;
+}
+
+/** 模板库根的检查结果。 */
+export interface RootState {
+  configured: boolean;
+  present: boolean;
+  error?: string;
+}
+
+/** 一个分类的扫描结果。 */
+export interface CategoryScan {
+  /** 层级过滤后被隐藏了几项（调用方按 capability 的层级补上）。 */
+  hiddenByLevel?: number;
+  key: string;
+  label: string;
+  directory: string;
+  items: Array<Record<string, unknown>>;
+  builtinCount: number;
+  libraryCount: number;
+  truncated: boolean;
+  errors: string[];
+}
 
 /**
  * 用户模板可以(不必)在文件头声明自己属于哪一层:
@@ -24,7 +80,7 @@ const LEVEL_MARKER = /fpga-workbench-level\s*:\s*(module|project)/iu;
  * —— 用户模板库里放一个几百 MB 的源文件,单次调用就是几百毫秒加上整份文件的内存。
  * 层级声明就写在文件最前面,读 4 KB 足够。
  */
-function readHead(path, bytes = 4096) {
+function readHead(path: string, bytes = 4096): string {
   const fd = openSync(path, "r");
   try {
     const buffer = Buffer.allocUnsafe(bytes);
@@ -36,7 +92,7 @@ function readHead(path, bytes = 4096) {
 }
 
 /** 读文件头判断用户模板声明的层级;没声明或读不到就是 undefined(未声明)。 */
-function declaredLevel(path) {
+function declaredLevel(path: string): string | undefined {
   try {
     return LEVEL_MARKER.exec(readHead(path))?.[1]?.toLowerCase();
   } catch {
@@ -45,7 +101,7 @@ function declaredLevel(path) {
 }
 
 /** 能力属于哪一层:能力键是 module-* / project-*(其余按 undefined 处理,不做过滤)。 */
-function capabilityLevel(definition) {
+function capabilityLevel(definition: CapabilityLike): string | undefined {
   const key = String(definition?.key ?? "");
   if (key.startsWith("module-")) return "module";
   if (key.startsWith("project-")) return "project";
@@ -64,7 +120,7 @@ export const BUNDLED_TEMPLATE_ROOT = fileURLToPath(
  * 固定模板分类。directory 同时决定内置相对路径与用户库目录，不接受请求方自定义目录。
  * 数组顺序只用于界面稳定展示，不表示执行顺序。
  */
-export const TEMPLATE_CATEGORIES = [
+export const TEMPLATE_CATEGORIES: CategoryLike[] = [
   { key: "rtl", label: "RTL 模板", directory: "rtl", extensions: [".sv", ".v", ".vhd", ".vhdl"] },
   { key: "constraints", label: "约束模板", directory: "constraints", extensions: [".xdc"] },
   // 工程约束与模块约束**共用同一个用户库目录**(不按层级拆目录),只是分类不同、各自有内置默认。
@@ -92,7 +148,7 @@ const CATEGORY_BY_KEY = new Map(TEMPLATE_CATEGORIES.map((category) => [category.
  * 内置模板。compatibleTools 中的 "*" 表示与具体工具无关；其余项只对明确工具适配。
  * auto 尚未决定具体工具，因此可以看到候选默认；显式 Quartus / 自定义工具则不会误用 Vivado/ModelSim 脚本。
  */
-export const BUILTIN_TEMPLATES = [
+export const BUILTIN_TEMPLATES: BuiltinTemplate[] = [
   builtin("rtl", "builtin:rtl/systemverilog-module.sv", "rtl/systemverilog_module.sv", "SystemVerilog RTL 模块", ["*"]),
   builtin("constraints", "builtin:constraints/vivado-module-xdc.xdc", "constraints/vivado_module_xdc.xdc", "Vivado 模块约束(XDC)", ["vivado"]),
   builtin("verification", "builtin:verification/python_data_verification.py", "verification/python_data_verification.py", "Python 数据验证", ["python"]),
@@ -114,7 +170,7 @@ export const BUILTIN_TEMPLATES = [
 ];
 
 /** v1/v2 插件自带的六个平面模板 → 当前分类模板。只认插件目录后缀，不吞用户同名文件。 */
-const LEGACY_BUNDLED_TEMPLATES = {
+const LEGACY_BUNDLED_TEMPLATES: Record<string, { file: string; id: string }> = {
   rtl: { file: "rtl.sv", id: "builtin:rtl/systemverilog-module.sv" },
   constraints: { file: "constraints.xdc", id: "builtin:constraints/vivado-module-xdc.xdc" },
   verification: { file: "comp.py", id: "builtin:verification/python_data_verification.py" },
@@ -123,7 +179,7 @@ const LEGACY_BUNDLED_TEMPLATES = {
   synthesis: { file: "run_synth.tcl", id: "builtin:synthesis/vivado-module-synthesis.tcl" }
 };
 
-function builtin(categoryKey, id, relativePath, label, compatibleTools) {
+function builtin(categoryKey: string, id: string, relativePath: string, label: string, compatibleTools: string[]): BuiltinTemplate {
   return {
     id,
     category: categoryKey,
@@ -135,7 +191,10 @@ function builtin(categoryKey, id, relativePath, label, compatibleTools) {
 
 /** 带 HTTP 建议状态的输入错误；宿主接口据此返回非 2xx。 */
 export class TemplateLibraryRequestError extends Error {
-  constructor(message, status = 400) {
+  /** HTTP 状态码：路由层直接用它回响应。 */
+  status: number;
+
+  constructor(message: string, status = 400) {
     super(message);
     this.name = "TemplateLibraryRequestError";
     this.status = status;
@@ -147,7 +206,17 @@ export class TemplateLibraryRequestError extends Error {
  * @param options - `{ capability, capabilities, libraryRoot }`。
  * @returns 各分类的内置项、用户库项、错误与截断信息。
  */
-export function scanTemplates({ capability, capabilities, libraryRoot = "" }) {
+export function scanTemplates({
+  capability,
+  capabilities,
+  libraryRoot = ""
+}: { capability: string; capabilities?: readonly CapabilityLike[]; libraryRoot?: string }): {
+  capability: string;
+  groups: CategoryScan[];
+  library: { path: string; configured: boolean; present: boolean };
+  errors: string[];
+  ok: boolean;
+} {
   const definition = resolveCapabilityDefinition(capability, capabilities);
   const categoryKeys = unique(
     (definition.templates ?? []).map((template) => template?.category).filter((key) => typeof key === "string")
@@ -158,7 +227,11 @@ export function scanTemplates({ capability, capabilities, libraryRoot = "" }) {
 
   const root = String(libraryRoot ?? "").trim();
   const rootState = inspectLibraryRoot(root);
-const groups = categoryKeys.map((key) => scanCategory(CATEGORY_BY_KEY.get(key), root, rootState));
+  // `CATEGORY_BY_KEY.get()` 可能拿不到（请求里给了未知分类）—— 过滤掉而不是把 undefined 传下去。
+  const groups = categoryKeys
+    .map((key) => CATEGORY_BY_KEY.get(key))
+    .filter((entry): entry is CategoryLike => entry !== undefined)
+    .map((entry) => scanCategory(entry, root, rootState));
     // DSH-N02:按层级过滤**用户**模板(内置模板本来就按分类分好了)。未声明的两边都留。
     const level = capabilityLevel(definition);
     for (const group of groups) {
@@ -188,19 +261,20 @@ const groups = categoryKeys.map((key) => scanCategory(CATEGORY_BY_KEY.get(key), 
   };
 }
 
-function resolveCapabilityDefinition(capability, capabilities) {
+function resolveCapabilityDefinition(capability: string, capabilities: readonly CapabilityLike[] | undefined): CapabilityLike {
   const allowed = Array.isArray(capabilities) ? capabilities : [];
-  const key = typeof capability === "string" ? capability : capability?.key;
+  // `capability` 在签名里已经是 string（早期它可能是对象，现在不是了）。
+  const key = capability;
   const definition = allowed.find((entry) => entry?.key === key);
   if (definition === undefined) throw new TemplateLibraryRequestError("未知能力，拒绝扫描模板目录");
   return definition;
 }
 
-function unique(items) {
+function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
-function inspectLibraryRoot(root) {
+function inspectLibraryRoot(root: string): RootState {
   if (root === "") return { configured: false, present: false };
   try {
     const info = lstatSync(root);
@@ -213,10 +287,10 @@ function inspectLibraryRoot(root) {
   }
 }
 
-function scanCategory(category, libraryRoot, rootState) {
+function scanCategory(category: CategoryLike, libraryRoot: string, rootState: RootState): CategoryScan {
   const builtinItems = BUILTIN_TEMPLATES.filter((item) => item.category === category.key).map(builtinScanItem);
-  const errors = [];
-  let userItems = [];
+  const errors: string[] = [];
+  let userItems: Array<Record<string, unknown>> = [];
   let truncated = false;
 
   if (rootState.configured) {
@@ -247,7 +321,7 @@ function scanCategory(category, libraryRoot, rootState) {
   };
 }
 
-function builtinScanItem(item) {
+function builtinScanItem(item: BuiltinTemplate): Record<string, unknown> {
   const path = join(BUNDLED_TEMPLATE_ROOT, ...item.relativePath.split("/"));
   return {
     ...item,
@@ -257,10 +331,10 @@ function builtinScanItem(item) {
   };
 }
 
-function scanUserCategory(libraryRoot, category) {
+function scanUserCategory(libraryRoot: string, category: CategoryLike): { items: Record<string, unknown>[]; truncated: boolean; errors: string[] } {
   const categoryRoot = join(libraryRoot, ...category.directory.split("/"));
-  const errors = [];
-  const items = [];
+  const errors: string[] = [];
+  const items: Array<Record<string, unknown>> = [];
   let truncated = false;
 
   try {
@@ -272,7 +346,7 @@ function scanUserCategory(libraryRoot, category) {
     return { items, truncated, errors: [`用户模板分类无法读取：${errorMessage(error)}`] };
   }
 
-  const visit = (directory) => {
+  const visit = (directory: string): void => {
     if (truncated) return;
     let entries;
     try {
@@ -324,7 +398,7 @@ function scanUserCategory(libraryRoot, category) {
   return { items, truncated, errors };
 }
 
-function ignoredName(name) {
+function ignoredName(name: string): boolean {
   const lower = name.toLowerCase();
   return (
     name.startsWith(".") ||
@@ -343,11 +417,26 @@ function ignoredName(name) {
  * 精确解析一项已保存选择。这里绝不枚举目录；只探测最终文件。
  * @param options - `{ selection, category, tool, libraryRoot, probe }`。
  */
-export function resolveTemplateSelection({ selection = "", category, tool = "auto", libraryRoot = "", probe } = {}) {
+export function resolveTemplateSelection({
+  selection = "",
+  category,
+  tool = "auto",
+  libraryRoot = "",
+  probe
+}: {
+  selection?: string;
+  category: string;
+  tool?: string;
+  libraryRoot?: string;
+  probe?: (path: string, kind?: string) => boolean;
+} = {} as never): Record<string, unknown> {
   const definition = CATEGORY_BY_KEY.get(category);
   if (definition === undefined) {
     return templateProblem(selection, category, "invalid", "模板分类无效");
   }
+  // `probe` 在签名里可选；缺省时退回真文件系统，之后统一用 `check`（必选）——
+  // 内部那几个函数都要必选的 probe，这样它们不必每处判空。
+  const check: (path: string, kind?: string) => boolean = probe ?? ((target: string) => existsSync(target));
 
   const chosen = String(selection ?? "").trim();
   const selectedTool = String(tool ?? "auto").trim() || "auto";
@@ -385,7 +474,7 @@ export function resolveTemplateSelection({ selection = "", category, tool = "aut
       };
     }
     const path = join(BUNDLED_TEMPLATE_ROOT, ...candidate.relativePath.split("/"));
-    const present = fileExists(probe, path);
+    const present = fileExists(check, path);
     return {
       ...candidate,
       selection: "",
@@ -399,12 +488,12 @@ export function resolveTemplateSelection({ selection = "", category, tool = "aut
     };
   }
 
-  if (chosen.startsWith("builtin:")) return resolveBuiltinSelection(chosen, category, selectedTool, probe);
-  if (chosen.startsWith("library:")) return resolveLibrarySelection(chosen, category, libraryRoot, probe);
+  if (chosen.startsWith("builtin:")) return resolveBuiltinSelection(chosen, category, selectedTool, check);
+  if (chosen.startsWith("library:")) return resolveLibrarySelection(chosen, category, libraryRoot, check);
 
   const migratedBuiltin = legacyBundledTemplate(chosen, category);
   if (migratedBuiltin !== undefined) {
-    const resolved = resolveBuiltinSelection(migratedBuiltin.id, category, selectedTool, probe);
+    const resolved = resolveBuiltinSelection(migratedBuiltin.id, category, selectedTool, check);
     return {
       ...resolved,
       selection: chosen,
@@ -415,7 +504,7 @@ export function resolveTemplateSelection({ selection = "", category, tool = "aut
   }
 
   // v1/v2 的六个模板字段保存的是路径。即使路径已不存在也保留，绝不退回内置模板。
-  const present = fileExists(probe, chosen);
+  const present = fileExists(check, chosen);
   return {
     id: chosen,
     selection: chosen,
@@ -431,7 +520,7 @@ export function resolveTemplateSelection({ selection = "", category, tool = "aut
   };
 }
 
-function legacyBundledTemplate(path, category) {
+function legacyBundledTemplate(path: string, category: string): BuiltinTemplate | undefined {
   const definition = LEGACY_BUNDLED_TEMPLATES[category];
   if (definition === undefined) return undefined;
   const normalized = String(path ?? "").replace(/\\/gu, "/").toLowerCase();
@@ -444,18 +533,18 @@ function legacyBundledTemplate(path, category) {
  * 把旧版插件自带的平面模板路径规范化成稳定的分类模板 ID。
  * 用户自己的绝对路径、library: 选择和已经规范化的 builtin: ID 原样保留。
  */
-export function canonicalTemplateSelection(selection, category) {
+export function canonicalTemplateSelection(selection: unknown, category: string): string {
   const chosen = String(selection ?? "").trim();
   return legacyBundledTemplate(chosen, category)?.id ?? chosen;
 }
 
-function samePath(left, right) {
+function samePath(left: string, right: string): boolean {
   const leftPath = resolve(String(left ?? ""));
   const rightPath = resolve(String(right ?? ""));
   return process.platform === "win32" ? leftPath.toLowerCase() === rightPath.toLowerCase() : leftPath === rightPath;
 }
 
-function resolveBuiltinSelection(selection, category, tool, probe) {
+function resolveBuiltinSelection(selection: string, category: string, tool: string, probe: (path: string, kind?: string) => boolean): Record<string, unknown> {
   const candidate = BUILTIN_TEMPLATES.find((item) => item.id === selection && item.category === category);
   if (candidate === undefined) return templateProblem(selection, category, "missing", "已选择的内置模板不存在");
   const path = join(BUNDLED_TEMPLATE_ROOT, ...candidate.relativePath.split("/"));
@@ -476,14 +565,14 @@ function resolveBuiltinSelection(selection, category, tool, probe) {
   };
 }
 
-function resolveLibrarySelection(selection, category, libraryRoot, probe) {
+function resolveLibrarySelection(selection: string, category: string, libraryRoot: string, probe: (path: string, kind?: string) => boolean): Record<string, unknown> {
   const definition = CATEGORY_BY_KEY.get(category);
   const relativePath = selection.slice("library:".length);
-  const expectedPrefix = `${definition.directory}/`;
+  const expectedPrefix = `${(definition as CategoryLike).directory}/`;
   if (!safeLibraryRelative(relativePath) || !relativePath.startsWith(expectedPrefix)) {
     return templateProblem(selection, category, "invalid", "用户模板选择不属于当前分类");
   }
-  if (!allowedTemplateExtension(definition, relativePath)) {
+  if (definition === undefined || !allowedTemplateExtension(definition, relativePath)) {
     return templateProblem(selection, category, "invalid", "已保存模板的扩展名不属于当前分类", "library");
   }
   const root = String(libraryRoot ?? "").trim();
@@ -509,7 +598,7 @@ function resolveLibrarySelection(selection, category, libraryRoot, probe) {
   };
 }
 
-function templateProblem(selection, category, state, warning, source = "unknown") {
+function templateProblem(selection: string, category: string, state: string, warning: string, source = "unknown"): Record<string, unknown> {
   return {
     id: String(selection ?? ""),
     selection: String(selection ?? ""),
@@ -525,7 +614,7 @@ function templateProblem(selection, category, state, warning, source = "unknown"
   };
 }
 
-function compatibleWith(template, tool) {
+function compatibleWith(template: BuiltinTemplate, tool: string): boolean {
   const compatibleTools = template.compatibleTools ?? [];
   if (compatibleTools.includes("*")) return true;
   if (tool === "auto" || tool === "") return true;
@@ -533,19 +622,19 @@ function compatibleWith(template, tool) {
   return compatibleTools.includes(tool);
 }
 
-function safeLibraryRelative(path) {
+function safeLibraryRelative(path: string): boolean {
   if (path === "" || path.startsWith("/") || path.includes("\\") || path.includes(":")) return false;
   const segments = path.split("/");
   return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
-function inside(root, path) {
+function inside(root: string, path: string): boolean {
   const rel = relative(resolve(root), resolve(path));
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
 /** 真实落点也必须在库根内(父目录 junction / symlink 逃逸,F5-04)。 */
-function realPathInside(root, path) {
+function realPathInside(root: string, path: string): boolean {
   try {
     const realRoot = realpathSync(root);
     const real = realpathSync(path);
@@ -556,7 +645,7 @@ function realPathInside(root, path) {
   }
 }
 
-function ordinaryFile(path) {
+function ordinaryFile(path: string): boolean {
   try {
     const info = lstatSync(path);
     return info.isFile() && !info.isSymbolicLink();
@@ -565,7 +654,7 @@ function ordinaryFile(path) {
   }
 }
 
-function fileExists(probe, path) {
+function fileExists(probe: (path: string, kind?: string) => boolean, path: string): boolean {
   if (typeof probe !== "function") return ordinaryFile(path);
   try {
     return probe(path, "file") === true;
@@ -574,14 +663,14 @@ function fileExists(probe, path) {
   }
 }
 
-function allowedTemplateExtension(category, path) {
+function allowedTemplateExtension(category: CategoryLike, path: string): boolean {
   const allowed = category?.extensions;
   if (!Array.isArray(allowed) || allowed.length === 0) return true;
   const ext = `.${String(path).split(".").pop()?.toLowerCase() ?? ""}`;
   return allowed.includes(ext);
 }
 
-function librarySelectionOk(root, path, probe) {
+function librarySelectionOk(root: string, path: string, probe: (path: string, kind?: string) => boolean): boolean {
   if (!fileExists(probe, path)) return false;
   try {
     lstatSync(path);
@@ -591,15 +680,15 @@ function librarySelectionOk(root, path, probe) {
   return ordinaryFile(path) && realPathInside(root, path);
 }
 
-function displayRelative(root, path) {
+function displayRelative(root: string, path: string): string {
   const rel = toPosix(relative(root, path));
   return rel === "" ? "." : rel;
 }
 
-function toPosix(path) {
+function toPosix(path: string): string {
   return path.split(sep).join("/");
 }
 
-function errorMessage(error) {
+function errorMessage(error: unknown): string {
   return error instanceof Error && error.message !== "" ? error.message : String(error);
 }

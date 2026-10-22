@@ -64,10 +64,17 @@ if (!existsSync(INSTALLED)) {
   // 设置页在客户端半侧,所以这里必须有 dsh.client
   check(manifest.dsh?.client?.platform === "web", "清单声明了 dsh.client.platform = web(设置页要靠它)");
   // 预设里那一行按 "包名 + 子路径" 挂模式半侧;exports 少了它,预设会被判成 broken
-  check(
-    manifest.exports?.["./mode"] === "./lib/mode.js",
-    "exports 声明了 ./mode(预设行 dsh-fpga-workbench/mode 靠它解析)"
-  );
+  //
+  // 写法在迁移到 tsdown 后变了：原来是裸字符串，现在是带类型的条件导出
+  // `{ types, default }`。两种都认 —— 要守的是"指向 lib/mode.js"，不是 JSON 形状。
+  {
+    const modeExport = manifest.exports?.["./mode"];
+    const target = typeof modeExport === "string" ? modeExport : modeExport?.default;
+    check(
+      target === "./lib/mode.js",
+      `exports 声明了 ./mode 指向 ./lib/mode.js（预设行 dsh-fpga-workbench/mode 靠它解析；实际 ${JSON.stringify(modeExport)}）`
+    );
+  }
   // schema 用 peer 而不是 dependency:profile 自带这个包,peer 不会触发安装或改锁文件
   check(
     manifest.peerDependencies?.["@deepseek-ai/schemastery"] !== undefined,

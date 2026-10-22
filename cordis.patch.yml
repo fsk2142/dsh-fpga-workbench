@@ -118,6 +118,14 @@
           - id: time-context
             name: '@deepseek-ai/dsh-time-context'
 
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
 
           - id: planning
             name: cordis:group

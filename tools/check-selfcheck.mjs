@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { BUNDLED_SKILLS, runSelfCheck } from "../lib/selfcheck.js";
 import { BUILTIN_TEMPLATES } from "../lib/template-library.js";
 import { FIELDS, LEVEL_DIRS, TOOLS } from "../lib/toolchain.js";
+import { cleanupOwnFixtures } from "./lib/cleanup.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PRESET = join(ROOT, "presets", "fpga-workbench");
@@ -63,10 +64,13 @@ const stripComments = (source) =>
  * @returns 夹具包根。
  */
 let sequence = 0;
+/** 本次运行造出来的全部夹具根 —— 跑完由 `cleanupOwnFixtures` 删掉（只删自己造的）。 */
+const createdFixtures = [];
 const makeFixture = (label, skip, extras = []) => {
   sequence += 1;
   const root = join(TMP, `selfcheck-fixture-${String(process.pid)}-${String(sequence)}`);
   mkdirSync(root, { recursive: true });
+  createdFixtures.push(root);
   cpSync(join(ROOT, "cordis.patch.yml"), join(root, "cordis.patch.yml"));
   for (const tree of ["skills", "templates", "tools", "workspace"]) {
     const source = join(PRESET, tree);
@@ -302,9 +306,26 @@ const clean = makeFixture("clean", new Set());
   );
 }
 
-console.log(`夹具留在:${TMP}(本脚本不删任何文件,请自行处置)`);
-// 兜底:夹具根必须真的存在(否则上面的"缺文件"其实是"夹具没造出来",红灯就成了假象)
+// 兜底:夹具根必须真的存在(否则上面的"缺文件"其实是"夹具没造出来",红灯就成了假象)。
+// **必须在清理之前做** —— 清理掉之后就判断不了了。
 check(existsSync(clean.root) && statSync(clean.root).isDirectory(), "完整夹具真的建出来了");
+
+// 跑完把自己造的夹具删掉。
+//
+// 为什么改这里(2026-10-22):原来这条脚本每次运行造 12 个夹具、约 17 MB,且明确
+// "不删"。跑几十次之后 `.tmp/` 堆了 103 个 selfcheck 夹具、145 MB,偶发地把
+// `npm test` 搞成不稳定(被占用 / 撞名)。**用户文件仍然零删除** —— 这里删的只是
+// 本次运行自己 mkdir 出来的目录(`createdFixtures`),不扫、不猜、不碰别人的东西。
+const cleaned = cleanupOwnFixtures(createdFixtures);
+if (cleaned.failed.length > 0) {
+  console.log(
+    `\n有 ${String(cleaned.failed.length)} 个本次夹具没删掉（不影响结论）:${cleaned.failed
+      .map((item) => `${item.path}（${item.reason}）`)
+      .join("、")}`
+  );
+} else {
+  console.log(`\n已清理本次运行的 ${String(cleaned.removed.length)} 个夹具目录。`);
+}
 
 console.log(
   failures.length > 0

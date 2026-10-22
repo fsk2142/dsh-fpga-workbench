@@ -2,6 +2,22 @@
 
 这里集中放开发自检、发布包边界与历史决策。最终用户的安装与使用说明留在根目录 README。
 
+## 发布：tag 与 Release 都要
+
+**打 tag 只解决"代码有个标记"，建 GitHub Release 才解决"用户看得见改了什么"。**
+插件市场读的是 **Releases**，不是 git tag —— 只有 tag 的话，市场里会显示「有新版本」
+却说不出更新内容，用户只看到一串 SHA。
+
+发版顺序：
+
+```powershell
+git tag -a v0.7.0 -m "…"            # 1. 打 tag
+git push origin main v0.7.0         # 2. 推送代码与 tag
+# 3. 建 Release（gh CLI 或 GitHub API；正文写用户需要知道的事）
+```
+
+`tools/probes/audit-rules.mjs` 会核对这条约定在文档里有没有写（规则 §2.4）。
+
 ## 发布包边界
 
 - `@deepseek-ai/schemastery` 使用 peer dependency：宿主已经提供它，插件只声明兼容要求，不触发重复安装或锁文件改动。

@@ -45,7 +45,7 @@ import {
   toolLevelPrefix,
   toolPath
 } from "../lib/toolchain.js";
-import { TEMP_GRACE_MS, listTempLeftovers } from "./lib/cleanup.mjs";
+import { TEMP_GRACE_MS, cleanupOwnFixtures, listTempLeftovers } from "./lib/cleanup.mjs";
 import {
   BUNDLED_TEMPLATE_ROOT,
   BUILTIN_TEMPLATES,
@@ -59,13 +59,18 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // fixture 名带进程号:`npm test` 与 `npm run test:installed` 跑的是**同一批检查**,并行执行时
 // 同名目录会互相踩(一个正在写、另一个把它当成上一轮的残留)。
 const RUN_ID = String(process.pid);
-// .tmp/ 里的 fixture **不再删除**(用户定案:绝不永久删除)—— 只列出来报给使用者处置。
-// 代价是 `.tmp/` 会一直增长,所以开头把上次留下的列一次,让人看得见它有多少。
+// .tmp/ 里的 fixture:本次运行造的由本脚本**自己删掉**(见文件末尾);别处留下的一律只列不删。
+// 用户文件仍然零删除 —— 这条边界没变,变的只是"测试自己造的东西自己收"。
 const TMP_ROOT = join(ROOT, ".tmp");
 const FIXTURE_PREFIXES = ["backup-check-", "stale-check-", "prune-skills-", "browse-fixture", "preset-sync-", "sweep-check-", "template-library-"];
-const leftoversAtStart = listTempLeftovers(TMP_ROOT, FIXTURE_PREFIXES);
+/**
+ * 本次运行创建的 fixture 根目录。每个 `join(TMP_ROOT, ...)` 造出来的目录都要 push 进来,
+ * 否则它会留在磁盘上 —— 这正是 `.tmp/` 过去只涨不减的原因。
+ */
+const CREATED_FIXTURES = [];
+const leftoversAtStart = listTempLeftovers(TMP_ROOT, FIXTURE_PREFIXES).filter((entry) => entry.pending);
 if (leftoversAtStart.length > 0) {
-  console.log(`(.tmp/ 里有 ${leftoversAtStart.length} 项上次留下的 fixture,按用户定案不删除、只报告)`);
+  console.log(`(.tmp/ 里有 ${leftoversAtStart.length} 项历史遗留 fixture,只列出、不删除)`);
 }
 
 const failures = [];
@@ -98,6 +103,7 @@ check(existsSync(join(ROOT, "tools", "lib", "cleanup.mjs")), "开发侧清理报
 //
 // 夹具故意留在 .tmp/ 中(本仓库的零删除约定)。每次用 PID 分开，避免并行自检互相踩。
 const TEMPLATE_LIBRARY_FIXTURE = join(TMP_ROOT, `template-library-${RUN_ID}`);
+CREATED_FIXTURES.push(TEMPLATE_LIBRARY_FIXTURE);
 mkdirSync(join(TEMPLATE_LIBRARY_FIXTURE, "rtl", "vendor"), { recursive: true });
 mkdirSync(join(TEMPLATE_LIBRARY_FIXTURE, "rtl", "zz-many"), { recursive: true });
 writeFileSync(join(TEMPLATE_LIBRARY_FIXTURE, "root-level-legacy.sv"), "// 不应扫描根目录文件\n");
@@ -109,6 +115,7 @@ for (let index = 0; index <= MAX_TEMPLATES_PER_CATEGORY; index += 1) {
 }
 
 const outsideTemplateFixture = join(TMP_ROOT, `template-library-outside-${RUN_ID}`);
+CREATED_FIXTURES.push(outsideTemplateFixture);
 mkdirSync(outsideTemplateFixture, { recursive: true });
 writeFileSync(join(outsideTemplateFixture, "escaped.sv"), "module escaped; endmodule\n");
 let templateLinkCreated = false;
@@ -193,6 +200,7 @@ check(
 // DSH-N02:模块/工程的综合、约束**共享同一个用户库目录**(按用户要求不拆目录),所以约定用文件头标记
 // 区分层级:声明了的只在该层级的卡里出现;没声明的照旧两层都显示(兼容旧模板)。
 const levelRoot = join(TMP_ROOT, `tpl-level-${RUN_ID}`);
+CREATED_FIXTURES.push(levelRoot);
 mkdirSync(join(levelRoot, "synthesis"), { recursive: true });
 writeFileSync(join(levelRoot, "synthesis", "my_module_synth.tcl"), "# fpga-workbench-level: module\n");
 writeFileSync(join(levelRoot, "synthesis", "my_project_synth.tcl"), "# fpga-workbench-level: project\n");
@@ -1094,6 +1102,7 @@ check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设�
 
 // ── 浏览:列目录(设置页「浏览…」靠它) ──────────────────────────────────────
 const browseRoot = join(TMP_ROOT, `browse-fixture-${RUN_ID}`);
+CREATED_FIXTURES.push(browseRoot);
 mkdirSync(join(browseRoot, "subdir"), { recursive: true });
 writeFileSync(join(browseRoot, "tool.exe"), "");
 writeFileSync(join(browseRoot, "readme.txt"), "");
@@ -1415,6 +1424,7 @@ check(
 // (mtime 是旧的、junction 已存在),这三条断言就红(实测:2026-09-21 一次 `test:installed` 就这么红的)。
 // 上面 backup-check / stale-check / prune-skills 已经带了时间戳,同一原因。
 const sweepRoot = join(TMP_ROOT, `sweep-check-${RUN_ID}-${String(Date.now())}`);
+CREATED_FIXTURES.push(sweepRoot);
 mkdirSync(join(sweepRoot, "keep-me"), { recursive: true });
 mkdirSync(join(sweepRoot, "ours-1"), { recursive: true });
 mkdirSync(join(sweepRoot, "ours-young"), { recursive: true });
@@ -1795,6 +1805,17 @@ const DELETION_ALLOWLIST = [
     file: "tools/check-install-safety.mjs",
     pattern: /rmSync\(MIRROR/u,
     reason: "开发期脚本自管 .tmp/install-mirror(重建镜像;整棵依赖树不能留)"
+  },
+  {
+    file: "tools/lib/cleanup.mjs",
+    pattern: /rmSync\(path, \{ recursive: true, force: true \}\)/u,
+    // **这不违反「零删除」那条用户定案**。那条守的是:用户的源码、产物、已装副本、
+    // 备份 —— 插件运行时与安装脚本绝不永久删它们。
+    // 而 `cleanupOwnFixtures` 删的是**调用方这次自己 mkdir 出来的夹具目录**:
+    // 只有调用方显式传进来的路径,不扫、不猜、不碰别的东西。
+    // 不改的话 `.tmp/` 只涨不减 —— 实测跑几十次堆到 172 个夹具 / 145 MB,
+    // 并偶发把 `npm test` 搞红(2026-10-22 遇到过一次)。
+    reason: "测试清理器只删**本次运行自己创建**的夹具目录(路径由调用方显式传入)"
   }
 ];
 
@@ -1939,11 +1960,24 @@ for (const file of guarded) {
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 工具链判定、提示文案与两侧契约全部正确");
 if (failures.length > 0) process.exitCode = 1;
 
-// 收尾:fixture **不删**(用户定案:绝不永久删除),只把这次留在 .tmp/ 里的列出来。
-// 代价是 .tmp/ 会一直增长 —— 所以这里把清单和处置办法打出来,不假装已经清干净。
-const leftOver = listTempLeftovers(TMP_ROOT, FIXTURE_PREFIXES);
+// 收尾:把自己这次造的 fixture 删掉。
+//
+// 原先这里是"**不删**、只列出来让人自行处置"。代价是 `.tmp/` 只涨不减 —— 实测跑几十次
+// 之后堆了 172 个夹具 / 145 MB,并且偶发地把 `npm test` 搞红(夹具被占用 / 撞名)。
+// 现在的边界更清楚:**用户文件仍然零删除**;删的只是本次运行 mkdir 出来的那几个目录。
+const cleaned = cleanupOwnFixtures(CREATED_FIXTURES);
+if (cleaned.failed.length > 0) {
+  console.log(
+    `\n有 ${String(cleaned.failed.length)} 个本次 fixture 没删掉（不影响结论）:` +
+      cleaned.failed.map((item) => `${item.path}（${item.reason}）`).join("、")
+  );
+} else {
+  console.log(`\n已清理本次运行的 ${String(cleaned.removed.length)} 个 fixture 目录。`);
+}
+// 仍然列出**别处留下的**旧夹具（只列不删）—— 那是别人的东西，由人决定。
+const leftOver = listTempLeftovers(TMP_ROOT, FIXTURE_PREFIXES).filter((entry) => entry.pending);
 if (leftOver.length > 0) {
-  console.log(`\n.tmp/ 里现有 ${leftOver.length} 项本次/上次留下的 fixture(按用户定案不删除,请自行处置):`);
-  for (const item of leftOver.filter((entry) => entry.pending).slice(0, 20)) console.log(`  [临时项] ${item.path}`);
-  if (leftOver.filter((entry) => entry.pending).length > 20) console.log("  …(更多条目略)");
+  console.log(`\n.tmp/ 里另有 ${leftOver.length} 项历史遗留 fixture（只列不删，请自行处置）:`);
+  for (const item of leftOver.slice(0, 10)) console.log(`  [临时项] ${item.path}`);
+  if (leftOver.length > 10) console.log("  …(更多条目略)");
 }

@@ -195,18 +195,26 @@
 
 # ── goals ───────────────────────────────────────────────────────────────────
 
-# **刻意移除**(2026-10-21,按"不拖慢本模式"的取舍):
-# standard 默认装 command-goal + tool-goal,它们给会话加一层"持久化目标"元机制
-# (create_goal / update_goal / get_goal + 一个斜杠命令)。FPGA 开发模式里,
-# "本次要做什么"就是用户当前的问题,跟踪进度用 todo_write、结论用文件 ——
-# 再叠一层目标服务只增加模型的选择负担,没有对应收益。
-# 若要恢复:把下面两行取消注释即可(宿主侧的服务与驱动仍在,不依赖本预设)。
+# 2026-10-22 恢复:这两行在 2026-10-21 曾被当成"元机制、与 FPGA 无关"删掉 —— 那是
+# **判断失误**。目标是 DSH 的**基础会话能力**,和 todo / ask_user 同一层,不是某个
+# 垂直领域的附加功能。删掉它的直接后果是:本模式里用户无法用斜杠命令设目标、模型
+# 也没有 get/create/update_goal 可用 —— 而其他模式都有,形成能力缺口。
 #
-# - id: command-goal
-#   name: '@deepseek-ai/dsh-command-goal'
+# 教训:精简预设时,"这条与 FPGA 有没有直接关系"不是判据;判据是
+# **"这是不是宿主提供的基础能力"**。后者一律保留。
 #
-# - id: tool-goal
-#   name: '@deepseek-ai/dsh-tool-goal'
+# 宿主侧的 goal 服务与 session driver 在 host plane,这两行只把命令与工具注册进
+# 本预设的作用域层。
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+# 定时提醒同理:它是基础能力,不是"FPGA 专属"。FPGA 会话里也有正当用途
+# (例如"20 分钟后提醒我看综合跑完没")。
+- id: tool-schedule
+  name: '@deepseek-ai/dsh-tool-schedule'
 
 # ── plan mode ───────────────────────────────────────────────────────────────
 

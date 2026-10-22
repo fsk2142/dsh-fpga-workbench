@@ -1,5 +1,14 @@
-// 开发脚本的零删除报告工具。这里只列出待人工处置的路径，不删除、移动或回收任何文件。
-import { readdirSync, statSync } from "node:fs";
+// 开发脚本的临时目录工具。
+//
+// 两条原则,别混:
+//   · **用户的文件零删除** —— 已装副本里多出来的旧文件、备份、半成品,只列不删。
+//   · **测试自己造的临时夹具自己清** —— 那些目录是本次运行新建的、跑完就没用了。
+//     留着它们会让 `.tmp/` 每次跑测试就涨一百多 MB,还会因为被占用/撞名让测试
+//     变得**偶发失败**(2026-10-22 实测:改完源码后的一次 `npm test` 失败,之后连跑
+//     4 次都过 —— 根因就是历史夹具太多)。
+//
+// `listTempLeftovers` 仍然保留,给"别人的 / 上次留下的"条目用(只列不删)。
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export const CLEANUP_KINDS = {
@@ -54,4 +63,30 @@ export function listTempLeftovers(dir, prefixes, minAgeMs = 0) {
     out.push({ ...cleanupEntry("temp", full), name: entry.name, pending, reason });
   }
   return out;
+}
+
+/**
+ * 让一个脚本在退出时删掉**它自己这次建的**临时目录。
+ *
+ * 只删传进来的那些路径 —— 调用方必须显式列出自己的夹具,不搞"扫一遍 .tmp 全删"
+ * (那会误伤并行跑的另一个检查,也会误伤用户手工放在那里的东西)。
+ *
+ * 失败静默:删不掉(被占用 / 权限)不该让测试本身变红 —— 那和"测试没通过"是两回事。
+ * 但会打印一行说明,免得又变成"悄悄堆积"。
+ * @param paths - 本次运行创建的临时目录/文件绝对路径。
+ * @returns `{ removed, failed }` —— 各是路径数组。
+ */
+export function cleanupOwnFixtures(paths) {
+  const removed = [];
+  const failed = [];
+  for (const path of Array.isArray(paths) ? paths : []) {
+    if (typeof path !== "string" || path === "" || !existsSync(path)) continue;
+    try {
+      rmSync(path, { recursive: true, force: true });
+      removed.push(path);
+    } catch (error) {
+      failed.push({ path, reason: String(error?.code ?? error?.message ?? error) });
+    }
+  }
+  return { removed, failed };
 }

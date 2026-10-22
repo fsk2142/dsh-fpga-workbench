@@ -22,12 +22,18 @@
   已经体现在 git 提交信息里，所以**不进版本库**（见 `.gitignore`）。
 - `migrate-client-to-esm.mjs` —— 把客户端从"手写 loader 包装"改成标准 ESM。
   那次改动已完成，且**绝不能重跑**（重跑会再套一层包装，`clientExports.apply is not a function`）。
+
+## 一之补：隐私清理工具（**保留**，理由不同）
+
 - `scrub-history.mjs` / `scrub-commit-msg.mjs` / `verify-scrub.mjs`
-  —— 清理提交历史里的本机用户名路径（隐私审核）。已完成，保留留档。
+  —— 清理提交历史与提交信息里的本机用户名路径。
 
-## 三、一次性探针（已经回答过问题，不进版本库）
+它们**保留在版本库**（2026-10-22 修）：`docs/SCRUB-COMMIT-HISTORY.md` 承诺
+"本仓库已经有脚本了"、`docs/DEVELOPMENT.md` 给了调用命令 —— 移出版本库后
+`check-docs` 会在**干净克隆**里报"提到但文件不存在"（本地因为文件还在磁盘上而看不出来）。
+而且这几个脚本与具体插件无关，任何 DSH 插件仓库都能直接拿去用。
 
-- `probe-slots.mjs` / `probe-plugin-detail.mjs` / `probe-client-slots.mjs`
+## 三、一次性探针（已经回答过问题，不进版本库）- `probe-slots.mjs` / `probe-plugin-detail.mjs` / `probe-client-slots.mjs`
   —— 查"宿主有哪些客户端槽位""插件详情页是否可达"。
 - `probe-engines-range.cjs` —— 实测 `engines.dsh` 无上界写法在宿主 semver 下的真实行为。
 - `diag-describe-env.mjs` —— 对比 `describeEnv` 在备份与产物上的输出差异。

@@ -85,9 +85,14 @@ tools/probes/
 #   · 一次性:类型收尾的 type-*.mjs、探针 probe-*.mjs、diag-describe-env.mjs
 # 一次性脚本的结论都已经落在提交信息与代码注释里，脚本本身依赖本机宿主 asar，
 # 换台机器未必跑得起来 —— 留着只会让人以为它们是公共接口。
+#
+# ⚠️ `scrub-*.mjs` / `verify-scrub.mjs` **不在此列**（2026-10-22 修）：
+#    `docs/SCRUB-COMMIT-HISTORY.md` 明确承诺"本仓库已经有脚本了"，
+#    `docs/DEVELOPMENT.md` 也给了调用命令。把它们移出版本库后，`check-docs`
+#    在**干净克隆**里报 14 处不实（本地因为文件还在磁盘上而看不出来）。
+#    这些脚本与具体插件无关、任何插件仓库都能用，属于应当保留的工具。
 scripts/type-*.mjs
 scripts/probe-*.mjs
+scripts/probe-*.cjs
 scripts/diag-describe-env.mjs
 scripts/migrate-client-to-esm.mjs
-scripts/scrub-*.mjs
-scripts/verify-scrub.mjs

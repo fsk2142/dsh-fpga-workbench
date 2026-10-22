@@ -1042,9 +1042,12 @@ check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设�
   const quotedLines = withVivado("C:\\a\"b\\vivado.bat").split("\n");
   check(
     quotedLines.length === baselineLines &&
-      withVivado("C:\\a\"b\\vivado.bat").includes("'C:\\a\"b\\vivado.bat' -mode batch"),
+      // 路径里的**分隔符**已归一成正斜杠（`\a\"b\` → `a/"b/`），含双引号所以必须用
+      // PowerShell 单引号包住。断言只要求"被单引号包住"，不写死路径的斜杠形式 ——
+      // 否则改一下归一策略就得同时改断言（这次就踩到了）。
+      quotedLines.some((line) => /'C:\/a"b\/vivado\.bat' -mode batch/u.test(line)),
     "vivadoPath 带引号:命令示例用 PowerShell 单引号包住(照抄可用)",
-    withVivado("C:\\a\"b\\vivado.bat").split("\n").filter((l) => l.includes("-mode batch")).join(" | ").slice(0, 200)
+    quotedLines.filter((line) => line.includes("-mode batch")).join(" | ").slice(0, 200)
   );
   const noteValues = {
     ...prepared,
@@ -1083,6 +1086,28 @@ check(unreadable.length > 0 && unreadable.includes("读不到"), "拿不到设�
   check(
     msysText.includes("VERILATOR_ROOT") && msysText.includes("$env:VERILATOR_ROOT='C:/msys64/mingw64/share/verilator'"),
     "MSYS2 布局的 verilator:提示里给出可照抄的 VERILATOR_ROOT 行(正斜杠)"
+  );
+  // **命令示例里的路径必须都是正斜杠**（2026-10-22 实测抓到）。
+  //
+  // 原来只断言了 `$env:VERILATOR_ROOT='…'` 那一行用了正斜杠，但同一段的
+  // `& <可执行文件>` 走的是 `usagePath` → `promptArg` 直通，保留了反斜杠 ——
+  // 于是提示自己刚说完「路径用正斜杠,别被转义吃掉」，下一行的路径就是反斜杠。
+  // 反斜杠在 PowerShell 双引号字符串 / Tcl 里会被当转义（`\t` `\n` `\v`）。
+  //
+  // **范围**:只看"命令示例行"（含 `& ` 或 `-mode batch` / `--lint-only` 的那些）。
+  // 工具清单那行 `- Verilator (verilator):C:\...` 是**如实汇报当前登记的路径**，
+  // 不是给人照抄的命令，保留原生反斜杠是对的。
+  const commandLines = msysText
+    .split("\n")
+    .filter((line) => /(?:^|\s)&\s/u.test(line) || /-mode batch|--lint-only/u.test(line));
+  check(
+    commandLines.length > 0,
+    `MSYS2 布局下至少有一条命令示例（实际 ${String(commandLines.length)} 行）`
+  );
+  check(
+    commandLines.every((line) => !/[A-Za-z]:\\/u.test(line)),
+    "MSYS2 布局提示里**命令示例**都用正斜杠（可执行文件路径也不例外，不能只在 VERILATOR_ROOT 那行归一）",
+    commandLines.filter((line) => /[A-Za-z]:\\/u.test(line)).join(" | ").slice(0, 200)
   );
   const nonMsys = "D:\\tools\\verilator_bin.exe";
   const nonMsysText = describeEnv(

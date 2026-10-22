@@ -61,8 +61,10 @@ vivado-mcp-server-*.exe
 tools/probes/
 
 # ── 类型收尾时脚本自动生成的临时备份 ─────────────────────────────────────────
-# `scripts/type-index-*.mjs` 会先备份再改，产物是 `*.pre-type-backup` 这类名字。
+# `scripts/type-*.mjs` 会先备份再改，产物是 `<文件>.pre-<批次>-backup` 这类名字。
 # 它们只是当下的安全网，不该进版本库（git 历史本身就是更好的备份）。
-*.pre-type-backup
-*.pre-type2-backup
-*.pre-esm-backup
+#
+# 用通配而不是逐条列举：这批脚本改了几轮就产生几种后缀（pre-type / pre-type3 /
+# pre-type3b / pre-type4 …），逐条写必然漏 —— 已经漏过一次，把 3 个备份提交进去了。
+*.pre-*-backup
+*.pre-*backup

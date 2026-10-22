@@ -37,6 +37,8 @@ export interface ToolCatalogEntry {
   /** 路径字段名：表里每一项都有它（FIELDS 展开时当 key 用）。 */
   pathKey: string;
   kind: string;
+  /** 有些工具要额外说明"支持范围"（例如免费版有限制）。 */
+  supportNote?: string;
   /** 提示文案：自定义工具那三条没有，所以可选。 */
   hint?: string;
   usage?: (path: string) => string[];
@@ -68,7 +70,10 @@ export interface Binding {
   role: string;
   /** 该绑定允许的工具键（由 role 决定，bind() 里一定补上）。 */
   tools: string[];
+  /** "用哪个工具"的设置字段名。读取时会过 `valueOf`，所以可能是 undefined。 */
   toolKey?: string;
+  /** "这个环节的覆盖路径"的设置字段名。 */
+  pathKey?: string;
   [extra: string]: unknown;
 }
 /** 能力卡里的一个模板槽位。 */
@@ -135,6 +140,14 @@ export interface FieldSpec {
   skips?: string[];
   usage?: (path: string) => string[];
   templateLevel?: unknown;
+  /** 下拉/选择的候选项。 */
+  options?: Array<{
+    value: string;
+    label?: string;
+  }>;
+  /** 关联的环节绑定键（用于把字段与 BINDINGS 对上）。 */
+  bindingKey?: string;
+  stage?: string;
   [extra: string]: unknown;
 }
 /**
@@ -318,7 +331,7 @@ export declare const FIELDS: ({
   required: boolean;
   skips: never[];
 } | {
-  key: unknown;
+  key: string | undefined;
   group: string;
   control: string;
   label: string;
@@ -414,9 +427,9 @@ export declare function resolveBindings(values: Record<string, unknown>, probe?:
  * @param probe - `(path, kind) => boolean`。
  * @returns 能力卡的工具解析结果。
  */
-export declare function resolveCapability(values: Record<string, unknown>, capability: CapabilitySpec, probe?: (path: string, kind?: string) => boolean): Record<string, unknown>;
+export declare function resolveCapability(values: Record<string, unknown>, capability: CapabilitySpec, probe?: (path: string, kind?: string) => boolean): ResolvedCapability;
 /** 解析七张能力卡；数组顺序只用于展示，不代表执行顺序。 */
-export declare function resolveCapabilities(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): Record<string, unknown>;
+export declare function resolveCapabilities(values: Record<string, unknown>, probe?: (path: string, kind?: string) => boolean): ResolvedCapability[];
 /**
  * 精确解析一张能力卡保存的模板选择。这里只 stat 最终文件，不枚举模板库目录。
  * @param values - 设置值。
@@ -431,6 +444,18 @@ export interface TemplateSlot {
   label: string;
   file: string;
   announce?: string;
+  [extra: string]: unknown;
+}
+/** 一张能力卡解析后的结论：能力定义 + 这次选中的工具与可用性。 */
+export interface ResolvedCapability extends CapabilitySpec {
+  selection: string;
+  tool?: string;
+  toolLabel?: string;
+  configured?: boolean;
+  path?: string;
+  present?: boolean;
+  supportNote?: string;
+  reason?: string;
   [extra: string]: unknown;
 }
 /** 一张能力卡解析一个模板槽位的结果（`describeEnv` 直接读这些字段）。 */

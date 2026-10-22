@@ -21,6 +21,7 @@ const h = React.createElement;
 
 /** 与宿主 lib/toolchain.js 的 NS 一致 —— 这就是卡片的认领 key。 */
 const NS = "fpga-workbench";
+void NS; // settings.section 移除后暂未使用，保留常量供将来与宿主对齐
 /**
  * 显示名:设置分区名与设置页标题都用它。
  *
@@ -199,7 +200,7 @@ const CSS = `
 `;
 
 /** 注入一次样式表,避免重挂载时堆叠多份。 */
-function ensureStyles() {
+function ensureStyles(): void {
   if (document.querySelector("style[data-fpga-workbench]") !== null) return;
   const style = document.createElement("style");
   style.setAttribute("data-fpga-workbench", "");
@@ -217,7 +218,7 @@ function ensureStyles() {
  * @param text - 计算样式里的一个颜色值。
  * @returns `{ r, g, b, a }`,或 undefined。
  */
-function parseColor(text) {
+function parseColor(text: string): { r: number; g: number; b: number; a: number } | undefined {
   const match = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/u.exec(String(text ?? "").trim());
   if (match === null) return undefined;
   return {
@@ -233,7 +234,7 @@ function parseColor(text) {
  * @param color - {@link parseColor} 的产物。
  * @returns 亮度。
  */
-function brightness(color) {
+function brightness(color: { r: number; g: number; b: number }): number {
   return (color.r * 299 + color.g * 587 + color.b * 114) / 1000;
 }
 
@@ -248,10 +249,16 @@ function brightness(color) {
  *   都说得通,判不出主题(而正文的文字色一定是实心的)。背景色沿用原来的口径:画出来了就算。
  * @returns `{ r, g, b, a }`,或 undefined。
  */
-function firstUsableColor(element, property, opaqueOnly) {
-  let node = element;
+function firstUsableColor(
+  element: Element | null,
+  property: string,
+  opaqueOnly: boolean
+): { r: number; g: number; b: number; a: number } | undefined {
+  let node: Element | null = element;
   while (node !== null && node !== undefined) {
-    const color = parseColor(window.getComputedStyle(node)?.[property]);
+    // `getComputedStyle` 返回 CSSStyleDeclaration，按属性名取值需要索引签名。
+    const style = window.getComputedStyle(node) as unknown as Record<string, string | undefined>;
+    const color = parseColor(style[property] ?? "");
     if (color !== undefined && (opaqueOnly ? color.a === 1 : color.a !== 0)) return color;
     node = node?.parentElement;
   }
@@ -270,7 +277,7 @@ function firstUsableColor(element, property, opaqueOnly) {
  * 读它等于拿自己上一轮写下的结论当证据 —— 主题真变了也翻不过来。
  * @returns `"dark"` / `"light"`,或 undefined(两个元素上都没有可认的标记)。
  */
-function markerTheme() {
+function markerTheme(): "dark" | "light" {
   for (const node of [document.documentElement, document.body]) {
     if (node === null || node === undefined) continue;
     const values = typeof node.className === "string" ? [node.className] : [];
@@ -305,7 +312,7 @@ function markerTheme() {
  * @returns `"dark"` 或 `"light"`。**任何异常都不许往外抛**(不能为了一个主题把设置页弄崩):
  *   每个信号各自 try/catch,一个读不出来只跳过它,四个都没结论才回到 `"light"`。
  */
-function themeOf(element) {
+function themeOf(element: Element | null): "dark" | "light" {
   try {
     const ink = firstUsableColor(element, "color", true);
     if (ink !== undefined) return brightness(ink) >= 128 ? "dark" : "light";
@@ -336,7 +343,7 @@ function themeOf(element) {
  * @param size - 边长(px)。
  * @returns svg 元素。
  */
-function chipMark(size) {
+function chipMark(size: number): ReturnType<typeof h> {
   const pins = [];
   for (const offset of [8, 12, 16]) {
     pins.push(h("line", { key: `l${String(offset)}`, x1: 4, y1: offset, x2: 7, y2: offset }));
@@ -363,7 +370,7 @@ function chipMark(size) {
 }
 
 /** 把长说明收进可用鼠标或键盘打开的小问号。 */
-function helpBubble(key, text) {
+function helpBubble(key: string, text: string): ReturnType<typeof h> {
   if (typeof text !== "string" || text.trim() === "") return null;
   const id = `fpga-help-${String(key)}`;
   // 页面上几十个问号:aria-label 全都叫"查看说明"时,读屏用户分不出是哪一个。
@@ -388,7 +395,7 @@ let settingsValues = {};
  * 读取当前值。
  * @returns 字段值对象。
  */
-function currentValues() {
+function currentValues(): Record<string, unknown> {
   return settingsValues;
 }
 
@@ -400,11 +407,118 @@ function currentValues() {
 // isDesktopShell):实测在这种外壳里**拿不到真实路径**(新版 Electron 去掉了 `File.path`),
 // 弹了只能再退回列表,还让人以为"选完了"。按用户口径**整个删掉**,只留页面内列表。
 
+/**
+ * 宿主 `GET /plugins/fpga-workbench/toolchain` 的响应（设置页的状态来源）。
+ *
+ * 只列客户端真正读的字段 —— 宿主那边的形状更宽，但客户端不该依赖它没用的部分。
+ */
+interface ToolchainStatus {
+  values?: Record<string, string>;
+  tools?: Array<Record<string, unknown>>;
+  toolCards?: Array<{ fieldKeys?: string[]; [extra: string]: unknown }>;
+  capabilities?: Array<{
+    key?: string;
+    templates?: Array<{ key?: string; [extra: string]: unknown }>;
+    [extra: string]: unknown;
+  }>;
+  templateLibrary?: { fieldKey?: string; [extra: string]: unknown };
+  toolGroups?: Array<Record<string, unknown>>;
+  [extra: string]: unknown;
+}
+
+/** 路径预演（展开工具卡时问宿主的那次）的响应。 */
+interface PreviewPayload {
+  tools?: Array<Record<string, unknown>>;
+  error?: string;
+  [extra: string]: unknown;
+}
+
+/** 分类模板扫描的响应。 */
+interface TemplateScanPayload {
+  groups?: Array<Record<string, unknown>>;
+  data?: { values?: Record<string, string>; [extra: string]: unknown };
+  errors?: string[];
+  [extra: string]: unknown;
+}
+
+/** 目录浏览的响应。 */
+interface BrowsePayload {
+  path?: string;
+  parent?: string;
+  entries?: Array<{ name: string; path: string; kind: string }>;
+  truncated?: boolean;
+  error?: string;
+  [extra: string]: unknown;
+}
+
+/** 设置页里"自检"那一段的本地状态（与 update 同构）。 */
+interface SelfCheckUiState {
+  loading?: boolean;
+  error?: string;
+  result?: SelfCheckPayload;
+}
+
+/** 自检结果（与宿主 `lib/selfcheck.js` 的结论同形）。 */
+interface SelfCheckPayload {
+  ranAt?: string;
+  ok?: boolean;
+  failed?: number;
+  warned?: number;
+  checks?: Array<{ id: string; label: string; status: string; detail: string }>;
+  [extra: string]: unknown;
+}
+
+/** 版本信息。 */
+interface VersionPayload {
+  version?: string;
+  dshRange?: string;
+  releases?: string[];
+  [extra: string]: unknown;
+}
+
+/** 检查更新的结论（与宿主 `lib/version.js` 的 UpdateState 同形）。 */
+interface UpdatePayload {
+  ok?: boolean;
+  kind?: string;
+  installed?: string;
+  latest?: string;
+  source?: string;
+  reason?: string;
+  [extra: string]: unknown;
+}
+
+/**
+ * 设置页里"版本与检查更新"那一段的本地状态。
+ *
+ * `result` 是宿主返回的结论，`loading` / `error` 是这一次请求的过程状态 ——
+ * 三者互斥（要么在查、要么有结果、要么报错）。
+ */
+interface UpdateUiState {
+  loading?: boolean;
+  error?: string;
+  result?: UpdatePayload;
+}
+
+/** 一条检测结果（`toolchain.js` 的 detectTools 输出项）。 */
+interface DetectedTool {
+  /** 归属的字段名（一定有）。 */
+  field: string;
+  tool: string;
+  label?: string;
+  /** 探测到的路径（一定有）。 */
+  path: string;
+  source?: string;
+  version?: string;
+  versionError?: string;
+  versionNote?: string;
+  [extra: string]: unknown;
+}
+
 /** 设置页:标题 + 状态警告 + 各字段。 */
-function SettingsPanel() {
+function SettingsPanel(): ReturnType<typeof h> | null {
   ensureStyles();
   // 宿主探到的存在性 + 字段定义。拿不到就不显示状态 —— 而不是把它显示成"全部缺失"。
-  const [status, setStatus] = React.useState(null);
+  const [status, setStatus] = React.useState<ToolchainStatus | null>(null);
   const values = currentValues();
   const ready = status !== null && status.values !== undefined;
   const [failed, setFailed] = React.useState(false);
@@ -412,32 +526,39 @@ function SettingsPanel() {
   // 未保存的改动(字段 → 新值)。**改完不立刻写**:写只发生在点「保存改动」那一次
   // 原子提交里 —— 既免得碰一下就改了设置(用户要的"防止误修改"),也免得几个字段
   // 各写一次、中途失败留下半吊子状态。
-  const [drafts, setDrafts] = React.useState({});
+  const [drafts, setDrafts] = React.useState<Record<string, string>>({});
   const [saving, setSaving] = React.useState(false);
-  const [saveError, setSaveError] = React.useState(undefined);
+  const [saveError, setSaveError] = React.useState<string | undefined>(undefined);
   // 工具卡展开后才检测那一个路径字段；结论只做候选，不会自动写入草稿。
-  const [detect, setDetect] = React.useState(null);
+  const [detect, setDetect] = React.useState<{
+    fieldKey?: string;
+    loading?: boolean;
+    error?: string;
+    perField?: Array<{ key: string; tool?: string; hits?: DetectedTool[]; error?: string }>;
+    values?: Record<string, string>;
+    tools?: DetectedTool[];
+  } | null>(null);
   // **未保存改动的完整预演状态**:字段与环节绑定都按眼前这一份值解析。
-  const [preview, setPreview] = React.useState(undefined);
-  const [previewError, setPreviewError] = React.useState(undefined);
+  const [preview, setPreview] = React.useState<PreviewPayload | undefined>(undefined);
+  const [previewError, setPreviewError] = React.useState<string | undefined>(undefined);
   // 工具设置整体、各工具卡、公共辅助组与能力卡默认收起。
-  const [expandedTool, setExpandedTool] = React.useState(undefined);
+  const [expandedTool, setExpandedTool] = React.useState<string | undefined>(undefined);
   const [showToolSettings, setShowToolSettings] = React.useState(false);
-  const [expandedAuxGroup, setExpandedAuxGroup] = React.useState(undefined);
-  const [expandedCapability, setExpandedCapability] = React.useState(undefined);
+  const [expandedAuxGroup, setExpandedAuxGroup] = React.useState<string | undefined>(undefined);
+  const [expandedCapability, setExpandedCapability] = React.useState<string | undefined>(undefined);
   // 只有展开能力卡才读取模板目录；`null` = 尚未请求，loading/error/data 三态互斥。
-  const [templateScan, setTemplateScan] = React.useState(null);
+  const [templateScan, setTemplateScan] = React.useState<TemplateScanPayload | null>(null);
   // 「浏览…」当前打开的字段、那份目录列表、以及过滤词;null = 没打开。
-  const [browse, setBrowse] = React.useState(null);
+  const [browse, setBrowse] = React.useState<BrowsePayload | null>(null);
   // 页面内路径选择器的简短操作说明。
-  const [pickNote, setPickNote] = React.useState(undefined);
+  const [pickNote, setPickNote] = React.useState<string | undefined>(undefined);
   // 「运行自检」的结果:null = 还没点过;{ loading:true } / { result } / { error } 三态互斥。
   // **不在挂载时请求** —— 只读自检也要用户点了才跑。
-  const [selfCheck, setSelfCheck] = React.useState(null);
+  const [selfCheck, setSelfCheck] = React.useState<SelfCheckUiState | null>(null);
   // 「当前版本」:挂载时读一次(只读本地清单,不发网络请求)。
-  const [version, setVersion] = React.useState(undefined);
+  const [version, setVersion] = React.useState<VersionPayload | undefined>(undefined);
   // 「检查更新」:同样三态;**只有点按钮才联网**。
-  const [update, setUpdate] = React.useState(null);
+  const [update, setUpdate] = React.useState<UpdateUiState | null>(null);
   // 三条异步取数各有一个**代次**:发请求前自增、把当次的值带进回调,回来时对不上就整份丢掉。
   // 没有它,先发出、后返回的旧结果会盖掉新结果 —— 连着换两次工具、或快速切目录时,
   // 界面会"闪回上一个工具的状态 / 上一个目录的内容"。
@@ -447,8 +568,8 @@ function SettingsPanel() {
   const templateSeq = React.useRef(0);
   // 主题跟随:根节点本体(要把它算出来的 scheme 写到它身上),以及**改 documentElement 之前**
   // 那个值(卸载时要还回去,不能让插件把宿主页面留在我们设的状态里)。undefined = 还没记过。
-  const rootRef = React.useRef(null);
-  const schemeBefore = React.useRef(undefined);
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const schemeBefore = React.useRef<string | undefined>(undefined);
   /**
    * 挂载后按**实际渲染出来的**主题定一次(见 {@link themeOf}:文字色 → 背景色 → 宿主标记 →
    * 系统偏好,取第一个判得出来的),再把它显式声明出去。
@@ -575,7 +696,7 @@ function SettingsPanel() {
    * @param key - 字段名。
    * @param value - 新值。
    */
-  const stage = (key, value) => {
+  const stage = (key: string, value: string): void => {
     setSaveError(undefined);
     previewSeq.current += 1;
     setPreview(undefined);
@@ -589,7 +710,7 @@ function SettingsPanel() {
   };
 
   /** 丢弃指定字段的未保存改动。 */
-  const revertKeys = (keys) => {
+  const revertKeys = (keys: string[]): void => {
     const wanted = new Set(keys);
     previewSeq.current += 1;
     setPreview(undefined);
@@ -602,7 +723,7 @@ function SettingsPanel() {
    * 只保存调用方给出的字段。同一张工具卡里的多个字段仍是一次原子提交；其他卡和后两块
    * 的草稿不会被顺手带进去。
    */
-  const saveKeys = (requestedKeys, onSaved) => {
+  const saveKeys = (requestedKeys: string[], onSaved?: () => void): void => {
     const keys = requestedKeys.filter((key) => drafts[key] !== undefined);
     if (keys.length === 0) return;
     const submitted = Object.fromEntries(keys.map((key) => [key, drafts[key]]));
@@ -652,12 +773,12 @@ function SettingsPanel() {
    * 点「保存改动」才落地。
    * @param hit - 检测路由给的一项 `{ field, tool, label, path, source }`。
    */
-  const applyHit = (hit) => {
+  const applyHit = (hit: DetectedTool): void => {
     stage(hit.field, hit.path);
   };
 
   /** 展开工具卡时，只检测这一个路径字段。检测结果不会自动改路径。 */
-  const runDetect = (fieldKey, label) => {
+  const runDetect = (fieldKey: string, label: string): void => {
     if (typeof fieldKey !== "string" || fieldKey === "") return;
     const mine = (detectSeq.current += 1);
     setDetect({ fieldKey, loading: true, perField: [{ key: fieldKey, tool: label, hits: [], loading: true }] });
@@ -682,7 +803,7 @@ function SettingsPanel() {
   };
 
   /** 一组普通字段的标题行。 */
-  const renderGroupHead = (group) =>
+  const renderGroupHead = (group: Record<string, unknown>): ReturnType<typeof h> =>
     h("div", { className: "fpga-set-group", key: `group-${String(group)}` }, h("span", null, group));
 
   /**
@@ -700,7 +821,7 @@ function SettingsPanel() {
    * @param hit - 检测路由给的一项(`{ field, tool, label, path, source, version…? }`)。
    * @returns React 节点,或 null。
    */
-  const versionLine = (hit) => {
+  const versionLine = (hit: DetectedTool): ReturnType<typeof h> | null => {
     const error = hit.versionError;
     if (typeof error === "string" && error !== "") {
       return h("span", { className: "fpga-set-bad" }, `版本查询失败:${error}`);
@@ -717,7 +838,7 @@ function SettingsPanel() {
    * @param entry - `{ key, tool, hits }`(来自 {@link runDetect});`undefined` = 这个字段不参与检测。
    * @returns React 节点,或 null。
    */
-  const detectNote = (entry) => {
+  const detectNote = (entry: { key?: string; tool?: string; hits?: DetectedTool[]; error?: string }): ReturnType<typeof h> | null => {
     if (entry === undefined) return null;
     if (entry.loading === true) {
       return h("span", { className: "fpga-set-detect-row fpga-set-hint" }, "正在检测这个工具…");
@@ -730,7 +851,7 @@ function SettingsPanel() {
         `没检测到${where}的路径 —— 手填,或用「浏览…」挑`
       );
     }
-    return entry.hits.map((hit) =>
+    return entry.hits.map((hit: DetectedTool) =>
       h(
         "span",
         { className: "fpga-set-detect-row", key: `${String(entry.key)}-${String(hit.path)}` },
@@ -754,7 +875,7 @@ function SettingsPanel() {
     );
   };
 
-  const browseTo = (key, path) => {
+  const browseTo = (key: string, path: string): void => {
     const mine = (browseSeq.current += 1);
     fetch(`${BROWSE_URL}?path=${encodeURIComponent(String(path ?? ""))}`, { cache: "no-store" })
       .then((response) => {
@@ -794,7 +915,7 @@ function SettingsPanel() {
    * 还让人以为"选完了"。列表本来就能选文件:**进目录 → 单击文件**(或打几个字母过滤后回车)。
    * (名字不叫 browse,免得和上面那份 browse 状态撞名。)
    */
-  const startPick = (field, current) => {
+  const startPick = (field: Record<string, unknown>, current: string): void => {
     setPickNote(
       String(field.kind) === "directory"
         ? "在下面进到那一层,点「用这个目录」;也可以直接把路径粘进输入框。"
@@ -1611,7 +1732,7 @@ function renderFields(
  * @param draft - 未保存的改动;undefined = 显示的是宿主那份值。
  * @returns React 节点。
  */
-function readyBadge(draft) {
+function readyBadge(draft: Record<string, unknown>): ReturnType<typeof h> {
   return h("span", { className: "fpga-set-good" }, draft === undefined ? "✓ 已就绪" : "✓ 已就绪(未保存)");
 }
 
@@ -1765,7 +1886,7 @@ function renderField(field, values, ready, browse, browseTo, setBrowse, pick, dr
  * @param path - 路径。
  * @returns 目录,取不到时为空串。
  */
-function dirOf(path) {
+function dirOf(path: string): string {
   const text = String(path ?? "").trim();
   const cut = Math.max(text.lastIndexOf("\\"), text.lastIndexOf("/"));
   return cut > 0 ? text.slice(0, cut) : "";
@@ -1777,7 +1898,7 @@ function dirOf(path) {
  * @param value - 当前值。
  * @returns 起始目录;空串表示从盘符开始。
  */
-function startDir(field, value) {
+function startDir(field: Record<string, unknown>, value: string): string {
   const text = String(value ?? "").trim();
   if (text === "") return "";
   if (field.kind === "directory") return text;

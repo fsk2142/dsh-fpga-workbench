@@ -74,14 +74,35 @@ function realPathOf(path) {
  * @param rel - 相对 root 的路径。
  */
 /**
+ * 证据路径的**形式**是否合法（越界/绝对路径/空值都挡在这里）。
+ *
+ * 抽成公用函数,是因为 `evidencePathInside` 与 `evidenceFileInside` 原先各写一遍
+ * 一模一样的判断 —— 而改一处忘另一处是这类代码最典型的漂移。
+ *
+ * **纯空白要挡**(2026-10-22 边界实测发现):`"   "` 非空,于是原先的 `path === ""`
+ * 放它过去,`join(root, "   ")` 拼出一个不存在的路径,再被 `catch` 当成"尚不存在"
+ * 放行 —— 结果是"证据"一栏只写几个空格也算合法引用。
+ * 判断用 `trim()`,不是 `=== ""`。
+ * @param rel - 报告里写的相对路径。
+ * @returns `{ ok, path }`;`ok` 为 false 时 `path` 无意义。
+ */
+function evidencePathForm(rel) {
+  const path = String(rel ?? "").replace(/^\.\//u, "");
+  const ok =
+    path.trim() !== "" &&
+    !path.split(/[\\/]+/u).includes("..") &&
+    !/^[A-Za-z]:/u.test(path) &&
+    !path.startsWith("\\\\");
+  return { ok, path };
+}
+
+/**
  * 证据**路径**是否安全(E8-01):不存在时只做形式与父目录检查;
  * 存在时必须是普通文件(非 symlink)且 realpath 仍在 root 内。
  */
 export function evidencePathInside(root, rel) {
-  const path = String(rel ?? "").replace(/^\.\//u, "");
-  if (path === "" || path.split(/[\\/]+/u).includes("..") || /^[A-Za-z]:/u.test(path) || path.startsWith("\\\\")) {
-    return false;
-  }
+  const { ok, path } = evidencePathForm(rel);
+  if (!ok) return false;
   const target = join(root, path);
   if (realEscape(root, target) !== undefined) return false;
   try {
@@ -101,10 +122,8 @@ export function evidencePathInside(root, rel) {
 }
 
 export function evidenceFileInside(root, rel) {
-  const path = String(rel ?? "").replace(/^\.\//u, "");
-  if (path === "" || path.split(/[\\/]+/u).includes("..") || /^[A-Za-z]:/u.test(path) || path.startsWith("\\\\")) {
-    return false;
-  }
+  const { ok, path } = evidencePathForm(rel);
+  if (!ok) return false;
   const target = join(root, path);
   if (realEscape(root, target) !== undefined) return false;
   try {

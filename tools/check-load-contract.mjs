@@ -324,16 +324,39 @@ check(loaderId === manifest.name, `bundle 的 loader id 等于包名(实际 ${St
 // 而"产物里确实导出了 inject 这个名字"由上面那条 `exports.inject =` 守着。
 check(/export\s+const\s+inject\s*=\s*\[/u.test(client), "源码里 inject 是数组字面量(写成对象会让整行不激活)");
 check(!/export\s+const\s+inject\s*=\s*\{/u.test(client), "源码里 inject 不是对象字面量");
-// 2026-10-22（照 dsh-safe-delete）：配置页必须等 `configForms` 就绪再注册。
-// 少这一步时「槽位注册成功、但页面上的「配置」入口不出现，且不报错」——
-// 从现象看就是"插件页找不到设置"。这条断言防的是以后有人把它删掉。
+// 2026-10-22：`configForms` **必须**是局部 `ctx.inject(...)` 请求，
+// **绝不能**写进顶层 `inject`。dsh-safe-delete 的注释写得很清楚：
+//   · 顶层 inject 缺服务 → 整个插件停在 pending，`apply` 永不执行；
+//   · 局部 ctx.inject 缺服务 → 只有那个子插件停住，其余照常。
+// 写进顶层时，宿主一旦没有这个服务（旧版 / 服务名不同），**整行插件都不激活** ——
+// 模式、工具链提示、设置卡全没了，比"配置入口不出现"严重得多。
 check(
-  /export\s+const\s+inject\s*=\s*\[[^\]]*["']configForms["']/u.test(client),
-  "客户端 inject 里带 configForms(否则插件页的「配置」入口不出现且不报错)"
+  !/export\s+const\s+inject\s*=\s*\[[^\]]*["']configForms["']/u.test(client),
+  "客户端顶层 inject **不**声明 configForms(缺服务会让整行插件停在 pending)"
 );
 check(
-  /configForms[\s\S]{0,200}whileServed/u.test(client),
+  /inject\??\.?\(?\s*\(?\[["']configForms["']\]/u.test(client) ||
+    /["']configForms["'][\s\S]{0,200}inject/u.test(client) ||
+    /injectConfigForms/u.test(client),
+  "客户端用局部 ctx.inject 请求 configForms(缺服务时只影响配置页)"
+);
+check(
+  /configForms[\s\S]{0,300}whileServed/u.test(client),
   "客户端用 configForms.whileServed 包住注册(服务撤销时自动注销插槽)"
+);
+// 2026-10-22（读宿主源码确认）：`plugins.bundle.config` 的 `key` 必须是**包名**。
+//
+// 插件管理器用 `configured: ledger.bundles.has(openPkg.name)` 决定要不要渲染整个
+// 配置区块；`ledger.bundles` 是各注册项的 `options.key` 集合，`openPkg.name` 是包名。
+// 写成设置 namespace（`fpga-workbench`）时 configured 恒 false，**整个区块不渲染**，
+// 而且不报错 —— 这正是"插件页里找不到设置"的一个真实成因。
+check(
+  /key:\s*(?:PACKAGE_NAME|["']dsh-fpga-workbench["'])/u.test(client),
+  "plugins.bundle.config 的 key 是包名(宿主按 pkg.name 判断 configured)"
+);
+check(
+  !/key:\s*NS\b/u.test(client),
+  "plugins.bundle.config 的 key 不是设置 namespace(那会让 configured 恒为 false)"
 );
 check(/exports\.apply\s*=/u.test(clientBundle), "导出 apply");
 check(/exports\.name\s*=/u.test(clientBundle), "导出 name");

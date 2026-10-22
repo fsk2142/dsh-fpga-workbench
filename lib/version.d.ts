@@ -15,6 +15,14 @@ export declare function packageInfo(): {
   dshRange: string;
   releases: string[];
 };
+/** 版本号切段后的形状。 */
+interface VersionParts {
+  major: number;
+  minor: number;
+  patch: number;
+  /** 预发布标记（不含 `-`）；空串表示正式版。 */
+  pre: string;
+}
 /**
  * 把版本号切成可比较的三段数字。
  *
@@ -22,19 +30,14 @@ export declare function packageInfo(): {
  * @param text - 版本字符串。
  * @returns `{ major, minor, patch, pre }`;认不出时返回 undefined。
  */
-export declare function parseVersion(text: any): {
-  major: number;
-  minor: number;
-  patch: number;
-  pre: string;
-} | undefined;
+export declare function parseVersion(text: unknown): VersionParts | undefined;
 /**
  * 比较两个版本。预发布版(`-rc.1`)排在对应的正式版**之前**。
  * @param left - 版本字符串。
  * @param right - 版本字符串。
  * @returns 负数表示 left 更旧,0 表示相同,正数表示 left 更新;任一认不出时返回 undefined。
  */
-export declare function compareVersions(left: any, right: any): number | undefined;
+export declare function compareVersions(left: unknown, right: unknown): number | undefined;
 /**
  * 把 package.json 里的各种 repository 写法归一成 `owner/repo`。
  *
@@ -43,6 +46,15 @@ export declare function compareVersions(left: any, right: any): number | undefin
  * @returns `owner/repo`;认不出来时为空串。
  */
 export declare function repositorySlug(): string;
+/** 一次更新检查的结论。 */
+export interface UpdateState {
+  ok: boolean;
+  kind: "available" | "current" | "not-applicable" | "unknown";
+  installed: string;
+  latest: string;
+  source: string;
+  reason: string;
+}
 /**
  * 把一次市场 API 响应翻成界面能直接用的结论。**纯函数**,便于自检打靶。
  *
@@ -52,14 +64,15 @@ export declare function repositorySlug(): string;
  * @returns `{ ok, kind, installed, latest, source, reason }`。
  *   `kind`: `available`(有新版) / `current`(已最新) / `not-applicable`(此安装不会更新) / `unknown`(查不到)。
  */
-export declare function updateStateOf(payload: any): {
-  ok: boolean;
-  kind: string;
-  installed: any;
-  latest: any;
-  source: any;
-  reason: string;
-};
+export declare function updateStateOf(payload: unknown): UpdateState;
+/**
+ * 可注入的 fetch 形状。
+ *
+ * 用最窄的那份签名（`(url, init) => Promise<Response>`）而不是 ``typeof fetch`` ——
+ * 后者在 DOM 类型里是**两个重载**，一个具体实现很难同时满足两个重载，
+ * 会报 TS2345「not assignable to parameter」。
+ */
+export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 /**
  * 问宿主「这个插件有没有新版」。**只有被显式调用时才发请求**。
  *
@@ -70,14 +83,7 @@ export declare function updateStateOf(payload: any): {
  * @param baseUrl - 设置页所在的原点;默认相对路径(浏览器里同源)。
  * @returns {@link updateStateOf} 的形状。
  */
-export declare function checkForUpdate(fetchImpl?: typeof fetch, timeoutMs?: number, baseUrl?: string): Promise<{
-  ok: boolean;
-  kind: string;
-  latest: any;
-  source: any;
-  reason: string;
-  installed: any;
-}>;
+export declare function checkForUpdate(fetchImpl?: FetchLike | undefined, timeoutMs?: number, baseUrl?: string): Promise<UpdateState>;
 /**
  * 宿主侧调用 {@link checkForUpdate} 的入口:把浏览器的会话凭据带过去。
  *
@@ -90,12 +96,6 @@ export declare function checkForUpdate(fetchImpl?: typeof fetch, timeoutMs?: num
  * @param timeoutMs - 超时。
  * @returns {@link updateStateOf} 的形状。
  */
-export declare function checkForUpdateWithCookie(baseUrl: any, cookie: any, timeoutMs?: number): Promise<{
-  ok: boolean;
-  kind: string;
-  latest: any;
-  source: any;
-  reason: string;
-  installed: any;
-}>;
+export declare function checkForUpdateWithCookie(baseUrl: string, cookie?: string, timeoutMs?: number): Promise<UpdateState>;
 //#endregion
+export {};

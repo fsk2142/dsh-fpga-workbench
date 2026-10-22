@@ -58,6 +58,15 @@ export function packageInfo() {
   };
 }
 
+/** 版本号切段后的形状。 */
+interface VersionParts {
+  major: number;
+  minor: number;
+  patch: number;
+  /** 预发布标记（不含 `-`）；空串表示正式版。 */
+  pre: string;
+}
+
 /**
  * 把版本号切成可比较的三段数字。
  *
@@ -65,7 +74,7 @@ export function packageInfo() {
  * @param text - 版本字符串。
  * @returns `{ major, minor, patch, pre }`;认不出时返回 undefined。
  */
-export function parseVersion(text) {
+export function parseVersion(text: unknown): VersionParts | undefined {
   const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/u.exec(String(text ?? "").trim());
   if (match === null) return undefined;
   return {
@@ -82,11 +91,13 @@ export function parseVersion(text) {
  * @param right - 版本字符串。
  * @returns 负数表示 left 更旧,0 表示相同,正数表示 left 更新;任一认不出时返回 undefined。
  */
-export function compareVersions(left, right) {
+export function compareVersions(left: unknown, right: unknown): number | undefined {
   const a = parseVersion(left);
   const b = parseVersion(right);
   if (a === undefined || b === undefined) return undefined;
-  for (const key of ["major", "minor", "patch"]) {
+  // 逐段比数字。显式列出三段（而不是 `for (const key of [...])` 索引），
+  // 这样 TS 能确认 `a[key]` 是 number —— 原写法触发 TS7053。
+  for (const key of ["major", "minor", "patch"] as const) {
     if (a[key] !== b[key]) return a[key] - b[key];
   }
   // 正式版 > 预发布版;两个都有预发布标记时按**段**比:
@@ -105,8 +116,8 @@ export function compareVersions(left, right) {
  * @param right - 另一个。
  * @returns 负数/0/正数。
  */
-function comparePreRelease(left, right) {
-  const split = (text) => String(text).split(".");
+function comparePreRelease(left: string, right: string): number {
+  const split = (text: string): string[] => String(text).split(".");
   const a = split(left);
   const b = split(right);
   for (let at = 0; at < Math.max(a.length, b.length); at += 1) {
@@ -164,12 +175,30 @@ const MARKET_API = "/dsh-market/api/v1";
  */
 const NON_UPDATABLE_SOURCES = new Set(["linked", "file", "directory", "workspace"]);
 
+/** 市场 API 响应里 `package` 对象可能带的字段（形状不可信，逐项校验）。 */
+interface MarketPackageShape {
+  source?: unknown;
+  installedVersion?: unknown;
+  latestVersion?: unknown;
+  updateAvailable?: unknown;
+}
+
+/** 一次更新检查的结论。 */
+export interface UpdateState {
+  ok: boolean;
+  kind: "available" | "current" | "not-applicable" | "unknown";
+  installed: string;
+  latest: string;
+  source: string;
+  reason: string;
+}
+
 /** 从响应里取 `package` 对象(形状不可信,逐项校验)。 */
-function packageOf(payload) {
+function packageOf(payload: unknown): MarketPackageShape | undefined {
   if (typeof payload !== "object" || payload === null) return undefined;
-  const pkg = payload.package;
+  const pkg = (payload as { package?: unknown }).package;
   if (typeof pkg !== "object" || pkg === null) return undefined;
-  return pkg;
+  return pkg as MarketPackageShape;
 }
 
 /**
@@ -181,7 +210,7 @@ function packageOf(payload) {
  * @returns `{ ok, kind, installed, latest, source, reason }`。
  *   `kind`: `available`(有新版) / `current`(已最新) / `not-applicable`(此安装不会更新) / `unknown`(查不到)。
  */
-export function updateStateOf(payload) {
+export function updateStateOf(payload: unknown): UpdateState {
   const pkg = packageOf(payload);
   if (pkg === undefined) {
     return { ok: false, kind: "unknown", installed: "", latest: "", source: "", reason: "更新接口没有返回 package 字段" };
@@ -219,6 +248,15 @@ export function updateStateOf(payload) {
 }
 
 /**
+ * 可注入的 fetch 形状。
+ *
+ * 用最窄的那份签名（`(url, init) => Promise<Response>`）而不是 ``typeof fetch`` ——
+ * 后者在 DOM 类型里是**两个重载**，一个具体实现很难同时满足两个重载，
+ * 会报 TS2345「not assignable to parameter」。
+ */
+export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
+
+/**
  * 问宿主「这个插件有没有新版」。**只有被显式调用时才发请求**。
  *
  * 走宿主自带的市场 API,而不是自己去问 GitHub —— 理由见文件头:只有宿主知道
@@ -228,7 +266,11 @@ export function updateStateOf(payload) {
  * @param baseUrl - 设置页所在的原点;默认相对路径(浏览器里同源)。
  * @returns {@link updateStateOf} 的形状。
  */
-export async function checkForUpdate(fetchImpl = globalThis.fetch, timeoutMs = 8_000, baseUrl = "") {
+export async function checkForUpdate(
+  fetchImpl: FetchLike | undefined = globalThis.fetch as FetchLike,
+  timeoutMs = 8_000,
+  baseUrl = ""
+): Promise<UpdateState> {
   const current = packageInfo().version;
   if (typeof fetchImpl !== "function") {
     return {
@@ -264,6 +306,8 @@ export async function checkForUpdate(fetchImpl = globalThis.fetch, timeoutMs = 8
     // 市场没给 installedVersion 时,退回本地清单里的版本(它一定是对的)。
     return { ...state, installed: state.installed === "" ? current : state.installed };
   } catch (error) {
+    // `error` 在 TS 里是 `unknown`，先收窄再用 —— 直接 `error?.name` 会 TS2339。
+    const named = error instanceof Error ? error : undefined;
     return {
       ok: false,
       kind: "unknown",
@@ -271,7 +315,9 @@ export async function checkForUpdate(fetchImpl = globalThis.fetch, timeoutMs = 8
       latest: "",
       source: "",
       reason:
-        error?.name === "AbortError" ? `请求超时(${String(timeoutMs)}ms)` : `请求失败:${String(error?.message ?? error)}`
+        named?.name === "AbortError"
+          ? `请求超时(${String(timeoutMs)}ms)`
+          : `请求失败:${named !== undefined ? named.message : String(error)}`
     };
   } finally {
     clearTimeout(timer);
@@ -290,13 +336,17 @@ export async function checkForUpdate(fetchImpl = globalThis.fetch, timeoutMs = 8
  * @param timeoutMs - 超时。
  * @returns {@link updateStateOf} 的形状。
  */
-export async function checkForUpdateWithCookie(baseUrl, cookie, timeoutMs = 8_000) {
-  const extra = { accept: "application/json" };
+export async function checkForUpdateWithCookie(
+  baseUrl: string,
+  cookie?: string,
+  timeoutMs = 8_000
+): Promise<UpdateState> {
+  const extra: Record<string, string> = { accept: "application/json" };
   if (typeof cookie === "string" && cookie !== "") extra.cookie = cookie;
   // **只合并 headers,其余选项(signal / method / credentials)原样透传** ——
   // 早先这里把 options 整个重建,顺手丢掉了 checkForUpdate 传进来的 AbortSignal,
   // 于是超时永远不会触发,请求一直挂着直到外部放弃。
-  const withHeaders = (url, options = {}) =>
+  const withHeaders = (url: string, options: RequestInit = {}): Promise<Response> =>
     globalThis.fetch(url, { ...options, headers: { ...extra, ...(options.headers ?? {}) } });
   return checkForUpdate(withHeaders, timeoutMs, baseUrl);
 }

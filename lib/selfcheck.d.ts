@@ -15,23 +15,29 @@ declare const REQUIRED_PRESET_FILES: string[];
  * 两者逐项一致,漏改会在 `npm test` 里红。
  */
 export declare const BUNDLED_SKILLS: string[];
+/** 自检单项的三档结论。 */
+export type CheckStatus = "pass" | "warn" | "fail";
+/** 自检的一项结论（设置页按这个渲染）。 */
+export interface CheckEntry {
+  id: string;
+  label: string;
+  status: CheckStatus;
+  detail: string;
+}
+/** `runSelfCheck` 的完整结论。 */
+export interface SelfCheckReport {
+  ranAt: string;
+  ok: boolean;
+  failed: number;
+  warned: number;
+  checks: CheckEntry[];
+}
 /**
  * 跑一遍只读自检。
  * @param values - 当前已保存的设置值(调用方从 settings 服务取)。
  * @param packageRoot - 要检查的包根;默认本文件所在的包(测试夹具可传别的目录)。
  * @returns `{ ranAt, ok, failed, warned, checks }` —— `checks` 每项 `{ id, label, status, detail }`。
  */
-export declare function runSelfCheck(values?: {}, packageRoot?: string): {
-  ranAt: string;
-  ok: boolean;
-  failed: number;
-  warned: number;
-  checks: {
-    id: any;
-    label: any;
-    status: any;
-    detail: any;
-  }[];
-};
+export declare function runSelfCheck(values?: Record<string, unknown>, packageRoot?: string): SelfCheckReport;
 //#endregion
 export { REQUIRED_PRESET_FILES };

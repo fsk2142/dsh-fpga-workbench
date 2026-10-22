@@ -43,7 +43,16 @@ const BUNDLED_TOOLS_DIR = fileURLToPath(new URL("../presets/fpga-workbench/tools
  * 同一个目录里两套同名口径必然混。技能名早就是 `fpga-module-*` / `fpga-project-*` 这么分的,
  * 命令照同一口径。目录与名字都由守卫对着 `TOOLS` 登记校验,不会各自漂。
  */
-export const LEVEL_DIRS = { module: "module", project: "project", shared: "" };
+/** 命令级别的三个取值（`TOOLS[].level` 只会是它们之一）。 */
+export type ToolLevel = "module" | "project" | "shared";
+
+/**
+ * 级别 → 命令所在子目录（`shared` 是两级共用，所以是空串）。
+ *
+ * `Record<ToolLevel, string>` 而不是裸对象字面量：`TOOLS[].level` 是 `ToolLevel`，
+ * 用这个类型才能直接 `LEVEL_DIRS[tool.level]` 索引（裸字面量索引会 TS7053）。
+ */
+export const LEVEL_DIRS: Record<ToolLevel, string> = { module: "module", project: "project", shared: "" };
 
 /** 命令名的级别前缀(`shared` 不加前缀 —— 它两级都用,加了反而误导)。 */
 const LEVEL_PREFIX = { module: "module-", project: "project-", shared: "" };

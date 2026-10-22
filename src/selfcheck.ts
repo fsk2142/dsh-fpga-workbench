@@ -59,9 +59,29 @@ export const BUNDLED_SKILLS = [
   "fpga-project-timing"
 ];
 
-const entry = (id, label, status, detail) => ({ id, label, status, detail });
+/** 自检单项的三档结论。 */
+export type CheckStatus = "pass" | "warn" | "fail";
 
-const readText = (path) => {
+/** 自检的一项结论（设置页按这个渲染）。 */
+export interface CheckEntry {
+  id: string;
+  label: string;
+  status: CheckStatus;
+  detail: string;
+}
+
+/** `runSelfCheck` 的完整结论。 */
+export interface SelfCheckReport {
+  ranAt: string;
+  ok: boolean;
+  failed: number;
+  warned: number;
+  checks: CheckEntry[];
+}
+
+const entry = (id: string, label: string, status: CheckStatus, detail: string): CheckEntry => ({ id, label, status, detail });
+
+const readText = (path: string): string | undefined => {
   try {
     return readFileSync(path, "utf8");
   } catch {
@@ -70,7 +90,7 @@ const readText = (path) => {
 };
 
 /** 只列目录(不跟随链接、不递归),读不到就当空。 */
-const listDirs = (path) => {
+const listDirs = (path: string): string[] => {
   try {
     return readdirSync(path, { withFileTypes: true })
       .filter((item) => item.isDirectory())
@@ -81,7 +101,7 @@ const listDirs = (path) => {
   }
 };
 
-const isRegularFile = (path) => {
+const isRegularFile = (path: string): boolean => {
   try {
     return statSync(path).isFile();
   } catch {
@@ -90,7 +110,7 @@ const isRegularFile = (path) => {
 };
 
 /** 只认 SKILL.md 里显式链接的 references/*.md；这样资源不会成为加载器永远到不了的孤儿。 */
-const linkedSkillReferences = (text) => [
+const linkedSkillReferences = (text: unknown): string[] => [
   ...new Set(
     [...String(text ?? "").matchAll(/\[[^\]]+\]\((references\/[^)\s]+\.md)\)/gu)].map(
       (match) => match[1]
@@ -99,7 +119,7 @@ const linkedSkillReferences = (text) => [
 ];
 
 /** 缺失清单的说明文字:全列前几个,多了给条数(几十条会把设置页撑爆)。 */
-const missingNote = (missing) =>
+const missingNote = (missing: string[]): string =>
   missing.length <= 6 ? missing.join("、") : `${missing.slice(0, 6).join("、")} 等 ${String(missing.length)} 个`;
 
 /**
@@ -112,12 +132,13 @@ const missingNote = (missing) =>
  * @param entries - 入口文件的相对路径(用 `/` 分隔)。
  * @returns `{ missing, count }`:`missing` 是缺失的相对路径,`count` 是走到的依赖模块数。
  */
-function collectMissingImports(toolRoot, entries) {
+function collectMissingImports(toolRoot: string, entries: string[]): { missing: string[]; count: number } {
   const seen = new Set(entries);
-  const queue = [...entries];
-  const missing = [];
+  const queue: string[] = [...entries];
+  const missing: string[] = [];
   while (queue.length > 0) {
     const relativePath = queue.shift();
+    if (relativePath === undefined) break;
     const text = readText(join(toolRoot, ...relativePath.split("/")));
     if (text === undefined) continue; // 入口自己缺:由调用方单独报,这里不重复
     for (const match of text.matchAll(/(?:from|import)\s*["'](\.[^"']+)["']/gu)) {
@@ -137,9 +158,12 @@ function collectMissingImports(toolRoot, entries) {
  * @param packageRoot - 要检查的包根;默认本文件所在的包(测试夹具可传别的目录)。
  * @returns `{ ranAt, ok, failed, warned, checks }` —— `checks` 每项 `{ id, label, status, detail }`。
  */
-export function runSelfCheck(values = {}, packageRoot = PACKAGE_ROOT) {
+export function runSelfCheck(
+  values: Record<string, unknown> = {},
+  packageRoot: string = PACKAGE_ROOT
+): SelfCheckReport {
   const presetRoot = join(packageRoot, "presets", "fpga-workbench");
-  const checks = [];
+  const checks: CheckEntry[] = [];
 
   // 1) 四棵运行时子树 + 按名字读的固定文件 —— 少了哪一样,对应能力就静默失效。
   const missingTrees = RUNTIME_TREES.filter((tree) => !existsSync(join(presetRoot, tree)));
@@ -191,8 +215,8 @@ export function runSelfCheck(values = {}, packageRoot = PACKAGE_ROOT) {
   );
   /** 磁盘上真实存在的模板文件（按 templates/ 下的相对路径）。 */
   const onDiskTemplates = (() => {
-    const out = [];
-    const walk = (dir, prefix) => {
+    const out: string[] = [];
+    const walk = (dir: string, prefix: string): void => {
       let entries;
       try {
         entries = readdirSync(dir, { withFileTypes: true });
@@ -233,14 +257,18 @@ export function runSelfCheck(values = {}, packageRoot = PACKAGE_ROOT) {
 
   // 4) 自带命令:逐个核对 TOOLS 登记的文件(骨架 / 起文件 / 检查 / 验收各命令的入口)。
   const toolRoot = join(presetRoot, "tools");
-  const missingTools = TOOLS.map((tool) => join(LEVEL_DIRS[tool.level] ?? "", tool.file)).filter(
+  // `TOOLS[].level` 在 toolchain 里的推断类型是 `string`（数组字面量里混了三种字面量），
+  // 而 `LEVEL_DIRS` 的键只有那三个。这里用一个窄函数收口，避免每处索引都 TS7053。
+  // 行为完全不变：未知 level 仍然落到 `?? ""`。
+  const levelDir = (level: string): string => LEVEL_DIRS[level as keyof typeof LEVEL_DIRS] ?? "";
+  const missingTools = TOOLS.map((tool) => join(levelDir(tool.level), tool.file)).filter(
     (relativePath) => !existsSync(join(toolRoot, relativePath))
   );
   // 入口在、它 import 的辅助模块不在 —— 命令一跑就 import 失败。顺着相对 import 递归走一遍,
   // 不另立一份"辅助模块清单"(那种清单会跟真实依赖各漂各的)。
   const { missing: missingHelpers, count: helperCount } = collectMissingImports(
     toolRoot,
-    TOOLS.map((tool) => join(LEVEL_DIRS[tool.level] ?? "", tool.file).split("\\").join("/"))
+    TOOLS.map((tool) => join(levelDir(tool.level), tool.file).split("\\").join("/"))
   );
   const commandProblems = [...missingTools, ...missingHelpers];
   checks.push(
@@ -303,7 +331,12 @@ export function runSelfCheck(values = {}, packageRoot = PACKAGE_ROOT) {
   );
 
   // 7) 已登记的工具路径:填了但文件不在,对应的能力卡会判不可用。
-  const toolFields = FIELDS.filter((field) => field.tool !== undefined && field.kind !== undefined);
+  //
+  // `FIELDS` 是若干对象的联合（工具字段 / 模板字段 / 其他），**不是每个成员都有**
+  // `tool` 与 `kind` —— 直接 `field.tool` 会 TS2339。用 `in` 收窄即可，运行时等价。
+  const toolFields = FIELDS.filter(
+    (field) => "tool" in field && "kind" in field && field.tool !== undefined && field.kind !== undefined
+  );
   const registered = toolFields.filter((field) => String(values[field.key] ?? "").trim() !== "");
   const broken = registered.filter((field) => !existsSync(String(values[field.key]).trim()));
   checks.push(

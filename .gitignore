@@ -23,8 +23,17 @@ dfx_runtime.txt
 # pnpm 的 store(镜像实测时可能被建在仓库根)
 .pnpm-store/
 
-# DSH 安装到 profile 时由 pnpm 写入的锁文件(不属于插件源码)
-pnpm-lock.yaml
+# ── lockfile：**提交入库**（2026-10-22 第三次审查 N1）─────────────────────────
+# 原来这两行把 lockfile 忽略了，而 CI 写的是 `npm ci` —— 无 lockfile 时 npm ci
+# 直接 EUSAGE 退 1，**CI 第一步必红**，那条"lib 与 src 同步"的防线等于没上。
+#
+# 现在 CI 用 `pnpm install --frozen-lockfile`，前提就是 pnpm-lock.yaml 在版本库里：
+#   · 它保证 CI 装到的依赖版本与开发者一致（--frozen-lockfile 会因漂移而失败）；
+#   · 本仓库没有运行时依赖，devDependencies 只有 tsdown / typescript —— 锁住它们
+#     才能让"重建后 lib 无差异"这条断言真的稳定（不同版本可能产出不同代码）。
+#
+# package-lock.json 仍忽略：本仓库用 pnpm，不该有 npm 的锁文件（万一有人 npm install
+# 生成了，别让它混进版本库）。
 package-lock.json
 
 # 编辑器与系统残留

@@ -41,8 +41,19 @@ const INSTALLED = PROFILE_DIR === "" ? "" : join(PROFILE_DIR, "node_modules", PA
 
 const checkOnly = process.argv.includes("--check");
 
+/**
+ * 本插件目录的 **file URL**（`file:///C:/Work/...`）。
+ *
+ * 用 `.href` 而不是 `.pathname`（2026-10-22 审查 N2）：
+ *   · `.href` → `file:///C:/Work/x`（标准形态，双斜杠 + URL 编码）
+ *   · `.pathname` → `/C:/Work/x`，前面再拼 `file:` 得到 `file:/C:/Work/x`（单斜杠，
+ *     非标准 —— 靠下游容错才能用）。
+ * 注意 `.href` **本身就是完整 URL**，不能再加 `file:` 前缀。
+ */
+const FILE_URL = pathToFileURL(ROOT).href;
+
 /** 恢复命令:无论在哪一步失败,用户都可以靠这一条把状态修回来。 */
-const RECOVERY = `dsh plugin --profile ${PROFILE_NAME} add file:${pathToFileURL(ROOT).pathname}`;
+const RECOVERY = `dsh plugin --profile ${PROFILE_NAME} add ${FILE_URL}`;
 
 /** 文件名安全的时间戳(备份 / 半成品改名用)。 */
 const timestamp = () => new Date().toISOString().replace(/[:.]/gu, "-");
@@ -132,9 +143,8 @@ function dshJsEntry() {
  * @returns 是否成功。
  */
 function runAdd() {
-  // `file:` 后面必须是**合法的 file URL**（`pathToFileURL` 负责转义反斜杠与空格）。
-  // 手拼 `file:${ROOT}` 能跑通只是靠 dsh CLI 的容错。
-  const spec = `file:${pathToFileURL(ROOT).pathname}`;
+  // 传标准的 `file:///C:/...`（`FILE_URL` 已含 scheme，不要再拼 `file:`）。
+  const spec = FILE_URL;
   console.log(`\n安装: dsh plugin --profile ${PROFILE_NAME} add ${spec}\n`);
   const jsEntry = dshJsEntry();
   // 找得到真实入口就用 node 直跑（无 shell）；找不到才退回 shell 形态。

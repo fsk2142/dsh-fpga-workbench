@@ -19,7 +19,7 @@
 // 不算失败** —— 它已经不可能由本脚本处置了(不删除),拿它报红只会逼人去恢复删除。
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { cleanupEntry, formatCleanup } from "./lib/cleanup.mjs";
 import { homeDir, profileDir } from "./lib/host.mjs";
@@ -69,7 +69,7 @@ if (!existsSync(INSTALLED)) {
       "",
       "这种情况不能手工同步 —— 说明这个包还没被 profile 接受过。",
       "请先正常安装(它会写 profile 的依赖与锁文件):",
-      `  dsh plugin --profile ${PROFILE_NAME} add file:${ROOT}`,
+      `  dsh plugin --profile ${PROFILE_NAME} add ${pathToFileURL(ROOT).href}`,
       ""
     ].join("\n")
   );

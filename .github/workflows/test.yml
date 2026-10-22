@@ -5,11 +5,23 @@ name: test
 # 开发者本机,因为前者要 DSH profile、后者要厂商工具。
 #
 # 运行时没有依赖(插件把依赖注入宿主),但**构建要 devDependencies**(tsdown / typescript),
-# 所以这里需要 npm ci。
+# 所以 CI 必须先装依赖。
 #
-# 2026-10-22 审查补充:原来只有一条 `npm test`,而 7 个源码检查 import 的是 **lib 快照**
-# —— 改了 src 忘记 build,测试照样全绿、发出去的仍是旧产物,CI 也不会红。
-# 现在补 typecheck + build + 「重建后 lib/ 必须无差异」,把这条静默断链堵死。
+# ## 为什么用 pnpm 而不是 npm ci
+#
+# 2026-10-22 第三次审查(N1)：原来写 `npm ci`，而仓库**没有提交任何 lockfile**
+# （`package-lock.json` 与 `pnpm-lock.yaml` 都在 .gitignore 里）—— `npm ci` 无 lockfile
+# 直接 EUSAGE 退 1，**CI 第一步就必红**，H3 那条"lib 与 src 同步"防线等于没上。
+#
+# 这个仓库实际就是用 pnpm 装的（`node_modules/.pnpm`、`pnpm-lock.yaml` 都在）。
+# 所以：CI 用 pnpm + `--frozen-lockfile`，并把 `pnpm-lock.yaml` 提交入库 ——
+# lockfile 进版本库才能保证"CI 装到的依赖版本与开发者一��"，也是 `--frozen-lockfile` 的前提。
+#
+# ## 防线
+#
+# 原来只有一条 `npm test`，而 7 个源码检查 import 的是 **lib 快照** —— 改了 src 忘记
+# build，测试照样全绿、发出去仍是旧产物，CI 也不会红。现在补 typecheck + build +
+# 「重建后 lib/ 不许有差异」，把这条静默断链堵死。
 on:
   push:
   pull_request:
@@ -19,18 +31,23 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          # 与本地一致（本地实测 pnpm v11.24.0；锁大版本即可，小版本由 lockfile 决定）。
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: npm ci（构建工具:tsdown / typescript）
-        run: npm ci
+          cache: pnpm
+      - name: pnpm install --frozen-lockfile（构建工具:tsdown / typescript）
+        run: pnpm install --frozen-lockfile
       - name: typecheck（tsc --noEmit）
-        run: npm run typecheck
+        run: pnpm run typecheck
       - name: build（tsdown:src → lib）
-        run: npm run build
+        run: pnpm run build
       # **关键防线**:lib/ 已提交入库,是用户真正加载的产物。
       # 重建后若 lib/ 有任何差异,说明提交里的产物与 src 不同步 —— 直接让 CI 红。
       - name: lib 与 src 同步（重建后 lib/ 不许有差异）
         run: git diff --exit-code -- lib
-      - name: npm test（源码层:判定逻辑 / 模板 / 预设契约）
-        run: npm test
+      - name: test（源码层:判定逻辑 / 模板 / 预设契约）
+        run: pnpm test

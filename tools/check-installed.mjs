@@ -9,7 +9,7 @@
 // 退出码 0 = 已装与源一致;非 0 = 需要重装(先 remove 再 add)。
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { compareTree, shippedFiles } from "./shipped.mjs";
 
@@ -26,7 +26,7 @@ const check = (ok, label, detail) => {
 
 if (!existsSync(INSTALLED)) {
   console.log(`未安装:${INSTALLED}`);
-  console.log(`安装命令:dsh plugin --profile desktop add file:${ROOT}`);
+  console.log(`安装命令:dsh plugin --profile desktop add ${pathToFileURL(ROOT).href}`);
   process.exitCode = 1;
 } else {
   console.log(`源:   ${ROOT}`);

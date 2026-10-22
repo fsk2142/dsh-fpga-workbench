@@ -105,10 +105,10 @@ export interface Binding {
   role: string;
   /** 该绑定允许的工具键（由 role 决定，bind() 里一定补上）。 */
   tools: string[];
-  /** "用哪个工具"的设置字段名。读取时会过 `valueOf`，所以可能是 undefined。 */
-  toolKey?: string;
-  /** "这个环节的覆盖路径"的设置字段名。 */
-  pathKey?: string;
+  /** "用哪个工具"的设置字段名（每个绑定都有）。 */
+  toolKey: string;
+  /** "这个环节的覆盖路径"的设置字段名（每个绑定都有）。 */
+  pathKey: string;
   [extra: string]: unknown;
 }
 
@@ -920,7 +920,7 @@ function inferLegacyTool(role: string, path: string): string {
     if (/(^|\\)quartus_sh(?:\.exe)?$/u.test(lower) || lower.includes("\\quartus\\")) return "quartus";
     if (/(^|\\)vivado(?:\.bat|\.exe)?$/u.test(lower) || lower.includes("\\vivado\\")) return "vivado";
   }
-  return LEGACY_CUSTOM[role]?.tool;
+  return LEGACY_CUSTOM[role]?.tool ?? "";
 }
 
 /** 用于比较 Windows 路径是否只是大小写或分隔符不同；不解析、不访问文件系统。 */
@@ -1356,6 +1356,19 @@ export function resolveCapabilities(values: Record<string, unknown>, probe: (pat
  * @param tool - 该能力当前的工具选择。
  * @param probe - `(path, kind) => boolean`。
  */
+/** 一个探测目标（{@link DETECT_TARGETS} 的一项）。 */
+export interface DetectTarget {
+  tool: string;
+  label: string;
+  field: string;
+  /** 可选：显式指定版本查询命令。 */
+  version?: { args: string[]; pattern: RegExp; timeoutMs?: number };
+  /** 候选路径的 glob 列表。 */
+  globs?: Array<{ root: string; pattern: string; fallback?: boolean }>;
+  fields?: string[];
+  [extra: string]: unknown;
+}
+
 /** 一个内置模板槽位（{@link TEMPLATE_FIELDS} 的一项）。 */
 export interface TemplateSlot {
   key: string;
@@ -1369,6 +1382,8 @@ export interface TemplateSlot {
 /** 一张能力卡解析后的结论：能力定义 + 这次选中的工具与可用性。 */
 export interface ResolvedCapability extends CapabilitySpec {
   selection: string;
+  /** 解析状态：`ready` / `missing` / `auto` / `invalid` 等（客户端按它分色）。 */
+  state?: string;
   tool?: string;
   toolLabel?: string;
   configured?: boolean;
@@ -1417,7 +1432,7 @@ export function resolveCapabilityTemplates(values: Record<string, unknown>, capa
  * @returns 每项 `{ key, label, hint, kind, skips, path, configured, present }`。
  */
 export function inspectTools(values: Record<string, unknown>, probe: (path: string, kind?: string) => boolean): InspectedField[] {
-  return FIELDS.map((field) => {
+  return (FIELDS as FieldSpec[]).map((field) => {
     const raw = valueOf(values, field.key);
     // 下拉字段:没有路径可探。"就绪"= 值(空则取默认值)确实是合法选项之一。
     if (field.control === "select") {
@@ -1833,7 +1848,7 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
  * @param tools - {@link inspectTools} 的结果。
  * @returns 提示段里的一节。
  */
-function choiceLines(tools: Array<Record<string, unknown>>): string[] {
+function choiceLines(tools: InspectedField[]): string[] {
   const byKey = new Map(tools.filter((tool) => tool.control === "select").map((tool) => [tool.key, tool]));
   const labelOf = (tool: Record<string, unknown>): string | undefined => tool?.options?.find((option) => option.value === tool.path)?.label ?? String(tool?.path ?? "");
   const rtl = byKey.get("rtlLangStd");
@@ -1883,7 +1898,7 @@ export function resolveTemplates(
 }
 
 /** 探测包一层:设置页的探针不该把提示组装搞崩。 */
-function exists(probe: (path: string) => boolean, path: string): boolean {
+function exists(probe: (path: string, kind?: string) => boolean, path: string): boolean {
   try {
     return probe(path, "file") === true;
   } catch {
@@ -1928,7 +1943,7 @@ export const VERSION_PROBE_TIMEOUT_MS = 5000;
 export function promptScalar(value: unknown): string {
   const text = String(value ?? "");
   return text.replace(/[\u0000-\u001f\u007f-\u009f]/gu, (ch) => {
-    const code = ch.codePointAt(0);
+    const code = ch.codePointAt(0) ?? 0;
     if (ch === "\n") return "\\n";
     if (ch === "\r") return "\\r";
     if (ch === "\t") return "\\t";
@@ -2002,7 +2017,7 @@ export function queryVersion(path: string, command: { args: string[]; pattern: R
       windowsHide: true
     });
     if (result.error !== undefined && result.error !== null) {
-      return { error: String(result.error.code ?? result.error.message) };
+      return { error: String((result.error as { code?: string; message?: string }).code ?? (result.error as { message?: string }).message) };
     }
     // python --version 在 2.x 走 stderr、3.x 走 stdout;两个流一起看最省事
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
@@ -2019,7 +2034,7 @@ export function queryVersion(path: string, command: { args: string[]; pattern: R
     if (version === undefined) return { error: "没能从输出里认出版本号", output: output.slice(0, 200) };
     return { version };
   } catch (error) {
-    return { error: String(error?.code ?? error?.message ?? error) };
+    return { error: String((error as { code?: string; message?: string })?.code ?? (error as { message?: string })?.message ?? error) };
   }
 }
 
@@ -2033,7 +2048,7 @@ export function queryVersion(path: string, command: { args: string[]; pattern: R
  * `version` 只有运行时字段有:版本是"能不能用"的一部分,文件在不在不够(见 {@link queryVersion})。
  * 一律**只如实报版本,不做判定**(本模式没有把哪个版本当硬要求;用户对 Python 3 没有统一约束)。
  */
-export const DETECT_TARGETS = [
+export const DETECT_TARGETS: DetectTarget[] = [
   {
     field: "modelsimPath",
     tool: "modelsim",
@@ -2232,7 +2247,7 @@ export function detectTools(
     try {
       queried = readVersion(path, target.version) ?? {};
     } catch (error) {
-      queried = { error: String(error?.message ?? error) };
+      queried = { error: String((error as { message?: string })?.message ?? error) };
     }
     const version = typeof queried.version === "string" ? queried.version : undefined;
     const note = version === undefined
@@ -2281,7 +2296,7 @@ export function detectTools(
  * 不写版本号(会过期)、不写"推荐某某版本"(各家工程要求不同)、不写直链
  * (链接会变,而且有些要登录)。`free` 表示可免费用于商用;`account` 表示下载需注册账号。
  */
-export const INSTALL_HINTS = {
+export const INSTALL_HINTS: Record<string, string[]> = {
   python: {
     label: "Python 3",
     free: true,

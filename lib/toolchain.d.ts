@@ -70,10 +70,10 @@ export interface Binding {
   role: string;
   /** 该绑定允许的工具键（由 role 决定，bind() 里一定补上）。 */
   tools: string[];
-  /** "用哪个工具"的设置字段名。读取时会过 `valueOf`，所以可能是 undefined。 */
-  toolKey?: string;
-  /** "这个环节的覆盖路径"的设置字段名。 */
-  pathKey?: string;
+  /** "用哪个工具"的设置字段名（每个绑定都有）。 */
+  toolKey: string;
+  /** "这个环节的覆盖路径"的设置字段名（每个绑定都有）。 */
+  pathKey: string;
   [extra: string]: unknown;
 }
 /** 能力卡里的一个模板槽位。 */
@@ -283,7 +283,6 @@ export declare const FIELDS: ({
   blankNote?: undefined;
   kind?: undefined;
 } | {
-  default?: undefined;
   options?: undefined;
   key: string;
   section: string;
@@ -298,8 +297,8 @@ export declare const FIELDS: ({
   skips: never[];
   usage: (path: string) => string[];
   defaultPath?: undefined;
-} | {
   default?: undefined;
+} | {
   options?: undefined;
   usage?: undefined;
   key: string;
@@ -314,8 +313,8 @@ export declare const FIELDS: ({
   kind: string;
   required: boolean;
   skips: never[];
-} | {
   default?: undefined;
+} | {
   options?: undefined;
   usage?: undefined;
   defaultPath?: undefined;
@@ -330,8 +329,51 @@ export declare const FIELDS: ({
   kind: string;
   required: boolean;
   skips: never[];
+  default?: undefined;
 } | {
-  key: string | undefined;
+  section: string;
+  sectionLabel: string;
+  capability: string;
+  capabilityLabel: string;
+  group: string;
+  required: boolean;
+  skips: never[];
+  key: string;
+  control: string;
+  label: string;
+  hint: string;
+  default: string;
+  options: ({
+    value: string;
+    label: string;
+  } | {
+    value: string;
+    label: string;
+    supportNote: string | undefined;
+  })[];
+} | {
+  section: string;
+  sectionLabel: string;
+  capability: string;
+  capabilityLabel: string;
+  group: string;
+  required: boolean;
+  skips: never[];
+  key: string;
+  category: string;
+  control: string;
+  label: string;
+  hint: string;
+  default: string;
+} | {
+  options?: undefined;
+  usage?: undefined;
+  defaultPath?: undefined;
+  section?: undefined;
+  sectionLabel?: undefined;
+  blankNote?: undefined;
+  kind?: undefined;
+  key: string;
   group: string;
   control: string;
   label: string;
@@ -437,6 +479,26 @@ export declare function resolveCapabilities(values: Record<string, unknown>, pro
  * @param tool - 该能力当前的工具选择。
  * @param probe - `(path, kind) => boolean`。
  */
+/** 一个探测目标（{@link DETECT_TARGETS} 的一项）。 */
+export interface DetectTarget {
+  tool: string;
+  label: string;
+  field: string;
+  /** 可选：显式指定版本查询命令。 */
+  version?: {
+    args: string[];
+    pattern: RegExp;
+    timeoutMs?: number;
+  };
+  /** 候选路径的 glob 列表。 */
+  globs?: Array<{
+    root: string;
+    pattern: string;
+    fallback?: boolean;
+  }>;
+  fields?: string[];
+  [extra: string]: unknown;
+}
 /** 一个内置模板槽位（{@link TEMPLATE_FIELDS} 的一项）。 */
 export interface TemplateSlot {
   key: string;
@@ -449,6 +511,8 @@ export interface TemplateSlot {
 /** 一张能力卡解析后的结论：能力定义 + 这次选中的工具与可用性。 */
 export interface ResolvedCapability extends CapabilitySpec {
   selection: string;
+  /** 解析状态：`ready` / `missing` / `auto` / `invalid` 等（客户端按它分色）。 */
+  state?: string;
   tool?: string;
   toolLabel?: string;
   configured?: boolean;
@@ -610,48 +674,7 @@ export declare function queryVersion(path: string, command: {
  * `version` 只有运行时字段有:版本是"能不能用"的一部分,文件在不在不够(见 {@link queryVersion})。
  * 一律**只如实报版本,不做判定**(本模式没有把哪个版本当硬要求;用户对 Python 3 没有统一约束)。
  */
-export declare const DETECT_TARGETS: ({
-  field: string;
-  tool: string;
-  label: string;
-  exe: string;
-  kind: string;
-  globs: {
-    root: string;
-    pattern: string;
-  }[];
-  version?: undefined;
-} | {
-  kind?: undefined;
-  field: string;
-  tool: string;
-  label: string;
-  exe: string;
-  globs: ({
-    root: string;
-    pattern: string;
-    fallback?: undefined;
-  } | {
-    root: string;
-    pattern: string;
-    fallback: boolean;
-  })[];
-  version?: undefined;
-} | {
-  kind?: undefined;
-  field: string;
-  tool: string;
-  label: string;
-  exe: string;
-  version: {
-    args: string[];
-    pattern: RegExp;
-  };
-  globs: {
-    root: string;
-    pattern: string;
-  }[];
-})[];
+export declare const DETECT_TARGETS: DetectTarget[];
 /** 列一个目录下的子目录名;读不动时为空 —— 一个拒绝访问的目录不该让整次检测失败。 */
 export declare function readdirNames(dir: string): string[];
 /**
@@ -692,72 +715,7 @@ export declare function detectTools(probe?: typeof probeFilesystem, list?: typeo
  * 不写版本号(会过期)、不写"推荐某某版本"(各家工程要求不同)、不写直链
  * (链接会变,而且有些要登录)。`free` 表示可免费用于商用;`account` 表示下载需注册账号。
  */
-export declare const INSTALL_HINTS: {
-  python: {
-    label: string;
-    free: boolean;
-    account: boolean;
-    where: string;
-    note: string;
-    url: string;
-  };
-  verilator: {
-    label: string;
-    free: boolean;
-    account: boolean;
-    where: string;
-    note: string;
-    url: string;
-  };
-  iverilog: {
-    label: string;
-    free: boolean;
-    account: boolean;
-    where: string;
-    note: string;
-    url: string;
-  };
-  modelsim: {
-    label: string;
-    free: boolean;
-    account: boolean;
-    where: string;
-    note: string;
-    url: string;
-  };
-  questa: {
-    label: string;
-    free: boolean;
-    account: boolean;
-    where: string;
-    note: string;
-    url: string;
-  };
-  xsim: {
-    label: string;
-    free: boolean;
-    account: boolean;
-    where: string;
-    note: string;
-    url: string;
-  };
-  vivado: {
-    label: string;
-    free: boolean;
-    account: boolean;
-    where: string;
-    note: string;
-    url: string;
-  };
-  quartus: {
-    label: string;
-    free: boolean;
-    account: boolean;
-    where: string;
-    note: string;
-    url: string;
-  };
-};
+export declare const INSTALL_HINTS: Record<string, string[]>;
 /**
  * 「最省事的起步组合」—— 只在**一个工具都没登记**时出现,不打扰已经配好的人。
  *

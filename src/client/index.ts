@@ -546,6 +546,33 @@ interface CapabilityCard {
   [extra: string]: unknown;
 }
 
+/** 字段定义（宿主 CAPABILITIES/TOOLS 展开后的渲染输入，客户端只读这几个成员）。 */
+interface ClientField extends Record<string, unknown> {
+  key?: string;
+  control?: string;
+  kind?: string;
+  label?: string;
+  options?: Array<{ value: string; label?: string }>;
+  fieldKeys?: string[];
+}
+
+/** 目录浏览的本地状态（不是宿主响应，是页面上的草稿）。 */
+interface BrowseState {
+  listing?: BrowsePayload;
+  filter?: string;
+  loading?: boolean;
+  error?: string;
+  [extra: string]: unknown;
+}
+
+/** `detectCtx`：把检测相关的渲染工具传给下层。 */
+interface DetectContext {
+  head?: unknown;
+  note?: unknown;
+  perField?: unknown;
+  [extra: string]: unknown;
+}
+
 /** 设置页:标题 + 状态警告 + 各字段。 */
 function SettingsPanel(): ReturnType<typeof h> | null {
   ensureStyles();
@@ -876,7 +903,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
    * @param entry - `{ key, tool, hits }`(来自 {@link runDetect});`undefined` = 这个字段不参与检测。
    * @returns React 节点,或 null。
    */
-  const detectNote = (entry: { key?: string; tool?: string; hits?: DetectedTool[]; error?: string }): ReturnType<typeof h> | null => {
+  const detectNote = (entry: { key?: string; tool?: string; loading?: boolean; hits?: DetectedTool[]; error?: string }): ReturnType<typeof h> | null => {
     if (entry === undefined) return null;
     if (entry.loading === true) {
       return h("span", { className: "fpga-set-detect-row fpga-set-hint" }, "正在检测这个工具…");
@@ -1094,7 +1121,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
         const checks = Array.isArray(payload?.checks) ? payload.checks : null;
         const valid = checks !== null && checks.every(
           (item: unknown) => item !== null && typeof item === "object" &&
-            typeof item.id === "string" && typeof item.status === "string"
+            typeof (item as { id?: unknown }).id === "string" && typeof (item as { status?: unknown }).status === "string"
         );
         if (!valid) throw new Error("自检接口返回格式不正确");
         setSelfCheck({
@@ -1176,13 +1203,13 @@ function SettingsPanel(): ReturnType<typeof h> | null {
             h(
               "p",
               { className: selfCheck.result.ok === true ? "fpga-set-good" : "fpga-set-bad" },
-              `${selfCheck.result.ok === true ? "通过" : "有阻塞项"}:共 ${String(selfCheck.result.checks.length)} 项,` +
+              `${selfCheck.result?.ok === true ? "通过" : "有阻塞项"}:共 ${String(selfCheck.result.checks.length)} 项,` +
                 `${String(selfCheck.result.failed)} 项失败、${String(selfCheck.result.warned)} 项提醒`
             ),
             h(
               "ul",
               { className: "fpga-set-check-list" },
-              ...selfCheck.result.checks.map((item) =>
+              ...(selfCheck.result?.checks ?? []).map((item) =>
                 h(
                   "li",
                   { key: item.id, className: checkClass(item.status) },
@@ -1282,7 +1309,7 @@ function SettingsPanel(): ReturnType<typeof h> | null {
       h("p", { className: "fpga-set-bad", key: `migration-warning-${String(index)}` }, `设置迁移提醒：${String(warning)}`)
     ),
     ...renderFields(
-      status, fields, values, ready, browse, browseTo, setBrowse, startPick,
+      status, fields as ClientField[], values, ready, browse, browseTo, setBrowse, startPick,
       drafts, stage, detectCtx, preview, toolUi, capabilityUi
     ),
     previewError === undefined ? null : h("p", { className: "fpga-set-bad", role: "alert" }, previewError),
@@ -1323,15 +1350,27 @@ function SettingsPanel(): ReturnType<typeof h> | null {
 
 /** 按宿主的 section / capability 元数据渲染；数组位置只表示展示顺序。 */
 function renderFields(
-  status, fields, values, ready, browse, browseTo, setBrowse, pick,
-  drafts, stage, detectCtx, preview, toolUi, capabilityUi
-) {
+  status: ToolchainStatus | null,
+  fields: ClientField[],
+  values: Record<string, string>,
+  ready: boolean,
+  browse: BrowseState | null,
+  browseTo: (key: string, path: string) => void,
+  setBrowse: (next: BrowseState | null) => void,
+  pick: (field: ClientField, value: string) => void,
+  drafts: Record<string, string>,
+  stage: (key: string, value: string) => void,
+  detectCtx: DetectContext,
+  preview: PreviewPayload | undefined,
+  toolUi: Record<string, unknown>,
+  capabilityUi: Record<string, unknown>
+): Array<ReturnType<typeof h> | null> {
   const sections = status?.sections ?? [];
   const visible = fields.filter((field) => field.control !== "hidden");
-  const row = (field) =>
+  const row = (field: ClientField) =>
     renderField(field, values, ready, browse, browseTo, setBrowse, pick, drafts, stage, preview, detectCtx);
 
-  const stateLabel = (state) => state === "ready"
+  const stateLabel = (state: unknown): string => state === "ready"
     ? "已就绪"
     : state === "invalid"
       ? "路径不可用"
@@ -1790,7 +1829,19 @@ function readyBadge(draft: Record<string, unknown>): ReturnType<typeof h> {
  * @param detectCtx - `{ head, note, perField }`(检测结论逐字段写在这一行下面)。
  * @returns React 节点。
  */
-function renderField(field, values, ready, browse, browseTo, setBrowse, pick, drafts, stage, preview, detectCtx) {
+function renderField(
+  field: ClientField,
+  values: Record<string, string>,
+  ready: boolean,
+  browse: BrowseState | null,
+  browseTo: (key: string, path: string) => void,
+  setBrowse: (next: BrowseState | null) => void,
+  pick: (field: ClientField, value: string) => void,
+  drafts: Record<string, string>,
+  stage: (key: string, value: string) => void,
+  preview: PreviewPayload | undefined,
+  detectCtx: DetectContext
+): ReturnType<typeof h> | null {
   const isSelect = field.control === "select";
   const previewField = preview?.tools?.find((entry) => entry.key === field.key);
   const effective = previewField ?? field;
@@ -1956,7 +2007,13 @@ function startDir(field: Record<string, unknown>, value: string): string {
  * @param commit - 选中后写入设置。
  * @returns React 节点。
  */
-function renderBrowser(field, browse, browseTo, setBrowse, commit) {
+function renderBrowser(
+  field: ClientField,
+  browse: BrowseState | null,
+  browseTo: (key: string, path: string) => void,
+  setBrowse: (next: BrowseState | null) => void,
+  commit: (path: string) => void
+): ReturnType<typeof h> | null {
   const listing = browse.listing ?? {};
   const filter = String(browse.filter ?? "").toLowerCase();
   const all = listing.entries ?? [];

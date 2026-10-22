@@ -971,7 +971,34 @@ try {
     "不再把插件模板目录填入额外库草稿"
   );
   check(written.length === 0, "额外库路径仍走确认后写设置");
-  check(true, "额外库路径由用户自行填写后保存(与其它字段同一套保存逻辑)");
+  // 这条原来写的是 `check(true, "额外库路径由用户自行填写后保存(与其它字段同一套保存逻辑)")`
+  // —— 字面恒真，什么也没验（2026-10-22 的「检查本身是否有效」审计抓到）。
+  // 真去验一次：在模板库输入框里填字 → 点「保存路径」→ 应当产生**一次**设置写入，
+  // 且补丁里带的是刚填的那个值。这才是"与其它字段同一套保存逻辑"。
+  {
+    const input = findByProp(templateAux, (props) => props.value !== undefined && props.onChange !== undefined
+      && typeof props.value === "string");
+    const typedPath = join(ROOT, "presets", "fpga-workbench", "templates");
+    if (input === undefined) {
+      check(false, "模板库输入框存在（否则无法验证它的保存逻辑）");
+    } else {
+      input.props.onChange({ target: { value: typedPath } });
+      written.length = 0;
+      fake.reset();
+      const typedTree = captured();
+      const typedAux = findByProp(typedTree, (props) => props.key === "aux-模板库");
+      findButton(typedAux, "保存路径")?.props?.onClick();
+      await new Promise((resolve) => setImmediate(resolve));
+      check(
+        written.length === 1 &&
+          written[0]?.op === "set" &&
+          Array.isArray(written[0]?.path) &&
+          written[0].path[0] === "templateLibraryPath" &&
+          written[0]?.value === typedPath,
+        `额外库路径由用户自行填写后保存(实际写了 ${written.length} 次:${JSON.stringify(written[0] ?? null)})`
+      );
+    }
+  }
   hostValues.templateLibraryPath = "";
   written.length = 0;
   fake.reset();

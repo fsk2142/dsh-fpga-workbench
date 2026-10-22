@@ -63,7 +63,7 @@ const stripComments = (source) =>
  * @returns 夹具包根。
  */
 let sequence = 0;
-const makeFixture = (label, skip) => {
+const makeFixture = (label, skip, extras = []) => {
   sequence += 1;
   const root = join(TMP, `selfcheck-fixture-${String(process.pid)}-${String(sequence)}`);
   mkdirSync(root, { recursive: true });
@@ -79,6 +79,13 @@ const makeFixture = (label, skip) => {
       if (empty) writeFileSync(destination, "");
       else cpSync(join(source, rel), destination);
     }
+  }
+  // `extras`:额外造出来的文件（相对包根）。用来测"磁盘上有、清单里没有"这类
+  // **反方向**的错误 —— 只靠"少造文件"测不出来，因为那方向天然会被漏掉。
+  for (const rel of extras) {
+    const destination = join(root, rel);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, "");
   }
   return { label, root };
 };
@@ -275,6 +282,23 @@ const clean = makeFixture("clean", new Set());
   check(
     !codeOnly.includes("templateLibraryRoot"),
     "lib/selfcheck.js 的**代码**里不再引用写错的字段名(注释里说明来龙去脉不算)"
+  );
+}
+
+// ⑫ 磁盘上有、清单里没有的模板 → 必须报 fail（**反方向**核对）
+//
+//     2026-10-22 的反向验证抓到的盲区:原来的模板核对只从 `BUILTIN_TEMPLATES` 出发去
+//     查文件在不在。清单少了条目时,要查的也少了 —— 于是**永远通过**。
+//     现在两个方向都查;这条回归盯的就是反方向。
+{
+  const orphan = makeFixture("orphan-template", new Set(), [
+    "presets/fpga-workbench/templates/rtl/orphan_not_in_manifest.sv"
+  ]);
+  const report = runSelfCheck({}, orphan.root);
+  const item = statusOf(report, "templates");
+  check(
+    report.ok === false && item?.status === "fail" && String(item?.detail).includes("orphan_not_in_manifest.sv"),
+    `磁盘上有、清单里没有的模板 → 报 fail 并点名(实际:${String(item?.detail)})`
   );
 }
 

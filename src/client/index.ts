@@ -17,7 +17,27 @@
 
 
 import React from "react";
-const h = React.createElement;
+// `SyntheticEvent` 是**类型**，必须走 `import type` —— 写成 `React.SyntheticEvent`
+// 会报 "Cannot find namespace 'React'"（`React` 是 const 值，不是命名空间）。
+import type { SyntheticEvent } from "react";
+import type { ReactElement, ReactNode } from "react";
+
+/**
+ * `h()` 的签名。
+ *
+ * 为什么要**显式**写一遍而不是直接用 `React.createElement`：tsdown 的 d.ts 生成
+ * （rolldown-plugin-dts → tsgo）碰到"导出的变量其类型引用了无法命名的类型"时会报
+ * TS4023，然后**整个 build 失败**（`lib/*.js` 一个都不产出）。
+ *
+ * 显式写出签名后，d.ts 只需要 `ReactElement` / `ReactNode` 这两个可命名的类型。
+ */
+type HFunction = (
+  type: string | ((props: never) => ReactElement),
+  props?: Record<string, unknown> | null,
+  ...children: ReactNode[]
+) => ReactElement;
+
+const h: HFunction = React.createElement as unknown as HFunction;
 
 /** 与宿主 lib/toolchain.js 的 NS 一致 —— 这就是卡片的认领 key。 */
 const NS = "fpga-workbench";
@@ -415,6 +435,8 @@ function currentValues(): Record<string, unknown> {
 interface ToolchainStatus {
   values?: Record<string, string>;
   tools?: Array<Record<string, unknown>>;
+  /** 区块（module / project），决定设置页的大标题顺序。 */
+  sections?: Array<{ key?: string; label?: string; [extra: string]: unknown }>;
   toolCards?: Array<{ fieldKeys?: string[]; [extra: string]: unknown }>;
   capabilities?: Array<{
     key?: string;
@@ -438,16 +460,57 @@ interface TemplateScanPayload {
   /** 这次扫描属于哪张能力卡。 */
   capability?: string;
   groups?: TemplateScanGroup[];
-  data?: { values?: Record<string, string>; groups?: TemplateScanGroup[]; [extra: string]: unknown };
+  data?: {
+    values?: Record<string, string>;
+    groups?: TemplateScanGroup[];
+    errors?: string[];
+    [extra: string]: unknown;
+  };
   errors?: string[];
   [extra: string]: unknown;
+}
+
+/**
+ * 客户端插件上下文（宿主传进 `apply` 的那个）。
+ *
+ * 只有 `slots` 是这里用到的 —— 客户端半侧只做一件事：往插件页挂一张配置卡。
+ */
+interface ClientContext {
+  slots: {
+    inject: (name: string, callback: () => unknown) => unknown;
+    register: (
+      meta: {
+        name: string;
+        key?: string;
+        id?: string;
+        order?: number;
+        label?: string | (() => string);
+      },
+      component: () => ReturnType<typeof h> | null
+    ) => unknown;
+  };
+}
+
+/** 一条安装指引（与宿主 `installGuidance` 的输出同形）。 */
+interface InstallHint {  where?: string;
+  note?: string;
+  url?: string;
+  free?: boolean;
+  account?: boolean;
 }
 
 /** 一个分类的扫描结果（宿主 `scanTemplates` 的 group）。 */
 interface TemplateScanGroup {
   key?: string;
   label?: string;
-  items?: Array<{ id?: string; label?: string; path?: string; [extra: string]: unknown }>;
+  items?: Array<{
+    id?: string;
+    label?: string;
+    path?: string;
+    /** 这项模板适配哪些工具（`"*"` = 与工具无关）。 */
+    compatibleTools?: string[];
+    [extra: string]: unknown;
+  }>;
   errors?: string[];
   [extra: string]: unknown;
 }
@@ -635,6 +698,22 @@ interface ClientField extends Record<string, unknown> {
   group?: string;
   /** 这个字段能不能自动检测。 */
   detectable?: boolean;
+  /** 默认值（宿主 FIELDS 里的原样值）。 */
+  default?: unknown;
+  /** 这个字段是否必填。 */
+  required?: boolean;
+  /** 路径不可用时，说明"缺什么才可执行"。 */
+  skips?: string[];
+  /** 已登记过（宿主根据设置值算的）。 */
+  configured?: boolean;
+  /** 这台机器上确实存在。 */
+  present?: boolean;
+  /** 当前不生效（例如工具选了 auto/none）。 */
+  inactive?: boolean;
+  /** 路径字段的类型：file / directory。 */
+  path?: string;
+  /** 绑定的安装指引。 */
+  install?: InstallHint;
 }
 
 /** 目录浏览的本地状态（不是宿主响应，是页面上的草稿）。 */
@@ -1754,7 +1833,7 @@ function renderFields(
                 value: selectedTool,
                 disabled: !ready,
                 "aria-label": `${String(capability.label)}工具`,
-                onChange: (event: React.SyntheticEvent<HTMLSelectElement>) => {
+                onChange: (event: SyntheticEvent<HTMLSelectElement>) => {
                   const next = String(event.target.value ?? "auto");
                   stage(String(capability.toolKey ?? ""), next);
                   // 工具交给 AI / 明确不用 时，模板只能「由 AI 自行决定」
@@ -1766,7 +1845,11 @@ function renderFields(
               ...(capability.toolOptions ?? []).map((option) =>
                 h(
                   "option",
-                  { key: option.value, value: option.value, disabled: option.disabled === true },
+                  {
+                    key: String(option.value),
+                    value: String(option.value),
+                    disabled: option.disabled === true
+                  },
                   `${String(option.label)}${option.disabled === true ? "（未就绪）" : ""}`
                 )
               )
@@ -1783,9 +1866,11 @@ function renderFields(
             const group = scanGroups.find((entry) => entry.key === template.category);
             const items = group?.items ?? [];
             const missingSelection = shownSelection !== "" && !items.some((item) => String(item.id) === shownSelection);
-            const incompatible = (item) => Array.isArray(item.compatibleTools) &&
-              !item.compatibleTools.includes("*") && selectedTool !== "auto" &&
-              !item.compatibleTools.includes(selectedTool);
+            const incompatible = (item: { compatibleTools?: unknown }): boolean =>
+              Array.isArray(item.compatibleTools) &&
+              !(item.compatibleTools as string[]).includes("*") &&
+              selectedTool !== "auto" &&
+              !(item.compatibleTools as string[]).includes(selectedTool);
             return h(
               "div",
               { className: "fpga-set-row", key: template.key },
@@ -1803,7 +1888,7 @@ function renderFields(
       ? shownSelection
       : "",
                   "aria-label": `${String(capability.label)}${String(template.label)}`,
-                  onChange: (event: React.SyntheticEvent<HTMLSelectElement>) => stage(template.key, String(event.target.value ?? ""))
+                  onChange: (event: SyntheticEvent<HTMLSelectElement>) => stage(template.key, String(event.target.value ?? ""))
                 },
                 h("option", { key: "default", value: "" }, "由 AI 自行决定"),
                 // 工具交给 AI 时模板只能「由 AI 自行决定」；指定工具后只列兼容模板
@@ -1867,8 +1952,9 @@ function renderFields(
   if (sections.length === 0) return visible.map(row);
   return sections.map((section) => {
     const common = section.key === "common";
-    const cards = status?.toolCards ?? [];
-    const readyCount = common && toolUi !== undefined
+    const sectionKey = String(section.key ?? "");
+    const cards = (status?.toolCards ?? []) as ToolCard[];
+    const readyCount = common
       ? cards.filter((card) => toolUi.state(card) === "ready").length
       : 0;
     return h(
@@ -1878,7 +1964,7 @@ function renderFields(
         "div",
         { className: "fpga-set-section-head" },
         h("span", null, section.label),
-        helpBubble(`section-${String(section.key)}`, section.hint),
+        helpBubble(`section-${sectionKey}`, String(section.hint ?? "")),
         common && toolUi !== undefined
           ? h("span", { className: "fpga-set-section-summary" }, `已就绪 ${readyCount} / ${cards.length}`)
           : null,
@@ -1896,7 +1982,7 @@ function renderFields(
             )
           : null
       ),
-      ...(common ? commonFields(section.key) : capabilityCards(section.key))
+      ...(common ? commonFields(sectionKey) : capabilityCards(sectionKey)),
     );
   });
 }
@@ -1910,7 +1996,12 @@ function renderFields(
  * @param draft - 未保存的改动;undefined = 显示的是宿主那份值。
  * @returns React 节点。
  */
-function readyBadge(draft: Record<string, unknown>): ReturnType<typeof h> {
+/**
+ * "已就绪"徽标。
+ * @param draft - 这个字段的未保存草稿；`undefined` 表示没有改动。
+ *   ⚠️ 必须保留 `undefined` 与"空字符串"的区别 —— 前者是"没改"，后者是"改成空"。
+ */
+function readyBadge(draft: string | undefined): ReturnType<typeof h> {
   return h("span", { className: "fpga-set-good" }, draft === undefined ? "✓ 已就绪" : "✓ 已就绪(未保存)");
 }
 
@@ -1943,11 +2034,14 @@ function renderField(
   detectCtx: DetectContext
 ): ReturnType<typeof h> | null {
   const isSelect = field.control === "select";
+  // `field.key` 在 ClientField 里可选（宿主形状宽松）；这个函数只会被真实字段调用，
+  // 取一次字符串键，下面统一用它做索引。
+  const fieldKey = String(field.key ?? "");
   const previewField = preview?.tools?.find((entry) => entry.key === field.key);
   const effective = previewField ?? field;
   const pathField = effective.kind !== undefined;
-  const current = values[field.key] ?? field.default ?? "";
-  const draft = drafts?.[field.key];
+  const current = values[fieldKey] ?? field.default ?? "";
+  const draft = drafts?.[fieldKey];
   const shown = draft === undefined ? String(current) : String(draft);
   const pendingPath = pathField && draft !== undefined && shown.trim() !== "" && previewField === undefined;
   const configured = draft === undefined ? effective.configured === true : shown.trim() !== "";
@@ -1955,7 +2049,7 @@ function renderField(
   const invalidPath = pathField && configured && !pendingPath && !usable && effective.inactive !== true;
   const blocked = field.required === true && invalidPath;
   const skips = blocked ? (field.skips ?? []) : [];
-  const commit = (next) => stage(field.key, next);
+  const commit = (next: string): void => stage(fieldKey, next);
 
   let control;
   if (isSelect) {
@@ -1966,7 +2060,7 @@ function renderField(
         value: shown,
         disabled: !ready,
         "aria-label": field.label,
-        onChange: (event: React.SyntheticEvent<HTMLInputElement>) => commit(String(event.target.value ?? ""))
+        onChange: (event: SyntheticEvent<HTMLInputElement>) => commit(String(event.target.value ?? ""))
       },
       ...(field.options ?? []).map((option) => h("option", { key: option.value, value: option.value }, option.label))
     );
@@ -1982,7 +2076,7 @@ function renderField(
       placeholder: pathField
         ? effective.kind === "directory" ? "例如 C:\\...\\某目录" : "例如 C:\\...\\工具.exe"
         : field.control === "textarea" ? "补充命令、参数或限制" : "请输入名称",
-      onChange: (event: React.SyntheticEvent<HTMLInputElement>) => commit(event.target.value ?? "")
+      onChange: (event: SyntheticEvent<HTMLInputElement>) => commit(event.target.value ?? "")
     });
     control = pathField
       ? h(
@@ -2026,7 +2120,7 @@ function renderField(
    * 工具不会带这一段,所以这里不需要再判一次"要不要显示"。
    */
   const installBlock = () => {
-    const install = field === undefined ? undefined : field.install;
+    const install = field === undefined ? undefined : (field.install as InstallHint | undefined);
     if (install === undefined || install === null || typeof install !== "object") return null;
     const cost = install.free === true ? "免费" : "商业授权";
     const account = install.account === true ? ",下载需注册账号" : "";
@@ -2047,7 +2141,7 @@ function renderField(
   return h(
     "div",
     { className: "fpga-set-row", key: field.key },
-    h("div", { className: "fpga-set-label" }, h("span", null, field.label), helpBubble(field.key, field.hint), state),
+    h("div", { className: "fpga-set-label" }, h("span", null, field.label), helpBubble(fieldKey, String(field.hint ?? "")), state),
     control,
     installBlock(),
     pathField && browse !== null && browse !== undefined && browse.key === field.key
@@ -2066,7 +2160,7 @@ function renderField(
               : `未配置,当前不可执行:${skips.join("、")}`
           )
     ),
-    detectCtx?.note(detectCtx.perField.find((entry) => entry.key === field.key)),
+    detectCtx?.note(detectCtx.perField.find((entry) => entry.key === field.key) ?? {}),
     draft === undefined ? null : h("span", { className: "fpga-set-hint" }, "未保存")
   );
 }
@@ -2114,17 +2208,19 @@ function renderBrowser(
   setBrowse: (next: BrowseState | null) => void,
   commit: (path: string) => void
 ): ReturnType<typeof h> | null {
+  // 没有浏览状态就没有列表可渲染（调用方通常已判过，这里再兜一次）。
+  if (browse === null) return null;
   const listing = browse.listing ?? {};
   const filter = String(browse.filter ?? "").toLowerCase();
   const all = listing.entries ?? [];
   const entries = filter === "" ? all : all.filter((entry) => String(entry.name).toLowerCase().includes(filter));
   const close = () => setBrowse(null);
   /** 选中一项:目录就进去,文件就填上。 */
-  const choose = (entry) => {
+  const choose = (entry: { name?: string; path?: string; kind?: string }): void => {
     if (entry.kind === "directory") {
-      browseTo(field.key, entry.path);
+      browseTo(String(field.key ?? ""), String(entry.path ?? ""));
     } else {
-      commit(entry.path);
+      commit(String(entry.path ?? ""));
       close();
     }
   };
@@ -2149,7 +2245,7 @@ function renderBrowser(
           type: "button",
           className: "fpga-set-btn",
           disabled: listing.parent === undefined || listing.path === "",
-          onClick: () => browseTo(field.key, listing.parent ?? "")
+          onClick: () => browseTo(String(field.key ?? ""), listing.parent ?? "")
         },
         "↑ 上级"
       ),
@@ -2178,8 +2274,8 @@ function renderBrowser(
       autoFocus: true,
       placeholder: "打字过滤当前目录,回车选中唯一匹配项",
       value: String(browse.filter ?? ""),
-      onChange: (event: React.SyntheticEvent<HTMLInputElement>) => setBrowse({ key: browse.key, listing, filter: event.target.value ?? "" }),
-      onKeyDown: (event: React.SyntheticEvent<HTMLInputElement>) => {
+      onChange: (event: SyntheticEvent<HTMLInputElement>) => setBrowse({ key: browse.key, listing, filter: event.target.value ?? "" }),
+      onKeyDown: (event: SyntheticEvent<HTMLInputElement>) => {
         if (event.key !== "Enter") return;
         // 只剩一项就直接选中 —— 这是"打字找文件"最省事的收尾
         if (entries.length === 1) choose(entries[0]);
@@ -2231,7 +2327,7 @@ function renderBrowser(
  * `plugins.bundle.config`,并由宿主设置路由提供当前行值。
  * @param ctx - client plugin context carrying `slots`.
  */
-function apply(ctx) {
+function apply(ctx: ClientContext): void {
   ctx.slots.inject("plugins.bundle.config", () =>
     ctx.slots.register(
       {

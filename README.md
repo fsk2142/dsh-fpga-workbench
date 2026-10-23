@@ -67,13 +67,13 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workbench.git
 
 # 要钉版本就加 #tag(仓库打 tag 之后)
-dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workbench.git#v0.6.0
+dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workbench.git#v1.0.0
 
 # 从本机源码目录安装(开发时用;把 <你的克隆目录> 换成实际路径)
 dsh plugin --profile desktop add file:<你的克隆目录>
 ```
 
-插件声明同时兼容 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2`。插件自身的 `0.6.0` 是独立版本号,
+插件声明同时兼容 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2`。插件自身的 `1.0.0` 是独立版本号,
 不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本,
 不要用旧的全局命令更新官方桌面端的 profile。
 

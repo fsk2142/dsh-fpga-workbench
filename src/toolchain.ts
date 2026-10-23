@@ -1766,11 +1766,24 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
       } else if (capability.state === "invalid") {
         sectionLines.push(`${head}:选择无效，当前不可执行；其他能力照常工作。`);
       } else if (capability.state === "ready") {
-        sectionLines.push(`${head}:首选 ${capability.toolLabel} —— ${promptScalar(capability.path)}（来源:工具设置）。`);
+        /**
+         * **只写工具名，不再重复完整路径**（2026-10-23 优化）。
+         *
+         * 原来这里会把 `C:\AMDDesignTools\2025.2\Vivado\bin\vivado.bat` 再抄一遍，
+         * 而上一节「工具设置中已登记」已经把每个工具的路径列过了 —— 6 个能力 × 每个
+         * 2 条偏好节（模块 + 工程）= 同一条路径在提示词里出现 4 次。
+         *
+         * 模型要的是「这个环节该用哪个工具」，路径去上面查即可。同一信息只讲一次，
+         * 也避免两处路径写法不一致时模型不知道该信哪个。
+         *
+         * `（来源:工具设置）` 一并去掉：这一节开头已经说过「内容来自设置」。
+         */
+        sectionLines.push(`${head}:首选 ${capability.toolLabel}。`);
         if (capability.supportNote) sectionLines.push(`  支持范围:${capability.supportNote}`);
         if (capability.notes) sectionLines.push(`  用户说明:${promptScalar(capability.notes)}`);
         else if (capability.tool?.startsWith("custom-")) sectionLines.push("  未提供固定调用说明；使用前须结合当前工程和工具帮助确认。");
       } else {
+        // 只有「路径不可用」这种例外才值得把路径抄近处 —— 那是用户要去修的东西。
         const reason = capability.configured
           ? `工具设置中的路径不可用(${promptScalar(capability.path)})：不存在或类型不符`
           : "工具设置中尚未登记路径";
@@ -1828,11 +1841,25 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
   lines.push(
     [
       "本模式自带的命令(Node 直接跑,不用装东西)。**命令名带级别前缀(module- / project-),按环节分;不要跨级别或跨环节混用**:",
-      "· `module-` = 模块级(在 `tools/module/` 下);`project-` = 工程级(在 `tools/project/` 下);",
-      "  两级共用的(如 setup-scaffold)不加级别前缀,在 `tools/` 顶层。",
+      /**
+       * **命令根只声明一次**（2026-10-23 优化）。
+       *
+       * 原来每条命令都写完整绝对路径 —— 7 条里有同一段 67 字符的前缀重复 7 次，
+       * 光那段就占 469 字符。而下面三行本来就已经说明 `module-` 在 `tools/module/`、
+       * `project-` 在 `tools/project/`、共用的在 `tools/` 顶层 —— 等于同一结构讲了两遍。
+       *
+       * 所以：把根目录提出来写一次，每条只留相对路径。**信息一点没少**，
+       * 模型拼命令时用 `<命令根>` 开头即可；路径也不再有正反斜杠混用的余地。
+       */
+      `命令根:${toolPath({ level: "shared", file: "" }).replace(/[\\/][^\\/]*$/u, "")}`,
+      "· `module-` = 模块级(在 `module/` 下);`project-` = 工程级(在 `project/` 下);",
+      "  两级共用的(如 setup-scaffold)不加级别前缀,直接在命令根下。",
       ...TOOLS.map((tool) => {
         const level = tool.level === "shared" ? "两级共用" : tool.level === "module" ? "模块级" : "工程级";
-        return `- [${level} / ${tool.stage}] ${tool.what}:node "${toolPath({ level: tool.level as ToolLevel, file: tool.file })}" <根目录>`;
+        // 相对命令根的路径：模块级在 module\ 下、工程级在 project\ 下、共用的直接在根下。
+        const dir = LEVEL_DIRS[tool.level as ToolLevel] ?? "";
+        const relative = dir === "" ? tool.file : `${dir}\\${tool.file}`;
+        return `- [${level} / ${tool.stage}] ${tool.what}:node "<命令根>\\${relative}" <根目录>`;
       })
     ].join("\n")
   );
@@ -2020,10 +2047,19 @@ export function promptArg(value: unknown): string {
  */
 const usagePath = (path: unknown): string => {
   const text = String(path ?? "");
-  // 连续的**分隔符**反斜杠压成一个 `/`（`\\` 在 PowerShell 转义后是两个字符，
-  // 逐个替换会得到 `//` —— 实测踩到：`C://msys64//bin//vivado.bat`）。
-  // 后面跟转义字母（n r t x）的那些不换，保留 `promptScalar` 的可见转义。
-  const normalized = text.replace(/\\+(?![nrtx0-9])/gu, "/");
+  /**
+   * 连续的**分隔符**反斜杠压成一个 `/`。
+   *
+   * 后面跟转义字母（`n` `r` `t` `x`）的那些**不换**，保留 `promptScalar` 的可见转义
+   * —— 否则 `C:\a\nFAKE` 会变成 `C:/a/nFAKE`，读起来像路径段而不是转义。
+   *
+   * ⚠️ 2026-10-23 修：原来这里还有个 `0-9`（`(?![nrtx0-9])`），注释却只提到 `nrtx`。
+   * 那个多出来的字符把**紧跟数字的反斜杠**也排除了，于是
+   *   `C:\AMDDesignTools\2025.2\Vivado\bin\vivado.bat`
+   * 渲染成 `C:/AMDDesignTools\2025.2/Vivado/bin/vivado.bat` —— 正反斜杠混在一行里。
+   * 数字不是转义字符，没有任何理由排除它。
+   */
+  const normalized = text.replace(/\\+(?![nrtx])/gu, "/");
   return promptArg(normalized);
 };
 

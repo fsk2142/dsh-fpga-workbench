@@ -100,3 +100,8 @@ scripts/probe-*.mjs
 scripts/probe-*.cjs
 scripts/diag-describe-env.mjs
 scripts/migrate-client-to-esm.mjs
+
+# ── 提交信息草稿:不进版本库 ─────────────────────────────────────────────────
+# 2026-10-23 第八轮审查:4d31e2a 误把 .msg-ui.txt(git commit -F 用的草稿)提交了。
+# 这类文件是写提交信息时的临时产物,写进 .gitignore 免得再混进发布提交。
+.msg-*

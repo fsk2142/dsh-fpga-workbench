@@ -81,10 +81,14 @@ tools/probes/
 # ── 一次性开发脚本:不进版本库 ───────────────────────────────────────────────
 # 2026-10-22 审查指出 scripts/ 下积了 31 个未跟踪脚本，常驻 git status。
 # 分类与保留价值见 scripts/README.md:
-#   · 长期保留:verify-*-equivalence.mjs / diag-equivalence.mjs（已跟踪）
+#   · 长期保留:scrub-*.mjs / verify-scrub.mjs（已跟踪，docs 直接引用）
 #   · 一次性:类型收尾的 type-*.mjs、探针 probe-*.mjs、diag-describe-env.mjs
 # 一次性脚本的结论都已经落在提交信息与代码注释里，脚本本身依赖本机宿主 asar，
 # 换台机器未必跑得起来 —— 留着只会让人以为它们是公共接口。
+#
+# 2026-10-23：`verify-*-equivalence.mjs` / `diag-equivalence.mjs` 连同它们的基准
+# `lib.handwritten-backup/` 一起删了 —— 它们不在 `npm test` 里（CI 从不跑），
+# 而迁移已被 7 轮审查验证过。详见 scripts/README.md 第三节。
 #
 # ⚠️ `scrub-*.mjs` / `verify-scrub.mjs` **不在此列**（2026-10-22 修）：
 #    `docs/SCRUB-COMMIT-HISTORY.md` 明确承诺"本仓库已经有脚本了"，

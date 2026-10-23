@@ -58,6 +58,7 @@ RTL → `fpga-project-rtl`;tb → `fpga-project-syssim`;接线 → `fpga-project
 - **NOT_APPLICABLE**:本次没有源码变更
 
 判定词见 `fpga-module-verif` 的**状态表**(唯一权威)。
+  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 
 ## 产物
 

@@ -85,6 +85,7 @@ write_cfgmem -force -format MCS -size <容量MB> -interface <SPIx4|BPIx16> \
 - **UNVERIFIED**:只完成下载或观察,尚未执行足够的实测与独立比对
 - **NOT_APPLICABLE**:**只有**工程根本不部署到硬件;没有板子记 `BLOCKED`,不能当 N/A
 - 判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)
+  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 
 ## 产物
 

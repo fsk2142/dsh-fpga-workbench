@@ -307,7 +307,23 @@ function createSettingsFacade(ctx: HostContext, initial: Record<string, unknown>
     }
   };
 
-  ctx.inject(["settings"], (settingsCtx: HostContext) => {
+  /**
+   * `ctx.inject` 是较新宿主才有的服务（cordis 的子插件机制）。
+   *
+   * 2026-10-23 修：原来这里直接写 `ctx.inject(["settings"], cb)` —— 宿主没有这个方法时
+   * 抛 `TypeError: ctx.inject is not a function`，而**它不在任何 try/catch 里**，
+   * 冒泡到 cordis 会让整个插件 fiber 进入错误态（观感上就是"插件挂了/界面不对"）。
+   *
+   * 所以先看有没有：没有就退回"用 loader 传进来的行配置 + update 时直接写"，
+   * 也就是下面的 `service === undefined` 分支 —— 设置仍能读能写，只是不跟随外部改动。
+   */
+  const injectService = (ctx as { inject?: (deps: string[], callback: (scoped: HostContext) => unknown) => unknown }).inject;
+  if (typeof injectService !== "function") {
+    note(ctx, "warn", "fpga-workbench: 宿主没有 ctx.inject,设置不跟随外部改动(改用启动时的配置)");
+    return facade;
+  }
+
+  injectService.call(ctx, ["settings"], (settingsCtx: HostContext) => {
     const candidate = (settingsCtx as { settings?: SettingsServiceLike }).settings;
     if (
       typeof candidate?.describe !== "function" ||
@@ -350,7 +366,16 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
   // 设置页的只读接口(状态 / 列目录 / 检测本机工具 / 分类模板 / 自检)与保存接口。webServer 在
   // headless/CLI 部署里不存在 —— 拿不到就不注册这一步,设置项本身照常可读写,只是没有状态提示与按钮
   // (GUI 与 CLI 共用同一份配置)。
-  ctx.inject(["webServer"], (webCtx: HostContext) => {
+  //
+  // 与上面 `settings` 那处同理：`ctx.inject` 不是所有宿主都有。没有就跳过整个 webServer
+  // 区块 —— 那些是设置页的只读接口，缺了只是没有状态提示，设置本身照常可读写。
+  const injectWebService = (ctx as { inject?: (deps: string[], callback: (scoped: HostContext) => unknown) => unknown }).inject;
+  if (typeof injectWebService !== "function") {
+    note(ctx, "warn", "fpga-workbench: 宿主没有 ctx.inject,设置页的状态接口未注册(设置本身仍可用)");
+    return;
+  }
+
+  injectWebService.call(ctx, ["webServer"], (webCtx: HostContext) => {
     const json = (res: HttpResponse, payload: unknown, status = 200): void => {
       res.writeHead(status, {
         "content-type": "application/json; charset=utf-8",
@@ -359,9 +384,53 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
       res.end(JSON.stringify(payload));
     };
 
-    webCtx.effect(
+    /**
+     * **安全地注册路由**：`effect` 缺失时直接注册（不托管生命周期）。
+     *
+     * `webCtx.effect` 在类型上是必需的，但真实宿主不一定提供 —— 探针实测
+     * 一个只有 `webServer` 的 ctx 会抛 `TypeError: webCtx.effect is not a function`。
+     * 而这条语句**在 inject 回调里**，抛出去同样会污染插件 fiber。
+     *
+     * 没有 effect 时退化成"直接注册、进程结束时随宿主一起消失" —— 对只读接口完全够用。
+     */
+    const registerRoute = (factory: () => unknown, label?: string): void => {
+      const effect = (webCtx as { effect?: (fn: () => unknown, label?: string) => unknown }).effect;
+      if (typeof effect === "function") {
+        effect.call(webCtx, factory, label ?? "fpga-workbench: settings routes");
+        return;
+      }
+      try {
+        factory();
+      } catch (error) {
+        note(ctx, "warn", `fpga-workbench: 注册设置页路由失败:${String(error)}`);
+      }
+    };
+
+    /**
+     * `webServer` 服务本身也可能没有（headless / CLI 部署）。
+     *
+     * 虽然 `inject(["webServer"])` 名义上保证服务就绪，但探针实测"回调里的 ctx 没有
+     * webServer"会让后面每一处 `webServer.register(...)` 抛
+     * `Cannot read properties of undefined (reading 'register')`。
+     * 与其让 8 个路由各抛一次，这里一次性判掉。
+     */
+    const webServer = (webCtx as {
+      webServer?: {
+        register: (spec: {
+          kind: string;
+          path: string;
+          handler: (req: HttpRequest, res: HttpResponse) => unknown;
+        }) => unknown;
+      };
+    }).webServer;
+    if (webServer === undefined || typeof webServer.register !== "function") {
+      note(ctx, "warn", "fpga-workbench: 宿主没有 webServer,设置页的状态接口未注册(设置本身仍可用)");
+      return;
+    }
+
+    registerRoute(
       () =>
-        webCtx.webServer!.register({
+        webServer.register({
           kind: "exact",
           path: STATUS_PATH,
           handler: (req: HttpRequest, res: HttpResponse) => {
@@ -381,9 +450,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
 
     // DSH 0.1.7 的 settings 服务按插件行读写配置,浏览器半侧通过这条路由提交补丁。
     // 鉴权仍由宿主 webServer 前置闸门负责,这里不重复实现。
-    webCtx.effect(
+    registerRoute(
       () =>
-        webCtx.webServer!.register({
+        webServer.register({
           kind: "exact",
           path: SETTINGS_PATH,
           handler: async (req, res) => {
@@ -421,9 +490,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
 
     // 「运行自检」:只读、不起进程、不写文件(实现见 lib/selfcheck.js)。用户点一下就能看到
     // "这份已装副本 + 这份设置"的实际状态,而不是只在开发机上跑 npm test 才知道。
-    webCtx.effect(
+    registerRoute(
       () =>
-        webCtx.webServer!.register({
+        webServer.register({
           kind: "exact",
           path: SELFCHECK_PATH,
           handler: (req: HttpRequest, res: HttpResponse) => {
@@ -439,9 +508,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
 
     // 版本信息:**不发网络请求**,只报本包自己的版本与它声明兼容的 DSH 版本。
     // 设置页打开时读这一条就够显示"当前版本"。
-    webCtx.effect(
+    registerRoute(
       () =>
-        webCtx.webServer!.register({
+        webServer.register({
           kind: "exact",
           path: VERSION_PATH,
           handler: (req: HttpRequest, res: HttpResponse) => {
@@ -462,9 +531,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // 认证:市场 API 在生产环境要浏览器会话 cookie,而这里是**宿主进程**发的请求 ——
     // 所以本路由把浏览器的 Cookie 头**原样转发**过去,让市场的鉴权闸自己判断。
     // 不自己伪造凭据,也不绕过市场:拿不到就如实说"查不到"。
-    webCtx.effect(
+    registerRoute(
       () =>
-        webCtx.webServer!.register({
+        webServer.register({
           kind: "exact",
           path: UPDATE_PATH,
           handler: async (req, res) => {
@@ -534,9 +603,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // 2026-09-21 真机实测(服务在 127.0.0.1:43120):裸 GET、外部 Origin、外部 Host、
     // 可信 Origin + 假 cookie、乃至**不存在的路径** —— 一律 403 `forbidden`,一个字节都取不到。
     // 所以这里保持"不做来源校验":真正的闸在宿主那一层,重复实现只会变成假门禁。
-    webCtx.effect(
+    registerRoute(
       () =>
-        webCtx.webServer!.register({
+        webServer.register({
           kind: "exact",
           path: BROWSE_PATH,
           handler: (req: HttpRequest, res: HttpResponse) => {
@@ -556,9 +625,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // Python 会额外起一次只读版本查询,其余工具只探文件系统。没有 field 查询参数时仍保留
     // 全量检测,兼容旧客户端；新客户端始终传 field,不会打开页面就把所有工具扫一遍。
     // **不传设置值**:检测只报机器事实；已保存值与未保存草稿由页面自己判断。
-    webCtx.effect(
+    registerRoute(
       () =>
-        webCtx.webServer!.register({
+        webServer.register({
           kind: "exact",
           path: DETECT_PATH,
           handler: (req: HttpRequest, res: HttpResponse) => {
@@ -585,9 +654,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // 分类模板只在能力卡展开时读取。请求方只能给能力 key；扫描分类完全来自 CAPABILITIES
     // 白名单，不能借这个接口枚举任意本地路径。扫描失败仍保留非 2xx 与结构化错误，客户端据此
     // 区分“模板读取失败”和“确实没有用户模板”。
-    webCtx.effect(
+    registerRoute(
       () =>
-        webCtx.webServer!.register({
+        webServer.register({
           kind: "exact",
           path: TEMPLATE_PATH,
           handler: (req: HttpRequest, res: HttpResponse) => {

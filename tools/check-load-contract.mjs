@@ -2273,5 +2273,49 @@ try {
   selfCheckUrls = [];
 }
 
+// ── 宿主能力缺失时必须优雅降级，而不是抛异常（2026-10-23 用户报告 DSH 偶尔崩溃）──
+//
+// 事故：`apply()` 里两处 `ctx.inject(...)` 与 8 处 `webCtx.webServer!.register(...)`
+// **都没有存在性检查**。宿主没有这些服务时抛 TypeError，而它们都不在 try/catch 里 ——
+// 冒泡到 cordis 让插件 fiber 进入错误态。
+//
+// 真实 DSH 一定提供这些服务，但版本差异 / headless 部署 / 未来 API 变动都可能缺。
+// 这里用"什么都没有"的极简 ctx 跑一遍 apply，断言**不抛异常**。
+{
+  const plugin = await import(`file:///${join(ROOT, "lib", "index.js")}`);
+  const makeCtx = (extra) => ({
+    logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    on: () => () => undefined,
+    ...extra
+  });
+
+  const scenarios = [
+    ["空 ctx（什么都没有）", makeCtx({})],
+    ["只有 logger", makeCtx({})],
+    ["有 effect 但没 inject", makeCtx({ effect: (fn) => fn() ?? (() => undefined) })],
+    ["inject 存在但回调 ctx 没有 webServer", makeCtx({
+      inject: (deps, callback) => callback(makeCtx({}))
+    })],
+    ["webServer 存在但 effect 没有", makeCtx({
+      inject: (deps, callback) => callback(makeCtx({
+        webServer: { register: () => ({ dispose: () => undefined }) }
+      }))
+    })]
+  ];
+
+  for (const [label, ctx] of scenarios) {
+    let threw;
+    try {
+      const result = plugin.apply(ctx, {});
+      if (result !== null && typeof result === "object" && typeof result.then === "function") {
+        await result;
+      }
+    } catch (error) {
+      threw = error;
+    }
+    check(threw === undefined, `宿主能力缺失时 apply() 不抛异常:${label}`, String(threw));
+  }
+}
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 加载契约成立,客户端渲染冒烟也过了(重启前可以放心)");
 if (failures.length > 0) process.exitCode = 1;

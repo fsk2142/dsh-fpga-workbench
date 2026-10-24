@@ -29,7 +29,7 @@
   "types": "lib/index.d.ts",
   "engines": {
     "node": ">=22",
-    "dsh": ">=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2 || >=0.2.1-rc.3"
+    "dsh": ">=0.2.0-rc.2"
   },
   "exports": {
     ".": {
@@ -63,8 +63,8 @@
     "prepublishOnly": "npm run build && npm run typecheck && npm test"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-settings": ">=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2 || >=0.2.1-rc.3",
-    "@deepseek-ai/dsh-system-prompt": ">=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2 || >=0.2.1-rc.3",
+    "@deepseek-ai/dsh-settings": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.2"
   },
   "dsh": {
@@ -72,15 +72,13 @@
       "patch": "./cordis.patch.yml"
     },
     "manifestVersion": 1,
-    "//compatibility": "仅供市场展示，**不影响加载**。宿主 app-boot 的 unmetRequirements() 只读 engines.dsh（有它时 peerDependencies 全部忽略）；没有 engines.dsh 才逐个匹配 peer。这里与 engines.dsh / peer 内容重复，升级时要三处一起改。",
+    "//compatibility": "仅供市场展示，**不影响加载**。宿主 app-boot 的 unmetRequirements() 只读 engines.dsh（有它时 peerDependencies 全部忽略）；没有 engines.dsh 才逐个匹配 peer。所以 dsh / dshReleases / 两条 peer 四处写同一个 range，改一处就要四处一起改。注意宿主判定带 includePrerelease，见 tools/lib/version-range.mjs 的说明。",
     "compatibility": {
-      "dsh": ">=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2 || >=0.2.1-rc.3",
+      "dsh": ">=0.2.0-rc.2",
       "dshReleases": {
-        "0.1.7-rc.2": "compatible",
-        "0.2.0-rc.1": "compatible",
         "0.2.0-rc.2": "compatible",
         "0.2.1-rc.2": "compatible",
-      "0.2.1-rc.3": "compatible"
+        "0.2.1-rc.3": "compatible"
       }
     },
     "client": {

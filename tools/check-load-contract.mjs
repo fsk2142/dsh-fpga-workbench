@@ -29,18 +29,35 @@ const check = (ok, label, detail) => {
 const read = (rel) => readFileSync(join(ROOT, rel), "utf8");
 const manifest = JSON.parse(read("package.json"));
 check(manifest.dsh?.manifestVersion === 1, `清单声明 dsh.manifestVersion = 1(实际 ${String(manifest.dsh?.manifestVersion)})`);
-// 兼容声明：**不写死范围字符串**，只要求"四个版本都声明了、且范围覆盖它们"。
-// 写死字面量的后果是"加一个兼容版本就得改两处"，而漏改的一处会让测试红
-// （这次就因为给范围补 0.2.0-rc.2 而红过一次）。真正要守的是**一致性**，
-// 那条断言在 check-version.mjs 里（dshReleases ⊆ 范围、peer 与范围一致）。
-check(
-  ["0.1.7-rc.2", "0.2.0-rc.1", "0.2.0-rc.2", "0.2.1-rc.2"].every(
-    (release) =>
-      manifest.dsh?.compatibility?.dshReleases?.[release] === "compatible" &&
-      String(manifest.dsh?.compatibility?.dsh ?? "").includes(release)
-  ),
-  "清单声明兼容 DSH 0.1.7-rc.2、0.2.0-rc.1、0.2.0-rc.2 与 0.2.1-rc.2，且范围覆盖它们"
-);
+// 兼容声明：**不写死任何版本字符串**。
+//
+// 2026-10-24 用户规范改成「统一单一起点」后，这里不再检查"某四个版本都在"，
+// 只检查**四处一致 + 写法合规**。真正的语义断言在 check-version.mjs
+// （dshReleases 被范围覆盖、peer / engines 与 compatibility 逐字相同）。
+{
+  const compat = String(manifest.dsh?.compatibility?.dsh ?? "");
+  const releases = Object.keys(manifest.dsh?.compatibility?.dshReleases ?? {});
+  check(
+    /^>=\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(compat),
+    `兼容范围是单个无上界的 >= 起点（实际 ${JSON.stringify(compat)}）`
+  );
+  check(
+    releases.length > 0 &&
+      releases.every((release) => manifest.dsh.compatibility.dshReleases[release] === "compatible"),
+    `dshReleases 至少登记一个真验过的版本、且都标 compatible（实际 ${String(releases.length)} 个）`
+  );
+  const hostPeers = Object.keys(manifest.peerDependencies ?? {}).filter(
+    (name) => name === "@deepseek-ai/dsh" || name.startsWith("@deepseek-ai/dsh-")
+  );
+  check(
+    hostPeers.length > 0 && hostPeers.every((name) => manifest.peerDependencies[name] === compat),
+    `每个宿主 peer 的范围都与 compatibility.dsh 逐字相同（${hostPeers.length} 个 peer）`
+  );
+  check(
+    manifest.engines?.dsh === compat,
+    `engines.dsh 与 compatibility.dsh 逐字相同（实际 ${JSON.stringify(manifest.engines?.dsh)}）`
+  );
+}
 check(
   Array.isArray(manifest.dsh?.client?.inject) &&
     manifest.dsh.client.inject.includes("@deepseek-ai/dsh-client-ui-slots") &&

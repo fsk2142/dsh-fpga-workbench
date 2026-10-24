@@ -10,6 +10,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { checkForUpdate, compareVersions, packageInfo, parseVersion, repositorySlug, updateStateOf } from "../lib/version.js";
+// 宿主兼容范围的唯一断言口（判据 + includePrerelease 的说明都在那个文件头）。
+import { followsDshVersion, inspectRange, satisfiesHost } from "./lib/version-range.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -90,24 +92,35 @@ const check = (ok, label, detail) => {
   //    正是为了避开这一点。这里对齐它的做法。
   const compat = String(manifest.dsh?.compatibility?.dsh ?? "");
   const releases = Object.keys(manifest.dsh?.compatibility?.dshReleases ?? {});
-  const missingFromRange = releases.filter((release) => !compat.includes(release));
+  const missingFromRange = releases.filter((release) => !satisfiesHost(release, compat));
   check(
     missingFromRange.length === 0,
-    `dshReleases 里每个版本都在兼容范围里(漏写:${missingFromRange.join("、") || "无"})`
+    `dshReleases 里每个版本都被兼容范围覆盖(带 includePrerelease;漏写:${missingFromRange.join("、") || "无"})`
   );
+  // 写法合规：单个 >= 起点、无上界、无 ||、不是 *（判据在 tools/lib/version-range.mjs）。
+  const verdict = inspectRange(compat);
   check(
-    !/\^/u.test(compat),
-    "兼容范围用**精确版本**而不是 `^` 范围（`^0.2.0-rc.1` 会放行没验过的 0.2.0 / 0.2.5）"
+    verdict.ok,
+    `兼容范围是单个无上界的 >= 起点（实际 ${JSON.stringify(compat)}：${verdict.problem ?? "合规"}）`
   );
 
   const peers = manifest.peerDependencies ?? {};
   const drifted = Object.entries(peers)
-    .filter(([name]) => name.startsWith("@deepseek-ai/dsh-"))
+    .filter(([name]) => followsDshVersion(name))
     .filter(([, range]) => range !== compat)
     .map(([name]) => name);
   check(
     drifted.length === 0,
-    `宿主 peer 范围与 compatibility.dsh 一致(门禁读 peer;漂开:${drifted.join("、") || "无"})`
+    `宿主 peer 范围与 compatibility.dsh 逐字相同(漂开:${drifted.join("、") || "无"})`
+  );
+  // 第三方库不跟宿主版本线（cordis / schemastery / react…），防止被"统一"掉。
+  const wrongThird = Object.entries(peers)
+    .filter(([name]) => !followsDshVersion(name))
+    .filter(([, range]) => range === compat)
+    .map(([name]) => name);
+  check(
+    wrongThird.length === 0,
+    `非 DSH 包保持独立约束、不跟宿主版本线(误改:${wrongThird.join("、") || "无"})`
   );
 
   // ── engines.dsh 才是真正的门禁（2026-10-22 迁移时补上）────────────────────
@@ -136,38 +149,20 @@ const check = (ok, label, detail) => {
     enginesDsh === compat,
     `engines.dsh 与 compatibility.dsh 一致（engines=${JSON.stringify(enginesDsh)} / compat=${JSON.stringify(compat)}）`
   );
-  // **写法要求：无上界组合式**（2026-10-22 按用户要求调整）。
+  // **写法要求：统一单一起点**（2026-10-24 用户规范）。
   //
-  // 为什么不用优雅的 `>=0.2.0-rc.2 <0.3.0`：semver 第 11 条（预发布版）——范围里出现
-  // `-rc.N` 时，只有**同一组** [major,minor,patch] 的预发布版才满足。实测（宿主 semver 7.8.5）：
+  // @deepseek-ai/dsh 与 @deepseek-ai/dsh-* 全部写同一个 >= 起点，不累加、不枚举。
+  // 成立前提是宿主判定带 includePrerelease —— 见 tools/lib/version-range.mjs 文件头。
+  // 累加式（>=0.1.7-rc.2 || >=0.2.0-rc.1 || …）在 includePrerelease 下等价于第一段，
+  // 维护成本与精确列表相同却伪装成范围，所以不再用。
   //
-  //     >=0.2.0-rc.2 <0.3.0    → 拒绝 0.2.1-rc.2（当前宿主！）  接受 3/11
-  //     >=0.2.0-rc.2           → 拒绝 0.2.1-rc.2                接受 5/11
-  //     *                      → 拒绝所有 rc                    接受 4/11
-  //     >=0.1.7-rc.2 || >=0.2.0-rc.1 || >=0.2.0-rc.2 || >=0.2.1-rc.2
-  //                            → 接受当前宿主 + 未来正式版       接受 8/11  ← 采用这个
-  //
-  // 用户的要求是「**无上界**，防止宿主升级后插件直接不可用」。所以这里：
-  //   · 每一项都是 `>=` 开头（无上界）；
-  //   · 用 `||` 把若干个 rc 起点串起来，覆盖各组的预发布许可；
-  //   · **仍然不含 `<` 上界** —— `unmetRequirements()` 只比对 it,s 上界会让未来版本失效。
-  const parts = compat.split("||").map((piece) => piece.trim()).filter(Boolean);
+  // 第三方库（cordis / schemastery / react…）不跟这条规则，判据见 followDshVersion。
   check(
-    parts.length > 0 && parts.every((piece) => /^>=\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(piece)),
-    `兼容范围每一项都是无上界的 \`>=\` 起点（非法项:${parts.filter((piece) => !/^>=\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(piece)).join("、") || "无"}；共 ${String(parts.length)} 项）`
-  );
-  check(
-    !/</u.test(compat),
-    `兼容范围没有上界（\`<\` 会让宿主升级后把插件判成不兼容；实际 ${JSON.stringify(compat)}）`
-  );
-  // 覆盖的起点必须与 dshReleases 里声明验过的版本对得上（不多不少）。
-  check(
-    parts.every((piece) => releases.some((release) => piece.endsWith(release))),
-    `每个 \`>=\` 起点都对应 dshReleases 里验过的一个版本（多出:${parts.filter((piece) => !releases.some((release) => piece.endsWith(release))).join("、") || "无"}）`
-  );
-  check(
-    releases.every((release) => parts.some((piece) => piece.endsWith(release))),
-    `dshReleases 里每个版本都有对应起点（漏:${releases.filter((release) => !parts.some((piece) => piece.endsWith(release))).join("、") || "无"}）`
+    followsDshVersion("@deepseek-ai/dsh") &&
+      followsDshVersion("@deepseek-ai/dsh-settings") &&
+      !followsDshVersion("@deepseek-ai/cordis") &&
+      !followsDshVersion("@deepseek-ai/schemastery"),
+    "「跟 DSH 版本走」的包名判据正确（dsh / dsh-* 算，cordis / schemastery 不算）"
   );
 }
 

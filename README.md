@@ -73,7 +73,9 @@ dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workben
 dsh plugin --profile desktop add file:<你的克隆目录>
 ```
 
-插件声明同时兼容 DSH `0.2.1-rc.3` / `0.2.1-rc.2` / `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2`。插件自身的 `1.0.0` 是独立版本号,
+插件声明 `engines.dsh` 为 `>=0.2.0-rc.2` —— 宿主判定带 `includePrerelease`，所以这个起点覆盖
+`0.2.0-rc.2` 起的**所有**版本（含后续 minor 的 rc / alpha）。已实测的版本记在
+`package.json` 的 `dsh.compatibility.dshReleases`。插件自身的 `1.0.0` 是独立版本号,
 不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本,
 不要用旧的全局命令更新官方桌面端的 profile。
 
@@ -349,7 +351,7 @@ baseUrl 是补丁文件自己的目录,路径随包走)。`includeDefaultRoots` 
 你的工作区技能与用户技能在本模式下**照常可见**,这里是追加,不是替换。
 
 预设本身由 `cordis.patch.yml` 里的 `@deepseek-ai/dsh-agent-preset` 声明行注册 ——
-DSH 0.1.7-rc.2 的 `agent-preset-registry` 只从组合里收集声明,**不扫描**用户预设目录。
+DSH 的 `agent-preset-registry` 只从组合里收集声明,**不扫描**用户预设目录。
 `presets/fpga-workbench/agent.cordis.yml` 是可编辑源,`cordis.patch.yml` 内联同一份行集合;
 `tools/check-preset-root.mjs` 会逐行比对两者,防止漂移。
 
@@ -382,7 +384,7 @@ pnpm 安装 `file:` 依赖时按 `files` 打包,白名单外的东西**不会被
 
 **二、预设必须在组合里有 `@deepseek-ai/dsh-agent-preset` 声明行。**
 
-DSH 0.1.7-rc.2 的 `agent-preset-registry` 只从组合里的声明行收集预设,**不扫描**
+DSH 的 `agent-preset-registry` 只从组合里的声明行收集预设,**不扫描**
 `.agent-presets` 目录。所以 `cordis.patch.yml` 里必须有
 `id: preset-fpga-workbench` + `name: '@deepseek-ai/dsh-agent-preset'` 的 insert 行,
 且 `config.plugins` 与 `agent.cordis.yml` 保持一致。

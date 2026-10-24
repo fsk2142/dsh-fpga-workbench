@@ -109,14 +109,29 @@ export const satisfiesHost = (version, range) => {
   const text = String(version ?? "").trim();
   if (text === "") return false;
 
-  // 依次尝试几个位置找 semver（宿主自己的那份最权威）。
-  // 路径不硬编码：本仓库 tools/lib → 上溯到仓库根，再从宿主环境变量与已知安装位置推。
-  const hostRoot = process.env.DSH_APP_DIR ?? "";
-  const candidates = [
-    "semver",
-    ...(hostRoot === "" ? [] : [`${hostRoot}/node_modules/semver`]),
-    "C:/Users/<用户名>/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/semver"
-  ];
+  /**
+   * 依次尝试几个位置找 semver（宿主自己的那份最权威）。
+   *
+   * ⚠️ **不能硬编码到用户目录**（2026-10-24 审查抓到的隐私泄漏）：原来这里写了
+   * `C:/Users/<用户名>/AppData/...`，把本机用户名带进了仓库，而且换台机器就永远
+   * 走不到这条分支（等于那段候选形同虚设）。
+   *
+   * 现在只从**环境变量**推导，三个来源：
+   *   · `DSH_APP_DIR` —— 本仓库自己的测试脚本就是这么传宿主路径的；
+   *   · `LOCALAPPDATA` —— Windows 上 Programs 安装目录的根，DSH Desktop 的默认位置；
+   *   · 都没有就只试裸 `semver`（走下面的退路逻辑）。
+   */
+  const candidates = ["semver"];
+  const explicit = process.env.DSH_APP_DIR;
+  if (typeof explicit === "string" && explicit !== "") {
+    candidates.push(`${explicit.replace(/\\/gu, "/")}/node_modules/semver`);
+  }
+  const localAppData = process.env.LOCALAPPDATA;
+  if (typeof localAppData === "string" && localAppData !== "") {
+    candidates.push(
+      `${localAppData.replace(/\\/gu, "/")}/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/semver`
+    );
+  }
   for (const specifier of candidates) {
     try {
       const require = createRequire(import.meta.url);

@@ -59,7 +59,7 @@ ModelSim、QuestaSim 与 XSim，以及 Vivado 与 Quartus 都可以同时保留�
 
 ## 安装
 
-在 DeepSeek Harness Desktop(`0.2.1-rc.2`)里,从「插件」页安装本仓库,**然后重启桌面端**,
+在 DeepSeek Harness Desktop(`0.2.1-rc.3`)里,从「插件」页安装本仓库,**然后重启桌面端**,
 新建会话时就能选「FPGA 开发模式」。
 
 ```powershell
@@ -73,7 +73,7 @@ dsh plugin --profile desktop add git+https://github.com/fsk2142/dsh-fpga-workben
 dsh plugin --profile desktop add file:<你的克隆目录>
 ```
 
-插件声明同时兼容 DSH `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2`。插件自身的 `1.0.0` 是独立版本号,
+插件声明同时兼容 DSH `0.2.1-rc.3` / `0.2.1-rc.2` / `0.2.0-rc.2` / `0.2.0-rc.1` 与 `0.1.7-rc.2`。插件自身的 `1.0.0` 是独立版本号,
 不需要与 DSH 版本号相同。桌面端内置的 DSH 与 PATH 上的 `dsh` 可能不是同一版本,
 不要用旧的全局命令更新官方桌面端的 profile。
 

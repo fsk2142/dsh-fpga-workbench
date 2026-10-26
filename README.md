@@ -130,7 +130,7 @@ tools/                   （不在发布包内）分层自检 + install / sync-i
 ## 安装形态的三点
 
 1. **不需要构建**。git 装法取仓库的**已跟踪内容**：`tools/` 会带上（仅用于开发自检，不参与加载），本地已忽略的 `.tmp/` 不带。
-2. **指定分支或标签**：地址后加 `#`，如 `...#main` 或 `...#v1.0.0`。不打标签就跟 `main` 走，升级时重新 `add`。
+2. **指定分支或标签**：地址后加 `#`，如 `...#main` 或 `...#v1.0.1`。不打标签就跟 `main` 走，升级时重新 `add`。
 3. `pnpm pack` 的 tarball 含 `files` 白名单里的 `lib` / `presets` / `cordis.patch.yml` / `icon.svg`，加上 npm 自动包含的 `package.json` / `README.md` / `LICENSE`；不含根 `tools/` 与 `docs/`。
 
 ## 开发

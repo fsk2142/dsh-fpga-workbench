@@ -57,9 +57,21 @@ const readText = (rel) => {
  */
 const STDIN_MODE = process.argv.includes("--stdin");
 
+/**
+ * 本文件自身不参与扫描。
+ *
+ * 它的注释与自检样例里**必须**写出会被检测的形态（`C:\Users\xxx`、`someone@qq.com`），
+ * 否则读代码的人看不出判据长什么样。不排除自己就是永久的自指误报
+ * —— 2026-10-26 第一次跑就撞上了。
+ */
+const SELF = "tools/check-privacy.mjs";
+
 const files = STDIN_MODE
   ? [{ rel: "<stdin>", text: readFileSync(0, "utf8") }]
-  : tracked.map((rel) => ({ rel, text: readText(rel) })).filter((item) => item.text !== "");
+  : tracked
+      .filter((rel) => rel !== SELF)
+      .map((rel) => ({ rel, text: readText(rel) }))
+      .filter((item) => item.text !== "");
 
 // ── 1. 本机绝对路径 ─────────────────────────────────────────────────────
 //

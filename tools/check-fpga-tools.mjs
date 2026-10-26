@@ -827,7 +827,21 @@ if (vsimProbe.status !== 0) {
   check(sim.status === 0, `多 TB + 显式 TOP_OVERRIDE → 退出码 0(实际 ${String(sim.status)})`);
   // ⑤ 同名且内容一致 → 0(内容一致才允许丢),并说明丢了哪一份
   sim = simRun("dup-same", { "rtl/foo.sv": rtlFoo, "verif/foo.sv": rtlFoo, "verif/tb_foo.sv": tbSource("tb_foo") });
-  check(sim.status === 0, `同名同内容 → 退出码 0(只丢重复那份;实际 ${String(sim.status)})`);
+  /**
+   * 这里曾出现**间歇性失败**（2026-10-26 第十一轮审查实测 1/4，本机也复现过一次：
+   * 清空 `.tmp` 后连跑 3 次得到 0/1/1，之后连跑 5 次全 0）。
+   *
+   * 已排除：去重判定本身正确（失败那次 "identical content" 已打印，且那是**逐字节**
+   * 内容比较而非 mtime）；"no fresh transcript" 分支也不会命中。
+   * 剩下的怀疑是**去重之后的 compile/仿真阶段瞬态失败** —— 夹具里的 vsim 是临时写的
+   * 脚本，Windows Defender 对新建脚本的首扫会造成瞬时 spawn 失败。
+   *
+   * 但当时**看不到 sim.output**，无法归因。所以失败时把输出尾部打出来：
+   * 下次再闪，日志里直接能看到是哪一步、什么错误，不必再猜。
+   */
+  const dupDetail =
+    sim.status === 0 ? undefined : `输出尾部:\n        ${String(sim.output ?? "").slice(-1500).replaceAll("\n", "\n        ")}`;
+  check(sim.status === 0, `同名同内容 → 退出码 0(只丢重复那份;实际 ${String(sim.status)})`, dupDetail);
   check(
     sim.output.includes("duplicate basename skipped (identical content)"),
     "同名同内容会打出「identical content」说清丢了哪一份(不静默)"

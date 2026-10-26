@@ -14,6 +14,7 @@
 //   4. 宿主半侧:导出 apply / inject = ["settings"] / index.js 里不出现 systemPrompt
 import { spawnSync } from "./lib/spawn.mjs";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -2299,7 +2300,30 @@ try {
 // 真实 DSH 一定提供这些服务，但版本差异 / headless 部署 / 未来 API 变动都可能缺。
 // 这里用"什么都没有"的极简 ctx 跑一遍 apply，断言**不抛异常**。
 {
-  const plugin = await import(`file:///${join(ROOT, "lib", "index.js")}`);
+  /**
+   * **先确认依赖装好了**（2026-10-26 第十一轮审查指出）。
+   *
+   * `lib/index.js` 会 `import "@deepseek-ai/schemastery"`（peer 依赖）。在干净克隆里
+   * 若先跑 `check-all` 后跑 `pnpm install`，这里会抛 MODULE_NOT_FOUND —— 看起来像
+   * "加载契约被破坏"，实际只是依赖没装。
+   *
+   * 所以先探一下：装不到就 SKIP 并说清怎么办，而不是让检查变红误导下一个人。
+   * （CI 的顺序本来就是 install → check，所以正常情况下走不到这个分支。）
+   */
+  let dependencyReady = true;
+  try {
+    const require = createRequire(join(ROOT, "package.json"));
+    require.resolve("@deepseek-ai/schemastery");
+  } catch {
+    dependencyReady = false;
+  }
+
+  if (!dependencyReady) {
+    console.log(
+      "SKIP  宿主服务缺失时的降级行为 —— 依赖未安装（先跑 `pnpm install` 再跑本检查；CI 顺序本来就是 install 在前）"
+    );
+  } else {
+    const plugin = await import(`file:///${join(ROOT, "lib", "index.js")}`);
   const makeCtx = (extra) => ({
     logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
     on: () => () => undefined,
@@ -2330,7 +2354,8 @@ try {
     } catch (error) {
       threw = error;
     }
-    check(threw === undefined, `宿主能力缺失时 apply() 不抛异常:${label}`, String(threw));
+      check(threw === undefined, `宿主能力缺失时 apply() 不抛异常:${label}`, String(threw));
+    }
   }
 }
 

@@ -185,7 +185,18 @@ export const satisfiesHost = (version, range) => {
     } else if (leftNumber !== rightNumber) {
       return leftNumber; // 数字段 < 字母段
     } else {
-      const order = right.localeCompare(left);
+      /**
+       * 字母段按 **ASCII 逐字节**比较（semver 2.0.0 第 11.4 条）。
+       *
+       * 原来用 `localeCompare`，它受 ICU 影响：可能做数字感知排序
+       * （`"rc2".localeCompare("rc10")` 在部分 ICU 下返回 -1，即 rc2 < rc10），
+       * 而 semver 要求按字节序（`"2" > "1"`，所以 rc2 > rc10）。
+       *
+       * 实测（2026-10-26）：本机 8 个用例的 `localeCompare` 结果恰好与 semver 一致，
+       * 分歧**没能复现** —— 但它依赖运行环境的 ICU 数据，换台机器就可能翻转。
+       * 既然这里本就该是纯 ASCII 语义，正确性不该押在 locale 上。
+       */
+      const order = right < left ? -1 : right > left ? 1 : 0;
       if (order !== 0) return order > 0;
     }
   }

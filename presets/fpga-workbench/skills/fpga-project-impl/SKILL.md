@@ -46,7 +46,7 @@ description: 工程综合后运行到 route_design 时用;用户需要 bitstream
 
 GUI 亦可,但**批处理才留下可复现命令原文**。`route` 范围执行①后停止;
 `bitstream` 范围执行①,成功后再执行②。分类模板
-`implementation/vivado_implementation.tcl` 与 `bitstream/vivado_bitstream.tcl` 分别对应这两段:
+`implementation/vivado_implementation.tcl` 与 `bitstream/vivado_bitstream.tcl` 分别对应这两段。
 
 ```tcl
 # ① 实现:跑到 route_design 为止(不写 bitstream),并跑 DRC

@@ -242,6 +242,12 @@ export const TOOLS = [
     what: "核 spec 里每条 AC 是否在 verif.md 里有记录(功能覆盖要求 100%);未覆盖退 1"
   },
   {
+    file: "module-verif-uvm-selftest.mjs",
+    level: "module",
+    stage: "验证环节",
+    what: "UVM 环境自检:查 vsim / UVM 库 / C 编译器,再编译并跑一个 demo 确认链路真通;环境缺失退 3"
+  },
+  {
     file: "module-rtl-lint.mjs",
     level: "module",
     stage: "RTL 环节",

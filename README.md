@@ -69,7 +69,7 @@ node tools/sync-installed.mjs
 
 ### 自检
 
-设置页底部「自检」按钮（点一下才跑，挂载时不请求），按清单核对已装副本的 8 项内容：12 份内置模板文件、11 个自带命令入口及 4 个辅助模块、16 个技能目录及各自的 `SKILL.md` 与 `references/*.md`、运行时子树与 `workspace/AGENTS.fpga.md`、补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录。
+设置页底部「自检」按钮（点一下才跑，挂载时不请求），按清单核对已装副本的 8 项内容：12 份内置模板文件、12 个自带命令入口及 4 个辅助模块、16 个技能目录及各自的 `SKILL.md` 与 `references/*.md`、运行时子树与 `workspace/AGENTS.fpga.md`、补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录。
 
 结论分 `pass` / `warn` / `fail` 三档，缺哪份文件就点名哪份。**只读**：不写设置、不改文件、不起进程。
 
@@ -86,6 +86,7 @@ node tools/sync-installed.mjs
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-new.mjs <模块根> <模块名> --template <模板>` | 起 Testbench / 仿真脚本 / 验证脚本 |
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-coverage.mjs <模块根> [--json]` | 读 ModelSim 的 `coverage.ucdb` 出代码覆盖率，按 95% 门槛判定 |
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-ac-trace.mjs <模块根> [--json]` | 核 spec 的每条 AC 是否在 `verif.md` 里有记录（功能覆盖要求 100%） |
+| 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-uvm-selftest.mjs [--json]` | UVM 环境自检（vsim / UVM 库 / C 编译器 + 跑 demo 验链路） |
 | 模块级 | 综合 | `node presets/fpga-workbench/tools/module/module-synth-new.mjs <模块根> <模块名> --template <模板>` | 起约束文件或综合脚本 |
 | 模块级 | 验收 | `node presets/fpga-workbench/tools/module/module-report-check.mjs <模块目录> [--json]` | 核报告引用的证据路径是否存在 |
 | 工程级 | RTL/lint | `node presets/fpga-workbench/tools/project/project-rtl-check.mjs <工程目录> [--json]` | 检查工程 RTL 与 IP 时序卡 |

@@ -113,10 +113,20 @@ node "<自带命令目录>\module\module-verif-ac-trace.mjs" <模块根>
 判断依据是「人工能想到的用例是否已基本穷尽」:协议类 IP(总线/DMA/TCP)值得,
 FIFO / 寄存器 / 简单 FSM 不值(会带来 2–3 倍样板代码)。
 
-- **先自检环境**:`node "<自带命令目录>\module\module-verif-uvm-selftest.mjs"`
-  (退 3 = 环境缺失 BLOCKED,与「代码有问题」的 1 分开记)
-- **已验证跑通的骨架**:`references/uvm-selfcheck.sv`,带 demo DUT,只需换 DUT 与参考模型
-- 七个实测坑、scoreboard 怎么设计:见 [什么时候用 UVM](references/uvm-when-and-how.md)
+**默认走定向 TB**(99 行、生成即用);确认要 UVM 时走三步:
+
+```
+# ① 先确认环境(退 3 = 环境缺失 BLOCKED,与「代码有问题」的 1 分开记)
+node "<自带命令目录>\module\module-verif-uvm-selftest.mjs"
+
+# ② 生成骨架(自带 demo DUT,已验证可编译)
+node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> --kind uvm
+
+# ③ 改两处:换掉 demo DUT、把 scoreboard 的期望值算法换成 spec 对应的参考模型
+```
+
+骨架不是填空模板 —— 它是**已跑通的起点**,证明环境好、结构对。七个实测坑与
+scoreboard 的关键设计见 [什么时候用 UVM](references/uvm-when-and-how.md)。
 
 **参考模型会错**(同源错误),可靠性排序:**SVA 断言 > 真实数据当黄金标准 >
 不同路径实现模型 > 手写模型**。断言不要求重写功能,只陈述不变量,最不容易错。

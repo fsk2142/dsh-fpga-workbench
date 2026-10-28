@@ -55,15 +55,27 @@ node "<自带命令目录>\module\module-verif-uvm-selftest.mjs"
 退出码：0 可用 / 1 demo 跑不通 / 2 用法错 / **3 环境缺失（BLOCKED）**。
 3 与 1 要分开记 —— **环境缺失不等于设计有问题**。
 
-## 第二歩：拿骨架改成自己的
+## 第二步：生成骨架，改两处
 
-同目录的 `uvm-selfcheck.sv` 是一份**已验证跑通**的完整骨架（含 demo DUT）。
-它证明了链路是通的，你只需要替换两处：
+```
+node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> --kind uvm
+```
 
-1. **DUT**：把 `uvm_demo_dut` 换成自己的模块，接口对应改
+它把同目录的 `uvm-selfcheck.sv`（**已验证跑通**的完整骨架，含 demo DUT）复制到
+`verif/tb_<snake>.sv`。骨架里没有模块名占位符，所以是纯复制 ——
+
+**你要改的只有两处**：
+
+1. **DUT**：把 `uvm_demo_dut` 换成自己的模块，interface 端口对应改
 2. **参考模型**：`demo_scoreboard.write_out()` 里的期望值算法
 
-其余（driver/monitor/env/test/sequence）的结构可以照抄。
+其余（driver / monitor / env / test / sequence）的结构可以照抄。
+
+> 为什么骨架放 `references/` 而不是 `templates/`：`templates/` 里每一项都是
+> 「生成即用、只需填模块名」的填空模板，由 `check-preset-root` 逐一核对；而骨架
+> **必然要改**（换 DUT、写参考模型）且要环境就绪。放 references 更诚实 ——
+> 它是"起点样例"不是"填空模板"。但你不该为此多走一步手动复制，所以留了
+> `--kind uvm` 入口。
 
 ## 七个实测坑（ModelSim SE-64 2020.4 + UVM 1.2，2026-10-28）
 

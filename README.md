@@ -69,7 +69,7 @@ node tools/sync-installed.mjs
 
 ### 自检
 
-设置页底部「自检」按钮（点一下才跑，挂载时不请求），按清单核对已装副本的 8 项内容：12 份内置模板文件、10 个自带命令入口及 4 个辅助模块、16 个技能目录及各自的 `SKILL.md` 与 `references/*.md`、运行时子树与 `workspace/AGENTS.fpga.md`、补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录。
+设置页底部「自检」按钮（点一下才跑，挂载时不请求），按清单核对已装副本的 8 项内容：12 份内置模板文件、11 个自带命令入口及 4 个辅助模块、16 个技能目录及各自的 `SKILL.md` 与 `references/*.md`、运行时子树与 `workspace/AGENTS.fpga.md`、补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录。
 
 结论分 `pass` / `warn` / `fail` 三档，缺哪份文件就点名哪份。**只读**：不写设置、不改文件、不起进程。
 
@@ -82,6 +82,7 @@ node tools/sync-installed.mjs
 | 两级共用 | 规格 | `node presets/fpga-workbench/tools/setup-scaffold.mjs <目录> [--kind module\|project]` | 建模块 / 工程骨架（幂等） |
 | 模块级 | RTL | `node presets/fpga-workbench/tools/module/module-rtl-new.mjs <模块根> <模块名> --template <模板>` | 按模板起 RTL 文件 |
 | 模块级 | RTL | `node presets/fpga-workbench/tools/module/module-rtl-check.mjs <模块目录>` | RTL 机械规范检查 |
+| 模块级 | RTL | `node presets/fpga-workbench/tools/module/module-rtl-lint.mjs <模块根> [--json]` | Verilator 静态检查（未用/未驱动信号、位宽截断、latch —— ModelSim 编译不报） |
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-new.mjs <模块根> <模块名> --template <模板>` | 起 Testbench / 仿真脚本 / 验证脚本 |
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-coverage.mjs <模块根> [--json]` | 读 ModelSim 的 `coverage.ucdb` 出代码覆盖率，按 95% 门槛判定 |
 | 模块级 | 验证 | `node presets/fpga-workbench/tools/module/module-verif-ac-trace.mjs <模块根> [--json]` | 核 spec 的每条 AC 是否在 `verif.md` 里有记录（功能覆盖要求 100%） |

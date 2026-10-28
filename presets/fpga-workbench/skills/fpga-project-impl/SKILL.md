@@ -46,7 +46,7 @@ description: 工程综合后运行到 route_design 时用;用户需要 bitstream
 
 GUI 亦可,但**批处理才留下可复现命令原文**。`route` 范围执行①后停止;
 `bitstream` 范围执行①,成功后再执行②。分类模板
-`implementation/vivado_implementation.tcl` 与 `bitstream/vivado_bitstream.tcl` 分别对应这两段。
+`implementation/vivado_implementation.tcl` 与 `bitstream/vivado_bitstream.tcl` 分别对应这两段。有 `mcp__vivado__*` 时优先走 MCP(用法见 `fpga-project-synth` 技能里的 MCP 与批处理一节)。
 
 ```tcl
 # ① 实现:跑到 route_design 为止(不写 bitstream),并跑 DRC
@@ -104,7 +104,7 @@ bit/<顶层>.ltx
 - **NOT_APPLICABLE**:当前任务不涉及布局布线或实现产物,且无需生成新的实现证据
 
 判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
-  · 速记:`PASS`有证据 / `FAIL`真不符 / `BLOCKED`缺条件 / `UNVERIFIED`没验 / `NOT_APPLICABLE`确不适用且不掩盖无法验证
+  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 
 **本环节不判定时序是否满足** —— 时序判定在 `fpga-project-timing`。
 

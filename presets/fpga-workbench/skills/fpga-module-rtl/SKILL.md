@@ -41,7 +41,7 @@ description: 编写或修改 FPGA 模块 RTL 时用;接口或关键方案未定�
 4. 按设置所选 RTL 语言递归读取 `rtl/` 下 `.sv` / `.v`。
    源码为 VHDL 时本检查器不覆盖 → 结论记 `NOT_APPLICABLE` 并说明原因,**不得视为通过**
    (判定词含义见 `fpga-module-verif` 的状态表,唯一权威)
-  · 速记:`PASS`有证据 / `FAIL`真不符 / `BLOCKED`缺条件 / `UNVERIFIED`没验 / `NOT_APPLICABLE`确不适用且不掩盖无法验证
+  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 
 ## 第一步:用模板生成文件(**仅新建文件时**),再编写逻辑
 
@@ -102,6 +102,10 @@ node "<自带命令目录>\module\module-rtl-new.mjs" <模块根> <模块名> --
 
 执行编译检查前，必须读 [编译器检查与 RTL 规范清单](references/rtl-style-and-checks.md) 的编译器部分，并按当前语言、工具与厂商库选择命令。编译不通过时先修正再进入第三步。
 
+Verilator 补的是 `vlog` 不报的那一类(`UNUSEDSIGNAL` / `UNDRIVEN` / `WIDTHTRUNC` /
+`LATCH` / `CASEINCOMPLETE` 等)—— **逐条都值得看,不要一律当噪声**。
+各类的含义与判法见 [Verilator lint](references/verilator-lint.md)。
+
 ## 第三步:逐条核对规范
 
 执行规范核对前，继续按 [编译器检查与 RTL 规范清单](references/rtl-style-and-checks.md) 的机械检查、类型、字面量、后缀、注释、信号分组与位置、组合逻辑写法逐条核对；不得只凭肉眼跳过确定性检查。
@@ -113,8 +117,12 @@ node "<自带命令目录>\module\module-rtl-new.mjs" <模块根> <模块名> --
 
 | 对应 | 命令 | 看什么 |
 |---|---|---|
-| 第二步 | `& "<编译器路径>" --lint-only -Wall --top-module <顶层模块名> <文件...>` | error / warning,判法见第二步 |
+| 第二步 | `node "<自带命令目录>\module\module-rtl-lint.mjs" <模块根>` | error / warning,判法见第二步 |
 | 第三步 | `node "<自带命令目录>\module\module-rtl-check.mjs" <模块目录>` | 退出码与带行号的条目,判法见第三步 |
+
+**第二步为什么用这条命令而不是直接敲 verilator**:Windows 上的 Verilator 是 msys2 包,
+直接调会报「找不到 `verilated_std.sv`」;命令固定走 bash,没 bash 时退 3(BLOCKED)。
+细节见 [Verilator lint](references/verilator-lint.md)。
 
 - `module-rtl-check` 会顺带查一眼 `verif/tb_*` —— 所以"这一轮全绿"包含测试平台的机械规范,
   **第一次跑仿真前那部分也该是干净的**

@@ -112,7 +112,7 @@ description: 编写工程缺少的专用 RTL、顶层、IP/BD 或简单 tb 时�
 - **NOT_APPLICABLE**:这次不写工程内 RTL
 
 判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
-  · 速记:`PASS`有证据 / `FAIL`真不符 / `BLOCKED`缺条件 / `UNVERIFIED`没验 / `NOT_APPLICABLE`确不适用且不掩盖无法验证
+  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 
 ## 产物
 

@@ -159,15 +159,26 @@ const parseAcceptanceCriteria = (text) => {
       continue;
     }
 
-    // 非表格：AC 出现在行内任何位置。
-    // 分隔符允许 `-` `_` 空格或不带（`AC-1` / `AC_1` / `AC 1` / `AC1`），
-    // 但要求前面是行首或非字母数字，避免把 `MACADDR1` 之类误当成 AC。
-    const match = /(?:^|[^A-Za-z0-9])(AC[-_ ]?\d+)\b[\s:：|—–-]*(.*)$/iu.exec(raw);
-    if (match === null) continue;
-    const id = normalizeId(match[1]);
+    // 非表格行：**只认「结构化上下文」里的 AC**（§C7）。
+    //
+    // 为什么收紧：早期版本接受行内任意位置的 `AC 3`，于是散文
+    // 「…满足 AC 3 项指标…」会被解析成一条幻影 AC-3，计入门槛后造成假 FAIL。
+    //
+    // 现在要求 AC 编号出现在行首（可带列表/引用/加粗等前缀），且后面紧跟分隔符
+    // （`:` `：` 或至少一个空格再跟正文）。这样：
+    //   `- AC-1: 复位后归零`         ✅ 列表项
+    //   `**AC-4** 参数化位宽`        ✅ 加粗开头
+    //   `AC 5 上电自检`              ✅ 行首
+    //   `…满足 AC 3 项指标…`         ❌ 散文中间，不收
+    const leading = /^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)?\**\s*(AC[-_ ]?\d+)\**\s*[:：]\s*(.*)$/iu.exec(raw)
+      ?? /^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)?\**\s*(AC[-_ ]?\d+)\**\s+(.*)$/iu.exec(raw);
+    if (leading === null) continue;
+    const id = normalizeId(leading[1]);
     if (seen.has(id)) continue;
+
+    // 描述为空的（只有 `AC-1` 单独一行）也收 —— 那是占位待填，不是幻影。
+    const description = leading[2].replace(/^\*\*|\*\*$/gu, "").replace(/^[\s:：|—-]+/u, "").trim();
     seen.add(id);
-    const description = match[2].replace(/^\*\*|\*\*$/gu, "").replace(/^[\s:：|—-]+/u, "").trim();
     found.push({
       id,
       description: description === "" ? "(未写描述)" : description,

@@ -242,6 +242,12 @@ export const TOOLS = [
     what: "核 spec 里每条 AC 是否在 verif.md 里有记录(功能覆盖要求 100%);未覆盖退 1"
   },
   {
+    file: "module-rtl-lint.mjs",
+    level: "module",
+    stage: "RTL 环节",
+    what: "Verilator 静态检查:未使用/未驱动信号、位宽截断、latch 推断等 ModelSim 编译不报的问题"
+  },
+  {
     file: "project-rtl-check.mjs",
     level: "project",
     stage: "工程 RTL / lint 环节",

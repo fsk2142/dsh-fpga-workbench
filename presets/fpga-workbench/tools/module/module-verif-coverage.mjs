@@ -24,22 +24,25 @@
  * ## 覆盖率类别
  *
  * `+cover=<spec>` 的字母：`s` 语句、`b` 分支、`c` 条件、`e` 表达式、
- * `f` 状态机、`t` 翻转、`x` 扩展翻转。本命令关心前五类（后者与功能覆盖关系弱）。
+ * `f` 状态机、`t` 翻转、`x` 扩展翻转。
+ * **门槛只算语句 / 分支 / 状态机状态**；条件 / 表达式 / 状态机迁移 / 翻转仅作参考，
+ * 不计入达标判定（与 references/coverage-and-waivers.md 的类别表一致）。
  *
  * ## 用法
  *
  * ```
- * node module-coverage.mjs <模块根>              # 读 verif/work/coverage.ucdb
- * node module-coverage.mjs <模块根> --ucdb <path>
- * node module-coverage.mjs <模块根> --json       # 机器可读
- * node module-coverage.mjs <模块根> --threshold 90
+ * node module-verif-coverage.mjs <模块根>              # 读 verif/coverage.ucdb
+ * node module-verif-coverage.mjs <模块根> --ucdb <path>
+ * node module-verif-coverage.mjs <模块根> --json       # 机器可读
+ * node module-verif-coverage.mjs <模块根> --threshold 90
+ * node module-verif-coverage.mjs <模块根> --vsim <vsim 路径>
  * ```
  *
  * 退出码：0 = 达标或例外放行；1 = 低于门槛；2 = 用法/输入错误。
  */
 import { existsSync, readFileSync, readdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const DEFAULT_THRESHOLD = 95;
@@ -59,10 +62,11 @@ const CATEGORY_LABELS = {
 const ADVISORY = new Set(["Toggles", "Expressions", "Conditions", "FSM Transitions"]);
 
 const usage = () => {
-  console.error("用法：node module-coverage.mjs <模块根> [--ucdb <路径>] [--json] [--threshold <百分比>]");
+  console.error("用法：node module-verif-coverage.mjs <模块根> [--ucdb <路径>] [--vsim <路径>] [--json] [--threshold <百分比>]");
   console.error("");
-  console.error("  <模块根>        含 verif/ 的目录；默认读 verif/work/coverage.ucdb");
+  console.error("  <模块根>        含 verif/ 的目录；默认读 verif/coverage.ucdb（其次 verif/work/）");
   console.error("  --ucdb <路径>   显式指定 ucdb 文件");
+  console.error("  --vsim <路径>   显式指定 vsim.exe（默认按 MODELSIM 环境变量与常见安装位置探测）");
   console.error("  --json          输出机器可读 JSON");
   console.error("  --threshold N   门槛百分比（默认 95）");
   console.error("");
@@ -72,7 +76,7 @@ const usage = () => {
 
 /** 解析命令行。 */
 const parseArgs = (argv) => {
-  const options = { moduleRoot: "", ucdb: "", json: false, threshold: DEFAULT_THRESHOLD };
+  const options = { moduleRoot: "", ucdb: "", vsim: "", json: false, threshold: DEFAULT_THRESHOLD };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--json") {
@@ -84,8 +88,20 @@ const parseArgs = (argv) => {
       index += 1;
       continue;
     }
+    if (arg === "--vsim") {
+      options.vsim = argv[index + 1] ?? "";
+      index += 1;
+      continue;
+    }
     if (arg === "--threshold") {
-      options.threshold = Number(argv[index + 1] ?? DEFAULT_THRESHOLD);
+      const raw = argv[index + 1] ?? "";
+      const value = Number(raw);
+      // NaN 会让比较恒为 false（永远"未达标"），必须在入口就拒绝，不能静默带下去。
+      if (raw === "" || !Number.isFinite(value) || value < 0 || value > 100) {
+        console.error(`--threshold 需要一个 0–100 的数字，收到：${JSON.stringify(raw)}`);
+        process.exit(2);
+      }
+      options.threshold = value;
       index += 1;
       continue;
     }
@@ -102,21 +118,50 @@ const parseArgs = (argv) => {
 /**
  * 找 vsim 可执行文件。
  *
- * 优先环境变量，其次从 ucdb 所在目录的 work/_info 之类推不出来 ——
- * 所以只认环境变量和一个常见安装位置，找不到就明确报错（不猜）。
+ * 优先级：`--vsim` 显式路径 → `MODELSIM` / `VSIM` 环境变量 → 按安装目录通配扫描。
+ *
+ * 通配而不是写死 `2020.4`：用户装 2020.1 / 2021.3 / Questa 都能命中，
+ * 写死版本号在换机器时必然失效。找不到就明确报错（不猜）。
+ * @param explicit - `--vsim` 传进来的路径（可为空）。
  * @returns vsim 路径，找不到为空串。
  */
-const findVsim = () => {
-  const explicit = process.env.MODELSIM ?? process.env.VSIM ?? "";
-  if (explicit !== "" && existsSync(explicit)) return explicit;
+const findVsim = (explicit) => {
+  if (explicit !== undefined && explicit !== "") {
+    return existsSync(explicit) ? explicit : "";
+  }
 
-  const candidates = [
-    "C:/modeltech64_2020.4/win64/vsim.exe",
-    "C:/questasim64_2020.4/win64/vsim.exe",
-    "C:/intelFPGA/20.1/modelsim_ase/win32aloem/vsim.exe"
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
+  const fromEnv = process.env.MODELSIM ?? process.env.VSIM ?? "";
+  if (fromEnv !== "" && existsSync(fromEnv)) return fromEnv;
+
+  // 通配常见安装根：modeltech* / questasim* / intelFPGA* 下的 win64|win32aloem
+  const roots = ["C:/", "D:/", "C:/intelFPGA", "C:/intelFPGA_lite"];
+  const exeNames = ["vsim.exe", "vsim"];
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    let entries;
+    try {
+      entries = readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (!/^(?:modeltech|questasim|modelsim)/iu.test(name)) continue;
+      for (const sub of ["win64", "win32aloem", "bin"]) {
+        for (const exe of exeNames) {
+          const candidate = join(root, name, sub, exe);
+          if (existsSync(candidate)) return candidate;
+        }
+      }
+    }
+  }
+
+  // 最后试 PATH 上的 vsim
+  const pathDirs = (process.env.PATH ?? "").split(delimiter);
+  for (const dir of pathDirs) {
+    for (const exe of exeNames) {
+      const candidate = join(dir, exe);
+      if (existsSync(candidate)) return candidate;
+    }
   }
   return "";
 };
@@ -288,9 +333,9 @@ const main = () => {
     process.exit(2);
   }
 
-  const vsim = findVsim();
+  const vsim = findVsim(options.vsim);
   if (vsim === "") {
-    console.error("找不到 vsim。设 `MODELSIM` 环境变量指向 vsim.exe，或把 ModelSim 装到默认位置。");
+    console.error("找不到 vsim。用 --vsim <路径> 指定，或设 `MODELSIM` 环境变量指向 vsim.exe。");
     process.exit(2);
   }
 

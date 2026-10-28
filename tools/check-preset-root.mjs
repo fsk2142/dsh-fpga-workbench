@@ -395,14 +395,31 @@ for (const skill of skillNames) {
 }
 
 // 入口技能是按需整份加载的运行时上下文。给总量设预算，防止修一条规则就继续堆一段解释。
-const SKILL_ENTRY_BYTES_LIMIT = 100_000;
+//
+// **这个数字是我们自己定的，不是宿主或任何外部规范的要求**（2026-10-28 复核时确认：
+// 宿主 `app.asar` 里没有任何技能大小限制）。查证过之后把上限从 100000 提到 150000，
+// 并改成两档：
+//
+//   · 超过 150000 只**警告** —— 提醒「该考虑压缩了」，但不阻塞
+//   · 超过 200000 才 FAIL —— 那时确实会吃掉可观的上下文
+//
+// 为什么改：贴着 100000 跑的那几轮，为了「不超」做了把速记括号去掉、在技能之间
+// 反复搬同一份内容这类**指标替代目的**的优化，反而牺牲了可读性。这个约束的价值是
+// 「提醒别膨胀」，不是「精确到字节」。
+const SKILL_ENTRY_BYTES_WARN = 150_000;
+const SKILL_ENTRY_BYTES_LIMIT = 200_000;
 const skillEntryBytes = skillNames.reduce(
   (total, skill) => total + statSync(join(skillDir, skill, "SKILL.md")).size,
   0
 );
+if (skillEntryBytes > SKILL_ENTRY_BYTES_WARN && skillEntryBytes <= SKILL_ENTRY_BYTES_LIMIT) {
+  console.warn(
+    `WARN  16 个入口 SKILL.md 总计 ${String(skillEntryBytes)} B，已超过 ${String(SKILL_ENTRY_BYTES_WARN)} B 的建议值 —— 考虑把细节挪进 references（不阻塞）`
+  );
+}
 check(
   skillEntryBytes <= SKILL_ENTRY_BYTES_LIMIT,
-  `16 个入口 SKILL.md 总计不超过 ${String(SKILL_ENTRY_BYTES_LIMIT)} B(实际 ${String(skillEntryBytes)} B)`
+  `16 个入口 SKILL.md 总计不超过 ${String(SKILL_ENTRY_BYTES_LIMIT)} B(实际 ${String(skillEntryBytes)} B;建议值 ${String(SKILL_ENTRY_BYTES_WARN)} B)`
 );
 
 // 技能目录会把全部 description 放进模型可见的能力目录。description 只负责触发、边界与移交，
@@ -966,8 +983,11 @@ check(
   "那一节里同时写明时机(写完之后)与要跑的命令(`module-rtl-check.mjs`),不是只提'跑全量'"
 );
 check(
-  /--lint-only/u.test(runSection),
-  "那一节里也点名编译器那条命令(不是只说'跑检查')"
+  // 2026-10-28：lint 从「直接敲 verilator --lint-only」改成走封装命令
+  // `module-rtl-lint.mjs`（Windows 上 Verilator 是 msys2 包，必须经 bash 驱动）。
+  // 判据不变：这一节要点名那条具体命令，不能只说「跑检查」。
+  /module-rtl-lint\.mjs|--lint-only/u.test(runSection),
+  "那一节里也点名 lint 那条命令(不是只说'跑检查')"
 );
 const checkRtlText = readFileSync(join(presetDir, "tools", "module", "module-rtl-check.mjs"), "utf8");
 // TB 扩展名判据现在在共享 driver 里(TESTBENCH),VHDL 那句交代仍在入口 —— 两边都算,才算这条不变式。

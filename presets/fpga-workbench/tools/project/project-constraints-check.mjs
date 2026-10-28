@@ -193,19 +193,24 @@ const main = () => {
         const period = optionValue(text, "-period");
         const name = optionValue(text, "-name");
         const ports = portNames(text);
+        /**
+         * `-add` 是合法写法：同一端口上挂多个时钟（如主时钟 + 虚拟时钟）时，
+         * SDC 要求后续的 `create_clock` 带 `-add`，否则才覆盖前一条。
+         * 见 §C8：不豁免它就会把合法约束误报成冲突。
+         */
+        const hasAdd = /(?:^|\s)-add(?:\s|$)/u.test(text);
         clocks.push({
           kind: /^create_generated_clock/u.test(text) ? "generated" : "base",
           name: name === "" ? (ports[0] ?? "(未命名)") : name,
           period,
           ports,
+          hasAdd,
           file: rel,
           line
         });
-        if (period === "" && !/^-add_delay/u.test(text)) {
-          // create_generated_clock 用 -divide_by 之类也可以，不强制 -period
-          if (/^create_clock/u.test(text)) {
-            problems.push({ file: rel, line, message: "create_clock 没有 -period" });
-          }
+        // `create_clock` 必须有 -period；`create_generated_clock` 可用 -divide_by 等代替。
+        if (period === "" && /^create_clock/u.test(text)) {
+          problems.push({ file: rel, line, message: "create_clock 没有 -period" });
         }
       }
 
@@ -262,12 +267,18 @@ const main = () => {
     }
   }
   for (const [port, list] of byPort) {
-    if (list.length > 1) {
+    if (list.length <= 1) continue;
+    // 端口上的每一条（除第一条）都带 `-add` 才是合法的多时钟写法（§C8）。
+    // 一条都没带 → 后者覆盖前者，是真冲突。
+    const offenders = list.filter((clock, index) => index > 0 && !clock.hasAdd);
+    if (offenders.length > 0) {
       problems.push({
         file: list.map((clock) => `${clock.file}:${String(clock.line)}`).join(", "),
         line: 0,
-        message: `端口 ${port} 上定义了 ${String(list.length)} 个 create_clock —— 未加 -add 时后者覆盖前者`
+        message: `端口 ${port} 上定义了 ${String(list.length)} 个 create_clock，其中 ${String(offenders.length)} 条没带 -add —— 会让前一条被覆盖`
       });
+    } else {
+      notes.push({ file: list[0].file, message: `端口 ${port} 上有 ${String(list.length)} 个 create_clock，均带 -add（合法的多时钟写法）` });
     }
   }
 

@@ -30,7 +30,7 @@ description: 把已有 RTL/IP 接入 FPGA 工程顶层并检查连通性时用;�
 
 - **可复用模块**:模块级 `rtl/`、`verif/` 结论**都是 `PASS`**,或是有依据的 `NOT_APPLICABLE`
   (判定词见 `fpga-module-verif` 的**状态表**,唯一权威)。结论在**模块库**那套 `spec/rtl/verif` 里看,
-  · 速记:`PASS`有证据 / `FAIL`真不符 / `BLOCKED`缺条件 / `UNVERIFIED`没验 / `NOT_APPLICABLE`确不适用且不掩盖无法验证
+  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
   不在本工程目录
 - **专用模块**:`src/rtl/` 有代码,且 `src/sim/` 里有 `tb_*`、**跑过一次**、没啥大问题
   (标准见 `fpga-project-spec`;不进正式证据链,但要知道跑没跑过)

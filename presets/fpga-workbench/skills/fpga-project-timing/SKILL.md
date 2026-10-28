@@ -38,7 +38,7 @@ description: 判断 FPGA 工程 post-route 时序、未约束路径或违例归�
 - **NOT_APPLICABLE**:没有可分析的时序路径(如纯直通)
 
 判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
-  · 速记:`PASS`有证据 / `FAIL`真不符 / `BLOCKED`缺条件 / `UNVERIFIED`没验 / `NOT_APPLICABLE`确不适用且不掩盖无法验证
+  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 
 ## 不收敛怎么办
 
@@ -61,7 +61,7 @@ description: 判断 FPGA 工程 post-route 时序、未约束路径或违例归�
 
 ## 本环节要跑的命令
 
-报告已有就直接读;要自己跑时在 impl 后的工程里:
+报告已有就直接读;要自己跑时在 impl 后的工程里(有 `mcp__vivado__*` 就走 MCP,用法见 `fpga-project-synth` 技能里的 MCP 与批处理一节):
 
 ```tcl
 report_timing_summary -file <报告路径>

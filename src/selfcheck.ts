@@ -221,25 +221,72 @@ export function runSelfCheck(
     const presetShellOn = rowEnabled("tool-bash") || rowEnabled("tool-pwsh");
 
     // profile 补丁：`optional-terminal-bash` 显式 enabled（`disabled: false` 或没写 disabled 行）
-    const profilePatch = readText(join(process.env.USERPROFILE ?? "", ".dsh", "profiles", "desktop", "cordis.patch.yml"));
+    //
+    // **不能写死 `profiles/desktop`**（第十三轮复审指出）：profile 名因机器而异，
+    // 写死会让防线在非 desktop 环境完全失效 —— 那正是最需要它的场景。
+    // 顺序：`DSH_PROFILE_DIR` 显式指定 → `DSH_PROFILE` 名 → `profiles/desktop` 兜底。
+    const profileCandidates: string[] = [];
+    const dshHome = join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".dsh");
+    if (process.env.DSH_PROFILE_DIR !== undefined && process.env.DSH_PROFILE_DIR !== "") {
+      profileCandidates.push(process.env.DSH_PROFILE_DIR);
+    }
+    if (process.env.DSH_PROFILE !== undefined && process.env.DSH_PROFILE !== "") {
+      profileCandidates.push(join(dshHome, "profiles", process.env.DSH_PROFILE));
+    }
+    profileCandidates.push(join(dshHome, "profiles", "desktop"));
+
+    // profile 补丁里**两条**终端后端行都要看：它们加载的是**同一个包**
+    // `@deepseek-ai/dsh-terminal-bash`，各自注册一个名为 `shell` 的 PTY 后端。
+    // 宿主的意图是按平台二选一（`disabled: !!js process.platform === 'win32'` /
+    // `!== 'win32'`），但 patch 里若把两条都硬写成 `disabled: false`，
+    // 它们就同时激活 → 第二个抛 TerminalError → DSH 起不来。
+    //
+    // 2026-10-28 真机就撞在这个形态上：报错从 `optional-terminal-bash` 变成
+    // `optional-terminal-pwsh`，因为它们互相抢 —— 只查其中一条会漏。
+    const TERMINAL_ROWS = ["optional-terminal-bash", "optional-terminal-pwsh"];
+
     let profileShellOn = false;
-    if (profilePatch !== undefined) {
-      const block = /^- id: optional-terminal-bash\s*$([\s\S]*?)(?=^- id: |(?![\s\S]))/mu.exec(profilePatch);
-      if (block !== null) profileShellOn = !/^\s+disabled:\s*true\s*$/mu.test(block[1]);
+    let profileShellDetail = "";
+    /** profile 里是否**至少有一条**终端行在启用（不论几条）。 */
+    let profileProvidesTerminal = false;
+    for (const dir of profileCandidates) {
+      const profilePatch = readText(join(dir, "cordis.patch.yml"));
+      if (profilePatch === undefined) continue;
+
+      const enabledRows: string[] = [];
+      for (const rowId of TERMINAL_ROWS) {
+        const block = new RegExp(`^- id: ${rowId}\\s*$([\\s\\S]*?)(?=^- id: |(?![\\s\\S]))`, "mu").exec(profilePatch);
+        if (block === null) continue;
+        if (!/^\s+disabled:\s*true\s*$/mu.test(block[1])) enabledRows.push(rowId);
+      }
+      if (enabledRows.length === 0) break;
+
+      profileProvidesTerminal = true;
+      // 两条同时启用 = 确定的冲突（它们注册同一个 `shell` 后端）；只有一条 = 正常。
+      profileShellOn = enabledRows.length > 1;
+      profileShellDetail = enabledRows.join(" + ");
+      if (profileShellOn) break;
     }
 
-    const ptyConflict = presetShellOn && profileShellOn;
+    // 冲突有两种形态：
+    //   A. profile 自己两条终端行同时启用 —— 与插件无关，但一样会让 DSH 起不来
+    //   B. 预设提供终端 + profile 也提供 —— 两层抢同一个后端（真机上出现过）
+    const ptyConflict = profileShellOn || (presetShellOn && profileProvidesTerminal);
     checks.push(
       entry(
         "pty",
         "PTY 后端不重复注册",
         ptyConflict ? "warn" : "pass",
         ptyConflict
-          ? "预设的 tool-bash/tool-pwsh 与 profile 的 optional-terminal-bash 都在启用 —— "
-            + "两者都注册名为 shell 的 PTY 后端,启动时会抛 TerminalError 导致 DSH 打不开。"
-            + "二选一:停用预设里那两个,或在 profile 里把 optional-terminal-bash 设成 disabled: true"
+          ? profileShellOn
+            ? `profile 里 ${profileShellDetail} 两条终端行同时启用 —— 它们加载同一个包、`
+              + "都注册名为 shell 的 PTY 后端,启动时会抛 TerminalError 让 DSH 打不开。"
+              + "按平台只留一条:Windows 留 optional-terminal-pwsh,另一条设 disabled: true"
+            : "预设的 tool-bash/tool-pwsh 与 profile 的终端行都在启用 —— 两者都注册名为 shell 的 "
+              + "PTY 后端,启动时会抛 TerminalError 导致 DSH 打不开。"
+              + "二选一:停用预设里那两个,或在 profile 里把终端行设成 disabled: true"
           : presetShellOn
-            ? "由本预设提供终端后端(profile 的 optional-terminal-bash 未启用)"
+            ? "由本预设提供终端后端(profile 的终端行未启用)"
             : "由 profile 提供终端后端(预设的 tool-bash/tool-pwsh 已停用)"
       )
     );

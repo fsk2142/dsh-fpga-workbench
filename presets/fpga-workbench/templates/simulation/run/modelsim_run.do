@@ -347,7 +347,19 @@ if {[file isfile $INI_SOURCE]} {
   set INI_SOURCE [file normalize $INI_SOURCE]
 }
 set INI_SOURCE_FWD [string map {\\ /} $INI_SOURCE]
-set INI_WORK [file join work modelsim.ini]
+# 工作副本**不能放在 `work/` 里**（2026-10-28 真机回归，第十三轮复审 N9）：
+# `clean_work_library` 的 `vdel -lib work -all` 会**删掉整个 `work/` 目录**，
+# 连带把副本一起删掉 —— 之后 `vlog -modelsimini work/modelsim.ini` 报 ENOENT，
+# 编译失败，run / load 全挂。触发条件是「改了任何配置身份字段 → 清库重编」，
+# 属于日常操作，所以这是产品级回归。
+#
+# 早期版本靠「清库之后再复制一次」绕过，能跑通但治标：副本本就不该待在一个
+# 会被清掉的目录里。现在放在脚本 cwd（`verif/`）下，清库碰不到它。
+#
+# 名字**故意不叫 `modelsim.ini`**：ModelSim 的搜索顺序里有「当前目录的
+# modelsim.ini」，叫这个名字会让它意外成为生效的那份（别人手工敲 vlog 时会被
+# 这份副本悄悄接管）。我们全程显式传 `-modelsimini`，不需要靠搜索顺序。
+set INI_WORK [file join modelsim_work.ini]
 
 # ── Vivado `glbl.v` 探测（给 XPM 用，2026-10-28）────────────────────────────
 #
@@ -413,27 +425,24 @@ if {$GLBL_TOP} {
   }
 }
 
-# ── 工作副本的建立：**必须在任何清库之后**（2026-10-28 真 bug）───────────────
+# ── 工作副本的建立（2026-10-28 真机回归，第十三轮复审 N9）─────────────────
 #
-# 踩过的坑：原先这段在文件里位置靠前（清库之前），而 `clean_work_library` 里的
-# `vdel -lib work -all` 会**把整个 `work/` 目录删掉** —— 连刚复制进去的
-# `work/modelsim.ini` 一起没了。之后 `vlog -modelsimini work/modelsim.ini` 报
-# `Failed to open -modelsimini file "work/modelsim.ini" ... errno = ENOENT`。
+# **历史坑（已从设计上消除）**：早期副本放在 `work/modelsim.ini`，而
+# `clean_work_library` 的 `vdel -lib work -all` 会**把整个 `work/` 目录删掉** ——
+# 副本随之消失，之后 `vlog -modelsimini work/modelsim.ini` 报
+# `Failed to open ... errno = ENOENT`，编译失败、run / load 全挂。
+# 触发条件是「改任何配置身份字段 → 清库重编」，属于日常操作 → 产品级回归。
 #
 # 实测（vdel 前/后）：
 #   BEFORE_VDEL_EXISTS=1 / AFTER_VDEL_EXISTS=0 / AFTER_VDEL_WORKDIR_EXISTS=0
 #
-# 只在**走清库路径**时才发作（FULL_REBUILD=1 / 配置变了 / work 不新鲜），
-# 所以平时跑得好好的，一改配置就炸。
-#
-# 所以改成 proc，由调用方在「确保 work/ 已就位」之后调用。
+# 现在的做法是**把副本移出会被清的目录**（脚本 cwd 下的 `modelsim_work.ini`），
+# 而不是"清库之后再补建一次" —— 后者能跑通但治标。
 proc refresh_ini_copy {} {
   global INI_SOURCE INI_WORK INI INI_FWD
 
-  if {![file isdirectory work]} {
-    file mkdir work
-  }
-  # 每次都从原件重建：这样用户在原件里加/删库映射会立刻生效，
+  # 副本放在脚本 cwd，与 work/ 无关，所以不依赖 work/ 存不存在。
+  # 每次都从原件重建：用户在原件里加/删库映射会立刻生效，
   # 而不是被上一轮的工程脏数据盖住。
   if {[catch {
     file copy -force $INI_SOURCE $INI_WORK
@@ -543,10 +552,11 @@ proc config_diff {old_items new_items} {
   return $diff
 }
 
-# ── ini 工作副本：这里先建一次，覆盖 run / load 两条不编译的路径 ─────────────
+# ── ini 工作副本：所有模式共用，这里建一次就够 ──────────────────────────────
 #
-# compile 模式在清库之后会**再建一次**（`vdel -lib work -all` 会把整个 work/ 连同
-# 副本一起删掉，见 refresh_ini_copy 的注释）。所以这里不是"多做一次"，是两条路径各一次。
+# 副本在脚本 cwd（`verif/modelsim_work.ini`）而不是 `work/` 里，所以**清库碰不到它**
+# —— 早期放在 work/ 里时，清库会把它一起删掉，那时不得不在清库后再补建一次。
+# 现在一次即可，compile 模式不需要重建。
 refresh_ini_copy
 
 # ── compile:发现 + **增量**编译,绝不启动仿真 ──────────────────────────────────
@@ -633,10 +643,6 @@ if {$MODE eq "compile"} {
   }
   set force_full [expr {$FULL_REBUILD || $fresh_work || $config_changed}]
 
-  # **在这里建/重建 ini 工作副本**：必须在上面那次 clean_work_library 之后 ——
-  # `vdel -lib work -all` 会删掉整个 work/ 目录（见 refresh_ini_copy 的注释）。
-  # 无论走不走清库路径都要调：不走清库时 work/ 可能刚被 vlib 建出来、里面没有副本。
-  refresh_ini_copy
   puts "\[ME\] modelsim.ini (source, read-only): [string map {\\ /} $INI_SOURCE]"
   puts "\[ME\] modelsim.ini (working copy):       $INI_FWD"
 

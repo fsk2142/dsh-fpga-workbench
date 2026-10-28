@@ -38,9 +38,9 @@
  * ## 用法
  *
  * ```
- * node module-ac-trace.mjs <模块根>              # 读 spec/spec.md + verif/verif.md
- * node module-ac-trace.mjs <模块根> --spec <path> --report <path>
- * node module-ac-trace.mjs <模块根> --json
+ * node module-verif-ac-trace.mjs <模块根>              # 读 spec/spec.md + verif/verif.md
+ * node module-verif-ac-trace.mjs <模块根> --spec <path> --report <path>
+ * node module-verif-ac-trace.mjs <模块根> --json
  * ```
  *
  * 退出码：0 = 全部 AC 有对应记录；1 = 有遗漏（结论应为 UNVERIFIED）；2 = 用法/输入错误。
@@ -58,7 +58,7 @@ const REPORT_CANDIDATES = ["verif/verif.md", "doc/verif.md", "verif.md"];
 const WAIVED = /(?:不适用|不涉及|本版不做|本版本不做|已废弃|N\/A|NA\b|not[ -]applicable|deferred|out[ -]of[ -]scope)/iu;
 
 const usage = () => {
-  console.error("用法：node module-ac-trace.mjs <模块根> [--spec <路径>] [--report <路径>] [--json]");
+  console.error("用法：node module-verif-ac-trace.mjs <模块根> [--spec <路径>] [--report <路径>] [--json]");
   console.error("");
   console.error("  <模块根>       含 spec/ 与 verif/ 的目录");
   console.error("  --spec        spec 文件路径（默认自动找 spec/spec.md → doc/spec.md）");

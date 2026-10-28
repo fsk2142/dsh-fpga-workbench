@@ -3084,16 +3084,20 @@ check(
   `--record 遇到越界引用 → 退 1 且不写摘要(Q4-10;实际 ${String(q43Record.code)})`,
   q43Record.output.slice(-250)
 );
-// Q4-13:真机检查表在仓库里,且覆盖那几件"自检跑不到"的事
-const checklistPath = join(ROOT, "docs", "CLIENT_CHECKLIST.md");
-const checklistText = existsSync(checklistPath) ? readFileSync(checklistPath, "utf8") : "";
-/** 清单条数：表格里形如 `| 3 | …` 的行。文案里不写死数字 —— 加一条检查不该让措辞过期。 */
-const checklistRows = checklistText.split("\n").filter((line) => /^\|\s*\d+\s*\|/u.test(line)).length;
+// Q4-13:真机验证的**对外记录**在仓库里，且覆盖那几件"自检跑不到"的事。
+//
+// 逐版本的内部台账已移出仓库（含作者环境与协作细节，不适合公开）；
+// 对外只保留 `docs/COMPATIBILITY.md` 的「已验证 / 未验证 / 已知限制」。
+// 断言仍然有意义：它要求那份文档**必须**写出未验证项，不能只讲好的一面。
+const compatPath = join(ROOT, "docs", "COMPATIBILITY.md");
+const compatText = existsSync(compatPath) ? readFileSync(compatPath, "utf8") : "";
 check(
-  // 9 是底线（v0.6.0 之后是 11 条，但只要求"至少覆盖到那几件事"）。
-  checklistRows >= 9 &&
-    /重启 DSH Desktop/u.test(checklistText) && /NOT_TESTED/u.test(checklistText),
-  `docs/CLIENT_CHECKLIST.md 存在、有 ${String(checklistRows)} 条检查、并写着 NOT_TESTED 的记账方式(第四轮 Q4-13)`
+  // 必须同时有「已验证的工具」与「明确标未验证的工具」—— 只列通过项等于自夸。
+  /ModelSim/u.test(compatText) &&
+    /Vivado/u.test(compatText) &&
+    /未验证|NOT_TESTED/u.test(compatText) &&
+    /QuestaSim[\s\S]{0,80}未验证|未验证[\s\S]{0,80}QuestaSim/u.test(compatText),
+  "docs/COMPATIBILITY.md 列出已验证工具，并明确标注 QuestaSim 等未验证项(第四轮 Q4-13)"
 );
 // 场景 G:sync-installed 半途失败 → 必须说清"混合状态"、退出码非 0(第三轮复审 N-10)
 //   造法:在沙箱 profile 里把本该写文件的位置**放成目录**(copyFileSync 对它必然 EPERM),

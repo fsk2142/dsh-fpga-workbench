@@ -150,4 +150,4 @@ pnpm test            # 源码 13 项 + 宿主 3 项检查
 改了 `src/` **必须** `pnpm build` 并提交 `lib/` —— 宿主直接读 `lib/index.js`，`git add` 安装不会跑构建。
 `pnpm test` 里有 `git diff --exit-code -- lib`，忘了构建会红。
 
-其余开发细节见 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)，真机检查清单见 [`docs/CLIENT_CHECKLIST.md`](docs/CLIENT_CHECKLIST.md)。
+其余开发细节见 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)，兼容性与已知限制见 [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)。

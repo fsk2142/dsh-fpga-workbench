@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const at = (rel) => join(ROOT, rel);
 
-const DOCS = ["README.md", "docs/DEVELOPMENT.md", "docs/CLIENT_CHECKLIST.md", "docs/SCRUB-COMMIT-HISTORY.md"];
+const DOCS = ["README.md", "docs/DEVELOPMENT.md", "docs/COMPATIBILITY.md", "docs/SCRUB-COMMIT-HISTORY.md"];
 const problems = [];
 
 /** 1. 反引号里形如 `lib/xxx.js` / `tools/xxx.mjs` 的路径是否真实存在。 */
@@ -104,7 +104,7 @@ const CLAIMS = [
 
 /** 要检查的文本:README + docs/ + tools/ 下所有 .mjs（源码注释里的数字陈述同样要盯）。 */
 const haystacks = [["README.md", readme]];
-for (const doc of ["docs/DEVELOPMENT.md", "docs/CLIENT_CHECKLIST.md"]) {
+for (const doc of ["docs/DEVELOPMENT.md", "docs/COMPATIBILITY.md"]) {
   haystacks.push([doc, readFileSync(at(doc), "utf8")]);
 }
 for (const file of readdirSync(at("tools"))) {

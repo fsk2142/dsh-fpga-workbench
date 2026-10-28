@@ -13,9 +13,17 @@
 //
 // 这个检查器把这四类 + 新增的第五类固化成断言，改代码时立刻会红。
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = "C:/Work/dsh-plug-in/dsh-fpga-workbench";
+// 仓库根 = **本文件位置的上一级**，绝不写死本机绝对路径。
+//
+// 这条规则不是洁癖：写死 `C:/Work/dsh-plug-in/...` 会让本机克隆里跑这个检查器时
+// **读的是主仓的文件**（克隆里改坏了照样绿，静默测错树），而 CI / 他机上路径不存在
+// 直接 ENOENT 崩掉整个 check-all。check-privacy.mjs 建立的初衷就是防这类硬编码
+// （前科：tools/lib/version-range.mjs 曾写死 `C:/Users/<真名>/...`），
+// 这个文件自己却重犯了一次（第十四轮复审 N10）。
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const failures = [];
 let total = 0;
 
@@ -85,18 +93,12 @@ console.log("\n=== ⑤ 补丁与预设一致（漂移会让旧内容覆盖回去
   /**
    * 取某个 row 的 disabled 值。
    *
-   * 不能用一个跨多行的正则去做整段匹配 —— `[\\s\\S]*?` 配上全局标志会在
-   * 「第一个 - id:」 到「最后一个 disabled」之间随意落点，误判成没禁用
-   * （本检查器第一版就是这么错的）。按行扫描最稳。
-   */
-  /**
-   * 取某个 row 的 disabled 值。
-   *
-   * 用**字符串包含**判断而不是正则：entry list 里的缩进深浅不一
-   * （预设里 `- id:` 顶格，补丁里嵌在 `insert:` 下带 10 空格缩进），
-   * 用 `^\s*- id: ${id}$` 这种模板正则既容易被转义坑到，也容易误伤
-   * `tool-bash` 与 `tool-bash-extra` 这类前缀相同的行。
-   * 本检查器第一版就同时在两个地方踩到，所以改成最笨也最稳的写法。
+   * 用**字符串比较 + 逐行扫描**，不用正则整段匹配。第一版试过正则，在两处同时栽了：
+   *   · `[\\s\\S]*?` 配全局标志会在「第一个 - id:」到「最后一个 disabled」之间随意落点；
+   *   · `^\s*- id: ${id}$` 这种模板正则叠加转义后根本匹配不上，却静默返回"无此行"
+   *     （看起来像真问题）；而且 entry list 缩进深浅不一 —— 预设里 `- id:` 顶格，
+   *     补丁里嵌在 `insert:` 下带 10 空格缩进。
+   * 最笨的写法在这里最稳。
    */
   const rowDisabled = (text, id) => {
     const lines = text.split("\n");

@@ -335,6 +335,11 @@ if {$INI eq "" || ![file isfile $INI]} {
 # 永远指向副本。副本丢了随时能重建，原件不动。
 #
 # 副本位置放在 `work/` 里（那是可再生的编译库目录，本来就该随库一起丢弃）。
+#
+# **本脚本绝不调用 `vmap`**（2026-10-28 复核）：`vmap <名> <路径>` 会把映射永久写进
+# `-modelsimini` 指向的文件。这里虽然已指向副本、写坏也只坏副本，但没有理由留这个口子 ——
+# 建库用 `vlib` + `vlog -work <名>` 就够了，不需要映射。
+# 改这个模板时别"顺手"加 `vmap work work`：真机上已有工程这么写，把全局 ini 写脏了。
 set INI_SOURCE $INI
 # 归一化：默认 ini 是 `$MTI_ROOT/modelsim.ini` 拼出来的，含 `win64/../` 这类段。
 # 存进 stamp 前必须 normalize，否则同一份文件换个写法就变成"换了配置"（误判重编）。
@@ -407,26 +412,42 @@ if {$GLBL_TOP} {
     puts "\[ME\]       Set XILINX_VIVADO=<Vivado install> or GLBL_TOP 0 if you don't use XPM."
   }
 }
-if {![file isdirectory work]} {
-  file mkdir work
-}
-# 每次都以原件为基准重建副本：这样用户在原件里加/删库映射会立刻生效，
-# 而不是被上一轮的工程脏数据盖住。
-if {[catch {
-  file copy -force $INI_SOURCE $INI_WORK
-} copy_error]} {
-  puts "\n\[ME\] ERROR: cannot create a local copy of modelsim.ini"
-  puts "\[ME\] source: $INI_SOURCE"
-  puts "\[ME\] target: $INI_WORK"
-  puts "\[ME\] reason: $copy_error"
-  puts "\[ME\] Refusing to fall back to writing the shared file."
-  quit -f -code 1
-}
-set INI $INI_WORK
-set INI_FWD [string map {\\ /} $INI]
 
-puts "\[ME\] modelsim.ini (source, read-only): [string map {\\ /} $INI_SOURCE]"
-puts "\[ME\] modelsim.ini (working copy):       $INI_FWD"
+# ── 工作副本的建立：**必须在任何清库之后**（2026-10-28 真 bug）───────────────
+#
+# 踩过的坑：原先这段在文件里位置靠前（清库之前），而 `clean_work_library` 里的
+# `vdel -lib work -all` 会**把整个 `work/` 目录删掉** —— 连刚复制进去的
+# `work/modelsim.ini` 一起没了。之后 `vlog -modelsimini work/modelsim.ini` 报
+# `Failed to open -modelsimini file "work/modelsim.ini" ... errno = ENOENT`。
+#
+# 实测（vdel 前/后）：
+#   BEFORE_VDEL_EXISTS=1 / AFTER_VDEL_EXISTS=0 / AFTER_VDEL_WORKDIR_EXISTS=0
+#
+# 只在**走清库路径**时才发作（FULL_REBUILD=1 / 配置变了 / work 不新鲜），
+# 所以平时跑得好好的，一改配置就炸。
+#
+# 所以改成 proc，由调用方在「确保 work/ 已就位」之后调用。
+proc refresh_ini_copy {} {
+  global INI_SOURCE INI_WORK INI INI_FWD
+
+  if {![file isdirectory work]} {
+    file mkdir work
+  }
+  # 每次都从原件重建：这样用户在原件里加/删库映射会立刻生效，
+  # 而不是被上一轮的工程脏数据盖住。
+  if {[catch {
+    file copy -force $INI_SOURCE $INI_WORK
+  } copy_error]} {
+    puts "\n\[ME\] ERROR: cannot create a local copy of modelsim.ini"
+    puts "\[ME\] source: $INI_SOURCE"
+    puts "\[ME\] target: $INI_WORK"
+    puts "\[ME\] reason: $copy_error"
+    puts "\[ME\] Refusing to fall back to writing the shared file."
+    quit -f -code 1
+  }
+  set INI $INI_WORK
+  set INI_FWD [string map {\\ /} $INI]
+}
 
 # E8(item A-2): one knob for vendor / precompiled libraries, applied to BOTH vlog and vsim -
 # leaving one side out can still fail with unresolved vendor references.
@@ -522,6 +543,12 @@ proc config_diff {old_items new_items} {
   return $diff
 }
 
+# ── ini 工作副本：这里先建一次，覆盖 run / load 两条不编译的路径 ─────────────
+#
+# compile 模式在清库之后会**再建一次**（`vdel -lib work -all` 会把整个 work/ 连同
+# 副本一起删掉，见 refresh_ini_copy 的注释）。所以这里不是"多做一次"，是两条路径各一次。
+refresh_ini_copy
+
 # ── compile:发现 + **增量**编译,绝不启动仿真 ──────────────────────────────────
 if {$MODE eq "compile"} {
   set parts [collect_sources $RTL_ROOT $VERIF_ROOT]
@@ -605,6 +632,13 @@ if {$MODE eq "compile"} {
     if {$FULL_REBUILD} { puts "\n\[ME\] FULL_REBUILD=1: cleaning work/ and compiling every source" }
   }
   set force_full [expr {$FULL_REBUILD || $fresh_work || $config_changed}]
+
+  # **在这里建/重建 ini 工作副本**：必须在上面那次 clean_work_library 之后 ——
+  # `vdel -lib work -all` 会删掉整个 work/ 目录（见 refresh_ini_copy 的注释）。
+  # 无论走不走清库路径都要调：不走清库时 work/ 可能刚被 vlib 建出来、里面没有副本。
+  refresh_ini_copy
+  puts "\[ME\] modelsim.ini (source, read-only): [string map {\\ /} $INI_SOURCE]"
+  puts "\[ME\] modelsim.ini (working copy):       $INI_FWD"
 
   # VHDL:只有 VHDL 变了 / 清库全量才全量;头文件与 vcom 无关,不牵连它。
   if {$force_full || $vhdl_changed} {

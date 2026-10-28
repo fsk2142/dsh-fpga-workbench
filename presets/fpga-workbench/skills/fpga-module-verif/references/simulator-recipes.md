@@ -22,7 +22,7 @@ ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里
   **清空 `work/` + 全量重编**(不是"什么都没变")。旧版模板写的 stamp 没有这些行 → 同样会被拒。
 - 编译失败会**自动重试一次**:顺序依赖(package/entity 先后)的形态是"先缺后补",失败那趟已把后一个
   unit 编进库,重试即过(实测反序报 `Could not find the package` → 同命令重跑 0 error)。
-- **批处理不带 `+acc`**(本机实测快 2.3~2.6×):要加 `+acc` 或看内部信号/波形,走第三个模式 `load`。
+- **批处理不带 `+acc`**(实测快 2.3~2.6×):要看波形就走第三个模式 `load`。
 
 **别手抄脚本**:从设置里选中的那份**仿真脚本**模板起一份(编译与运行本来就是同一份脚本,起第二次会被
 「已存在、不覆盖」挡下 —— 不要起两次),起完按当前模块改旋钮:
@@ -30,8 +30,7 @@ ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里
 ```powershell
 node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run --template "<仿真脚本模板路径>"
 cd <模块根>/verif
-# 编译与运行**两步**都带上设置里的库映射(F5-06):路径见会话「库映射文件」
-# 例:$env:MODELSIM_INI = "C:\...\modelsim.ini"  —— 用完在同一 try/finally 里恢复
+# 模板自己把 ini 复制成工作副本再传给编译/运行,不用设 MODELSIM_INI,更不要 vmap
 & "<仿真器路径>" -c -do "do run.do compile; quit -f"
 & "<仿真器路径>" -c -do "do run.do run; quit -f"
 ```
@@ -100,20 +99,18 @@ try {
 
 ## 厂商原语仿真:先查库映射,别先怀疑 RTL
 
-用到 `IBUF` / `BUFG` / `FDRE` 这类厂商原语、或 IP 核的仿真模型时,下面四条是**实测**出来的
-(ModelSim 2020.4 + Vivado 2025.2 的库),照做,不要自己推:
+用到 `IBUF` / `BUFG` / `FDRE` 这类原语或 IP 仿真模型时,**实测**(ModelSim 2020.4):
 
-1. **`-L` 接的是「库名」,不是目录** —— `vlog -L unisims_ver` / `vsim -L unisims_ver` 对;
-   写绝对路径就报 `Unable to find library` 或 `Module 'IBUF' is not defined`。
-   库名从哪来:`modelsim.ini` 的 `[Library]` 段(`库名 = 目录`,一行一条;本机那份在
-   ModelSim 安装目录下,几百条映射指向厂商**编译好的**库)。
+1. **`-L` 接的是「库名」,不是目录** —— 写绝对路径会报 `Unable to find library` 或
+   `Module 'IBUF' is not defined`。
+   库名来自 `modelsim.ini` 的 `[Library]` 段(`库名 = 目录`),指向厂商**编译好的**库。
 2. **编译与仿真两头都要带 `-L`** —— 只给 `vsim` 不给 `vlog`,照样报未定义。
 3. **带 GSR(全局置位)的原语要配 `glbl`**,而且仿真必须**跑过 GSR 释放**(标准 `glbl.v`
    是 100 ns)。没跑过去会看到"寄存器恒 0" —— 那是**假象**,不得据此判成设计错。
    `glbl` 的加载方式见第 5 条。
-4. **`modelsim.ini` 的搜索顺序**:`MODELSIM` 环境变量 → **当前目录的 `modelsim.ini`** →
-   安装目录那份。工作目录里若冒出一份(工具生成的、从别处拷来的),它会**盖掉**安装目录
-   那份,表现是"库突然全找不到"而那份 ini 单看没毛病 —— 先看有没有这个文件,再怀疑别的。
+4. **`modelsim.ini` ��搜索顺序**:`MODELSIM` 环境变量 → **当前目录的那份** → 安装目录那份。
+   工作目录里若冒出一份(工具生成或从别处拷来),它会**盖掉**安装目录那份,表现是
+   "库突然全找不到"而那份 ini 单看没毛病 —— 先查这个文件,再怀疑别的。
 5. **`glbl` 必须作为第二个顶层传给 vsim,不能在 TB 里实例化**(2026-10-28 实测):
 
    ```
@@ -154,5 +151,23 @@ XPM 还要第二个顶层 `work.glbl`。
 
 **"库"和"映射"是两件事**:编译好的库是东西本身(每个库目录里有 ModelSim 的 `_info` 标记),
 `modelsim.ini` 只是"名字 → 目录"的表;缺哪个都跑不起来,但**哪个都不该由本环节去重建**。
-自己新编的库(`work`)默认就建在当前目录(而且 `work` 这一条也是可以在 ini 里被映射走的)——
-**动手前先跑一次 `vmap work` 看它到底落在哪**,不要假定它在 `verif/work`。
+自己新编的库(`work`)默认就建在当前目录 ——
+**动手前先跑一次 `vmap work`(不带参数)看它到底落在哪**,不要假定它在 `verif/work`。
+
+## ⚠ 不要用 `vmap` 建工程库(2026-10-28 实测事故)
+
+`vmap <名> <路径>` 会把映射**永久写进 `modelsim.ini`**,而安装目录那份是**所有工程共用**的。
+某工程的 `.do` 写了 `vlib work; vmap work work`,结果全局 ini 被追加
+`work = C:/Work/<别的工程>/sim/work_trial` —— **之后所有工程的 `work` 都指向那里**。
+
+**正确写法 —— 完全不需要 `vmap`**:
+
+```tcl
+vlib work                  # work 默认就在当前目录,不必映射
+vlog -sv -work work src.sv
+vlib chk_work              # 自定义库名用 -work,同样不写 ini
+vlog -sv -work chk_work src.sv
+```
+
+`vmap` 只用于:① 指向一处**已存在的别处**库(如预编译 `unisim`,但 ini 里通常已有);
+② 临时切换、用完改回。**参数里出现"自己刚 vlib 出来的库"就是多余且有害的。**

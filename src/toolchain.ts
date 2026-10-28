@@ -230,6 +230,18 @@ export const TOOLS = [
     what: "核报告引用的证据路径是否真的在(spec 的 AC 行声明的证据位置 + verif/synth 报告里引用的路径;只验存在,不判内容)"
   },
   {
+    file: "module-verif-coverage.mjs",
+    level: "module",
+    stage: "验证环节",
+    what: "读 ModelSim 的 coverage.ucdb 出覆盖率(语句/分支/状态机等),按 95% 门槛判定;未达标退 1"
+  },
+  {
+    file: "module-verif-ac-trace.mjs",
+    level: "module",
+    stage: "验证环节",
+    what: "核 spec 里每条 AC 是否在 verif.md 里有记录(功能覆盖要求 100%);未覆盖退 1"
+  },
+  {
     file: "project-rtl-check.mjs",
     level: "project",
     stage: "工程 RTL / lint 环节",

@@ -79,6 +79,14 @@
 #                 `tri0 glblGSR_xpmcdc = glbl.GSR;` —— 那是**绝对层次名**，要求 glbl
 #                 出现在顶层。在 TB 里实例化 glbl 不够（路径会变 tb_top.u_glbl.GSR）。
 #                 设 0 可关闭（不用 XPM 且 glbl.v 缺失时）。
+#   COVERAGE      1 = 编译期开覆盖率、运行期落盘（默认 1）
+#                 默认开：`fpga-module-verif` 要求判 PASS 时给出量化覆盖率（≥95%），
+#                 没数据就只能手工编数字。代价是编译与运行慢一些，且 `work/` 多一个
+#                 `coverage.ucdb`。不关心覆盖率时设 0 换速度。
+#   COVERAGE_SPEC 覆盖率类别，单字母：s=语句 b=分支 c=条件 e=表达式 f=状态机
+#                 不含 t/x（翻转 / 扩展翻转）—— 与功能覆盖关系弱且体积大。
+#   COVERAGE_UCDB 落盘文件名（相对当前目录，即 verif/work/ 同级）。
+#                 读它用 `module-coverage.mjs <模块根>`。
 #   RESULT_LOG    simulation transcript captured by vsim -l
 #   Environment inputs: MODELSIM_INI / MODELSIM / TB_DEFINES / XILINX_VIVADO
 set RTL_DIR        {../rtl}
@@ -92,6 +100,9 @@ set INI_OVERRIDE   {}
 set EXTRA_INCDIRS  {}
 set VENDOR_LIBS    {unisim unimacro}
 set GLBL_TOP       1
+set COVERAGE       1
+set COVERAGE_SPEC  {sbcef}
+set COVERAGE_UCDB  {coverage.ucdb}
 # glbl 顶层参数：只有 compile 模式编译成功后才有值；run / load 模式会查库后补。
 set glbl_top       {}
 
@@ -649,17 +660,27 @@ if {$MODE eq "compile"} {
 
   # .v is Verilog-2001: compiling it with -sv reinterprets identifiers under the SystemVerilog
   # compilation group (an identifier that happens to be an SV keyword changes meaning).
+  # ── 覆盖率开关（2026-10-28）─────────────────────────────────────────────
+  #
+  # `+cover` 是**编译期**选项：不开的话 `vsim -coverage` 只会警告
+  # 「Code was not compiled with coverage options」，然后静默不统计 —— 那种
+  # 「接受但没数据」的行为最容易让人以为配好了。
+  set cover_args {}
+  if {$COVERAGE} {
+    set cover_args [list "+cover=$COVERAGE_SPEC"]
+  }
+
   if {$n_vhdl > 0} {
     compile_step "VHDL compilation" \
       [list vcom -quiet {*}$OPT_LEVEL -2008 -modelsimini $INI_FWD -work work {*}$vhdl_compile]
   }
   if {$n_sv > 0} {
     compile_step "SystemVerilog compilation" \
-      [list vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD -sv {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$sv_compile]
+      [list vlog {*}$incr_args -quiet {*}$OPT_LEVEL {*}$cover_args -modelsimini $INI_FWD -sv {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$sv_compile]
   }
   if {$n_v > 0} {
     compile_step "Verilog compilation" \
-      [list vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$v_compile]
+      [list vlog {*}$incr_args -quiet {*}$OPT_LEVEL {*}$cover_args -modelsimini $INI_FWD {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$v_compile]
   }
 
   # ── 编译 glbl.v（若启用且找到）────────────────────────────────────────────
@@ -855,7 +876,20 @@ if {$MODE eq "load"} {
 # 当前 GUI 会话)。
 # argv 里**不放可执行名** —— 由 exec 给出(放进去会被 ModelSim 当成顶层名:`Failed to find
 # design unit vsim`,实测踩过)。
-set child_argv [list -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG {*}[vopt_argv $VOPT_ALL] -do {run -all; quit -f} $TOP {*}$glbl_top]
+# ── 覆盖率（2026-10-28）────────────────────────────────────────────────
+#
+# `coverage save -onexit` 必须**在 run 之前**下：`-c` 模式下 TB 的 `$finish`
+# 会直接结束 vsim 进程，`run -all` 之后的任何 Tcl 都不执行。`-onexit` 是
+# 「vsim 退出时保存」，正好绕开这一点（实测：`Saving coverage database on exit...`）。
+#
+# `onfinish` 看着更直观，但它只接受 `ask/default/exit/final/stop`，挂不了任意命令。
+set cover_run_args {}
+set cover_do "run -all; quit -f"
+if {$COVERAGE} {
+  set cover_run_args [list -coverage]
+  set cover_do "coverage save -onexit $COVERAGE_UCDB; run -all; quit -f"
+}
+set child_argv [list -c {*}$cover_run_args -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG {*}[vopt_argv $VOPT_ALL] -do $cover_do $TOP {*}$glbl_top]
 puts "\[ME\] design load + simulation run in a child vsim process (argv passed directly, no shell)"
 # transcript 必须是**这次写的**:子进程没起来时旧日志还在,拿它判 PASS 就是"假新鲜"(与 2026-09-24
 # 修过的配置身份同一类)。所以先记下旧 mtime,跑完要求它变新 —— 但**不删**用户已有的日志。

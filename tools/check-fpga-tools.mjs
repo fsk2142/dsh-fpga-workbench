@@ -640,7 +640,7 @@ for (const marker of ["*_stub.*", "quit -f -code 1", "ALL TESTS PASSED"]) {
 }
 for (const [label, pattern] of [
   ["批处理把装设计与仿真放进子 vsim(不复用自身进程)", /exec \[file join \[file dirname \[info nameofexecutable\]\] vsim\.exe\] \{\*\}\$child_argv/u],
-  ["子进程 argv 不含可执行名(否则被当成顶层名)", /set child_argv \[list -c -modelsimini/u],
+  ["子进程 argv 不含可执行名(否则被当成顶层名)", /set child_argv \[list -c \{?\*?\}?\$cover_run_args/u],
   ["子进程死掉时从 -errorcode 取原生退出码并归一成 1", /CHILDSTATUS\\s\+\\d\+\\s\+\(\\d\+\)/u],
   ["transcript 必须是这次写的(不拿旧日志判 PASS)", /no fresh transcript/u],
   ["错误行判据收紧:不把 `Errors: 0` 汇总行当错误", /proc is_error_line/u]

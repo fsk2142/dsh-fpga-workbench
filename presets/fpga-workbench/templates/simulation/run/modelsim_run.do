@@ -69,8 +69,18 @@
 #   INI_OVERRIDE  force a library mapping file (else MODELSIM_INI env, else install default)
 #   EXTRA_INCDIRS extra +incdir+ directories for compilation
 #   VENDOR_LIBS   vendor / precompiled libraries, applied to BOTH vlog and vsim -L
+#                 default {unisim unimacro}: Vivado 的可综合原语（FDRE / LUT6 / RAMB* /
+#                 ODDR …）与 unimacro 宏都在 unisim / unimacro 库里。不挂这两个库时，
+#                 报错是 `Module 'FDRE' is not defined` —— 看着像代码错，其实是库没链接。
+#                 只用纯行为级 RTL 时挂上也无害（找不到的库名会被 ModelSim 忽略前先报
+#                 warning；所以下面能探测到就加，探测不到就不加）。
+#   GLBL_TOP      1 = 把 Vivado 的 glbl.v 作为**独立顶层**参与 elaborate（默认 1）
+#                 XPM 宏（xpm_cdc_* / xpm_fifo_* / xpm_memory_*）的仿真行为模型里有
+#                 `tri0 glblGSR_xpmcdc = glbl.GSR;` —— 那是**绝对层次名**，要求 glbl
+#                 出现在顶层。在 TB 里实例化 glbl 不够（路径会变 tb_top.u_glbl.GSR）。
+#                 设 0 可关闭（不用 XPM 且 glbl.v 缺失时）。
 #   RESULT_LOG    simulation transcript captured by vsim -l
-#   Environment inputs: MODELSIM_INI / MODELSIM / TB_DEFINES
+#   Environment inputs: MODELSIM_INI / MODELSIM / TB_DEFINES / XILINX_VIVADO
 set RTL_DIR        {../rtl}
 set FULL_REBUILD   0
 set OPT_LEVEL      {-O5}
@@ -80,7 +90,11 @@ set TB_PATTERN     {tb_*.sv tb_*.v tb_*.vhd tb_*.vhdl}
 set TOP_OVERRIDE   {}
 set INI_OVERRIDE   {}
 set EXTRA_INCDIRS  {}
-set VENDOR_LIBS    {}
+set VENDOR_LIBS    {unisim unimacro}
+set GLBL_TOP       1
+# glbl 顶层参数：只有 compile 模式编译成功后才有值；run / load 模式会查库后补。
+set glbl_top       {}
+
 set RESULT_LOG     {sim.log}
 
 # ── 模式:必须显式给(没有参数 / 参数不认识 → 报用法,退 2,绝不猜) ────────────────
@@ -294,8 +308,114 @@ if {$INI eq "" || ![file isfile $INI]} {
   set MTI_ROOT [file dirname [file dirname [file normalize [info nameofexecutable]]]]
   set INI [file join $MTI_ROOT modelsim.ini]
 }
+
+# ── 把 ini 复制到工程本地，只改副本（2026-10-28）──────────────────────────
+#
+# **为什么必须复制**：vlog/vcom 带 `-work work` 编译时，ModelSim 会把库映射
+# （`work = <工程路径>`，以及 `chain_work` / `chk_work` 这类派生名）**写回**
+# `-modelsimini` 指向的那个文件。
+#
+# 原来直接把用户/安装的 ini 传进去，后果实测过：
+#   · 安装目录的全局 `modelsim.ini` 被写进 `work = C:/Work/<某工程>/sim/work_trial`
+#   · 那个文件是**所有工程共用**的 —— 下次别的工程跑仿真，`work` 还指着旧路径
+#   · 精心维护的 `[Library]` 段（几百个 Vivado IP 映射）被夹进工程脏数据
+#
+# 现在改成：原件**只读引用**，复制一份到 `work/` 下当工作副本，`-modelsimini`
+# 永远指向副本。副本丢了随时能重建，原件不动。
+#
+# 副本位置放在 `work/` 里（那是可再生的编译库目录，本来就该随库一起丢弃）。
+set INI_SOURCE $INI
+# 归一化：默认 ini 是 `$MTI_ROOT/modelsim.ini` 拼出来的，含 `win64/../` 这类段。
+# 存进 stamp 前必须 normalize，否则同一份文件换个写法就变成"换了配置"（误判重编）。
+if {[file isfile $INI_SOURCE]} {
+  set INI_SOURCE [file normalize $INI_SOURCE]
+}
+set INI_SOURCE_FWD [string map {\\ /} $INI_SOURCE]
+set INI_WORK [file join work modelsim.ini]
+
+# ── Vivado `glbl.v` 探测（给 XPM 用，2026-10-28）────────────────────────────
+#
+# XPM 宏的仿真行为模型里有 `tri0 glblGSR_xpmcdc = glbl.GSR;`（xpm_cdc.sv:213）——
+# 那是**绝对层次名**，所以 `glbl` 必须作为**独立顶层**传给 vsim：
+#
+#     vsim -L xpm work.tb_top work.glbl      ← 对
+#     vsim work.tb_top                       ← 错（找不到 glbl.GSR）
+#
+# 在 TB 里写 `glbl u_glbl();` **也不行** —— 路径会变成 `tb_top.u_glbl.GSR`。
+# 五种写法实测过（含 `+define+ONESPIN`、把 glbl 编进别的库），只有双顶层通过。
+#
+# 路径按优先级试：
+#   1. `XILINX_VIVADO` 环境变量
+#   2. 从 ini 里的 `<lib> = <path>/vivado<ver>_lib/<name>` 反推 Vivado 根
+#      （用户建库时通常放在这个固定布局下，跟着 ini 走比要求设环境变量更省事）
+#   3. 常见安装位置扫一遍
+set GLBL_V ""
+if {$GLBL_TOP} {
+  set glbl_candidates {}
+
+  if {[info exists ::env(XILINX_VIVADO)]} {
+    lappend glbl_candidates [file join $::env(XILINX_VIVADO) data verilog src glbl.v]
+  }
+
+  # 从 ini 反推：找 `xxx = <...>/vivado*_lib/<name>` 行的前缀
+  if {[file isfile $INI_SOURCE]} {
+    set ini_fh [open $INI_SOURCE r]
+    set ini_text [read $ini_fh]
+    close $ini_fh
+    foreach line [split $ini_text "\n"] {
+      set trimmed [string trim $line]
+      if {[regexp {^(\w+)\s*=\s*(.+)/(vivado[0-9._]*_lib)/} $trimmed -> _lib _prefix _vlibdir]} {
+        # <prefix>/vivado<ver>_lib/... → Vivado 根通常是 <prefix> 去掉 vivado 库那层
+        # 但 glbl.v 在 Vivado 安装根下，而 _lib 常放在模型库旁边 —— 两种都试
+        lappend glbl_candidates [file join $_prefix data verilog src glbl.v]
+        lappend glbl_candidates [file join $_prefix .. data verilog src glbl.v]
+        break
+      }
+    }
+  }
+
+  # 常见安装位置（Windows / Linux）
+  foreach probe {
+    {C:/AMDDesignTools/2025.2/Vivado}
+    {C:/Xilinx/Vivado}
+    {/opt/Xilinx/Vivado}
+  } {
+    lappend glbl_candidates "$probe/data/verilog/src/glbl.v"
+  }
+
+  foreach candidate $glbl_candidates {
+    if {[file isfile $candidate]} {
+      set GLBL_V [file normalize $candidate]
+      break
+    }
+  }
+
+  if {$GLBL_V eq ""} {
+    puts "\[ME\] NOTE: glbl.v not found. XPM macros (xpm_cdc_* / xpm_fifo_* / xpm_memory_*)"
+    puts "\[ME\]       will fail at elaboration with 'Failed to find glbl in glbl.GSR'."
+    puts "\[ME\]       Set XILINX_VIVADO=<Vivado install> or GLBL_TOP 0 if you don't use XPM."
+  }
+}
+if {![file isdirectory work]} {
+  file mkdir work
+}
+# 每次都以原件为基准重建副本：这样用户在原件里加/删库映射会立刻生效，
+# 而不是被上一轮的工程脏数据盖住。
+if {[catch {
+  file copy -force $INI_SOURCE $INI_WORK
+} copy_error]} {
+  puts "\n\[ME\] ERROR: cannot create a local copy of modelsim.ini"
+  puts "\[ME\] source: $INI_SOURCE"
+  puts "\[ME\] target: $INI_WORK"
+  puts "\[ME\] reason: $copy_error"
+  puts "\[ME\] Refusing to fall back to writing the shared file."
+  quit -f -code 1
+}
+set INI $INI_WORK
 set INI_FWD [string map {\\ /} $INI]
-puts "\[ME\] modelsim.ini: $INI_FWD"
+
+puts "\[ME\] modelsim.ini (source, read-only): [string map {\\ /} $INI_SOURCE]"
+puts "\[ME\] modelsim.ini (working copy):       $INI_FWD"
 
 # E8(item A-2): one knob for vendor / precompiled libraries, applied to BOTH vlog and vsim -
 # leaving one side out can still fail with unresolved vendor references.
@@ -337,10 +457,15 @@ proc compile_step {what cmd} {
 proc config_identity {} {
   set items {}
   lappend items "exe=[info nameofexecutable]"
-  lappend items "ini=$::INI_FWD"
-  if {[file isfile $::INI]} {
-    lappend items "ini_mtime=[file mtime $::INI]"
-    lappend items "ini_size=[file size $::INI]"
+  # 记录**原件**路径与 mtime/size，不记录副本。
+  #
+  # 副本永远叫 work/modelsim.ini（2026-10-28 的"只改副本"改动），所以拿副本当身份
+  # 会让"换了一份 ini 原件"看不出差异 —— 那样 run 就不会拒绝，而库其实是用另一份
+  # 映射编出来的。原件才是配置身份的来源。
+  lappend items "ini=$::INI_SOURCE_FWD"
+  if {[file isfile $::INI_SOURCE]} {
+    lappend items "ini_mtime=[file mtime $::INI_SOURCE]"
+    lappend items "ini_size=[file size $::INI_SOURCE]"
   } else {
     lappend items "ini_mtime=-"
     lappend items "ini_size=-"
@@ -537,6 +662,26 @@ if {$MODE eq "compile"} {
       [list vlog {*}$incr_args -quiet {*}$OPT_LEVEL -modelsimini $INI_FWD {*}$vendor_args {*}$define_args {*}$inc_args -work work {*}$v_compile]
   }
 
+  # ── 编译 glbl.v（若启用且找到）────────────────────────────────────────────
+  #
+  # 编进 work 之后才能在 elaborate 时作为第二个顶层用（见文件头「Vivado glbl.v」）。
+  # 它是 Verilog（不是 SV），与用户源码分开编，**不混进 $kept**：glbl 不是用户的设计单元，
+  # 不该参与编译新鲜度判定。
+  #
+  # 编失败**不中止** —— 不用 XPM 的设计不需要 glbl，中止只会干扰；失败时清空 $glbl_top，
+  # elaborate 退回单顶层（XPM 会如实报错，那是用户的真实问题，不是脚本问题）。
+  set glbl_top {}
+  if {$GLBL_TOP && $GLBL_V ne ""} {
+    if {[catch {
+      vlog -quiet -modelsimini $INI_FWD -work work $GLBL_V
+    } glbl_msg]} {
+      puts "\[ME\] WARNING: failed to compile glbl.v (XPM will not elaborate): [string trim $glbl_msg]"
+    } else {
+      set glbl_top [list work.glbl]
+      puts "\[ME\] glbl.v compiled into work/ (added as a top-level for elaboration)"
+    }
+  }
+
   # E8-07: record **all** compile inputs (not only the ones just recompiled) so the run mode can tie
   # work/ to the current sources. mtime + size only (portable, no platform hashing); a same-mtime
   # same-size edit could slip through - that is the documented DSH-10 trade.
@@ -665,6 +810,22 @@ proc vopt_argv {vopt_all} {
   return [list "-voptargs=$vopt_all"]
 }
 
+# ── run / load 模式：glbl 已经在库里（上次 compile 编进去的），直接拿来当顶层 ──
+#
+# compile 模式在上面编译时会设 $glbl_top；run / load 不编译，所以这里查一次 work 库
+# 里有没有 glbl —— 有就加顶层，没有就不加（不用 XPM 的设计本来也不需要）。
+if {$glbl_top eq "" && $GLBL_TOP} {
+  if {[catch {
+    # `vdir -lib work glbl` 找不到时返回非零
+    vdir -lib work glbl
+  } vdir_msg]} {
+    # 库里没有 —— 不报错，XPM 用到时 elaborate 会自己说清楚
+  } else {
+    set glbl_top [list work.glbl]
+    puts "\[ME\] glbl found in work/ (added as a top-level for elaboration)"
+  }
+}
+
 # ── load:同一个新鲜度门,只把设计装进 GUI 会话;绝不 run -all、绝不退出 ──────────────
 # 用法是 `vsim -do "do run.do load"`(**不要** -c):父会话是 GUI,这里的 `vsim` 就是"装载设计"这条
 # 命令,所以波形/库映射/顶层与 run 模式完全同源。校验没过就退 1,不开一个不可信的 GUI。
@@ -672,7 +833,7 @@ if {$MODE eq "load"} {
   set VOPT_ALL [string trim "$DEBUG_VOPT_ARGS $OPT_LEVEL"]
   puts "\[ME\] vsim load (GUI): top=$TOP voptargs={$VOPT_ALL}"
   if {[catch {
-    vsim -modelsimini $INI_FWD -lib work {*}$vendor_args {*}[vopt_argv $VOPT_ALL] $TOP
+    vsim -modelsimini $INI_FWD -lib work {*}$vendor_args {*}[vopt_argv $VOPT_ALL] $TOP {*}$glbl_top
   } message]} {
     puts "\n\[ME\] ERROR: vsim failed to load the design: $message"
     quit -f -code 1
@@ -681,9 +842,9 @@ if {$MODE eq "load"} {
   return
 }
 
-puts "\[ME\] vsim: top=$TOP voptargs={$VOPT_ALL}"
 
-# 批处理的"装设计 + 跑"放在**子进程**里(2026-09-25,复核报告 C 项)。
+# ── 批处理"装设计 + 跑" ───────────────────────────────────────────────────
+
 #
 # 为什么:ModelSim 2020.4 在 design-load / elaboration 失败时会**直接结束整个进程**并退 12 ——
 # 顶层模块不存在、`-L` 库名写错、非法 voptargs 三种都实测过。设计加载与控制 Tcl 同进程时,
@@ -694,7 +855,7 @@ puts "\[ME\] vsim: top=$TOP voptargs={$VOPT_ALL}"
 # 当前 GUI 会话)。
 # argv 里**不放可执行名** —— 由 exec 给出(放进去会被 ModelSim 当成顶层名:`Failed to find
 # design unit vsim`,实测踩过)。
-set child_argv [list -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG {*}[vopt_argv $VOPT_ALL] -do {run -all; quit -f} $TOP]
+set child_argv [list -c -modelsimini $INI_FWD -lib work {*}$vendor_args -l $RESULT_LOG {*}[vopt_argv $VOPT_ALL] -do {run -all; quit -f} $TOP {*}$glbl_top]
 puts "\[ME\] design load + simulation run in a child vsim process (argv passed directly, no shell)"
 # transcript 必须是**这次写的**:子进程没起来时旧日志还在,拿它判 PASS 就是"假新鲜"(与 2026-09-24
 # 修过的配置身份同一类)。所以先记下旧 mtime,跑完要求它变新 —— 但**不删**用户已有的日志。

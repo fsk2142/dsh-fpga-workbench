@@ -84,16 +84,46 @@ try {
 2. **编译与仿真两头都要带 `-L`** —— 只给 `vsim` 不给 `vlog`,照样报未定义。
 3. **带 GSR(全局置位)的原语要配 `glbl`**,而且仿真必须**跑过 GSR 释放**(标准 `glbl.v`
    是 100 ns)。没跑过去会看到"寄存器恒 0" —— 那是**假象**,不得据此判成设计错。
+   `glbl` 的加载方式见第 5 条。
 4. **`modelsim.ini` 的搜索顺序**:`MODELSIM` 环境变量 → **当前目录的 `modelsim.ini`** →
    安装目录那份。工作目录里若冒出一份(工具生成的、从别处拷来的),它会**盖掉**安装目录
    那份,表现是"库突然全找不到"而那份 ini 单看没毛病 —— 先看有没有这个文件,再怀疑别的。
+5. **`glbl` 必须作为第二个顶层传给 vsim,不能在 TB 里实例化**(2026-10-28 实测):
+
+   ```
+   vsim -L xpm work.tb_top work.glbl     ← 对
+   vsim work.tb_top                      ← 错:找不到 glbl.GSR
+   ```
+
+   TB 里写 `glbl u_glbl();` **也不行** —— 路径会变成 `tb_top.u_glbl.GSR`,而 XPM 引用的是
+   **绝对层次名** `glbl.GSR`(`xpm_cdc.sv:213` 的 `tri0 glblGSR_xpmcdc = glbl.GSR;`)。
+   `glbl.v` 在 Vivado 安装目录 `data/verilog/src/glbl.v`,**要和设计一起编进 work**。
+   五种写法都试过:双顶层 ✅ / TB 实例化 ❌ / glbl 编进别的库 ❌ / `+define+ONESPIN` ❌ /
+   只加 `-L xpm` 单顶层 ❌。
+6. **编译通过 ≠ 能仿真**。`vlog` 只查语法,**不解析模块引用**:库没挂时它也报 0 error,
+   直到 `vsim`(elaborate)才说 `Module 'FDRE' is not defined`。判"库能不能用"必须跑到
+   elaborate,不能看编译日志。
 
 **XPM 宏同属这条路**:`xpm_fifo_*` / `xpm_cdc_*` / `xpm_memory_*` 在 **`xpm`** 库里 ——
 `vlog -L xpm` / `vsim -L xpm`。本机的 `modelsim.ini`(**编译与运行都要**传给进程:`$env:MODELSIM_INI` 或 `.do` 里的 `INI_OVERRIDE`;路径见会话开头「本机 FPGA 工具链」的库映射项)
 `[Library]` 段里**通常已经有** `xpm = <…>/xpm` 这条,指向一份**早先编译好的**库:`vmap xpm`
-核一下,在就直接用,**不要重编**。只有"映射对、库也在、却仍报未定义(同上面
-`Module 'IBUF' is not defined` 那种)"这种硬问题,才退到**用原厂源码自己编一份** —— Vivado 安装
-目录 `data/ip/xpm/**` 下的 `.sv`(或用它的 `compile_simlib`),编完在结论里写清用的是哪一份。
+核一下,在就直接用,**不要重编**。
+
+**XPM 比普通原语多一个要求:还要 `glbl`**(见上面第 5 条)。普通原语只要 `-L unisim`,
+XPM 还要第二个顶层 `work.glbl`。
+
+> **自带模板已处理**(2026-10-28):`modelsim_run.do` 的 `VENDOR_LIBS` 默认
+> `{unisim unimacro}`、`GLBL_TOP` 默认 1 —— 会自动找 `glbl.v`、编进 `work/`、
+> 并作为第二顶层传给 `vsim`。**不用手写这些**。
+>
+> 前提是能找到 `glbl.v`:设 `XILINX_VIVADO` 环境变量,或让 `modelsim.ini` 的库映射
+> 指向 `vivado<ver>_lib` 那种固定布局(模板会从 ini 反推)。
+> 找不到时日志打印 `glbl.v not found ... XPM macros will fail at elaboration` ——
+> 看到这句先配 `XILINX_VIVADO`,不要去改 RTL。
+
+只有"映射对、库也在、`glbl` 也配了、却仍报未定义"这种硬问题,才退到
+**用原厂源码自己编一份** —— Vivado 安装目录 `data/ip/xpm/**` 下的 `.sv`
+(或用它的 `compile_simlib`),编完在结论里写清用的是哪一份。
 **这是退路,不是首选动作**。
 
 **"库"和"映射"是两件事**:编译好的库是东西本身(每个库目录里有 ModelSim 的 `_info` 标记),

@@ -661,8 +661,13 @@ for (const [label, pattern] of [
   ["load 是第三个正式模式(不再是「不给模式=GUI」那条路)", /\$MODE ne "compile" && \$MODE ne "run" && \$MODE ne "load"/u],
   ["用法行给出三个模式", /usage: do run\.do compile\|run\|load/u],
   // 2026-09-24(审查报告:compile configuration fingerprint):编译配置也进 stamp,run 时逐项比对。
+  //
+  // 2026-10-28 起指纹记录的是**原件**（`$::INI_SOURCE`）而不是 `$::INI`：
+  // `-modelsimini` 现在指向工作副本 `work/modelsim.ini`，副本名恒定，拿它当身份
+  // 就看不出"换了一份原件"。原件才是配置来源。
   ["配置身份:仿真器路径", /lappend items "exe=\[info nameofexecutable\]"/u],
-  ["配置身份:ini 路径 + mtime + size", /lappend items "ini_mtime=\[file mtime \$::INI\]"/u],
+  ["配置身份:ini 路径 + mtime + size", /lappend items "ini_mtime=\[file mtime \$::INI_SOURCE\]"/u],
+  ["配置身份:ini 指向原件而非工作副本", /lappend items "ini=\$::INI_SOURCE_FWD"/u],
   ["配置身份:defines / incdirs / vendor_libs / opt", /lappend items "defines=/u],
   ["身份写进 stamp", /\{ puts \$stamp_fh "# cfg \$item" \}/u],
   ["run 模式逐项比对配置身份", /compile configuration changed after the last compile/u],
@@ -943,8 +948,12 @@ if (vsimProbe.status !== 0) {
       step.output.slice(-300)
     );
     // ⑧c 批处理那条路**不带** +acc(带的话就是 2.3~2.6× 的白等;加了这条以后谁把它改回去都会红)。
+    //
+    // 2026-10-28：批处理后来改成子进程 argv 直传，所以这里匹配的是 argv 行
+    // （`... -voptargs=-O5 -do {...}`），不再是 `vsim: top=... voptargs={-O5}`。
+    // 判据不变：有 `-voptargs=-O5`、且没有 `+acc`。
     check(
-      /vsim: top=\S+ voptargs=\{-O5\}/u.test(step.output) && !/vsim: top=\S+ voptargs=\{[^}]*\+acc/u.test(step.output),
+      /-voptargs=-O5(?:\s|$)/u.test(step.output) && !/-voptargs=[^\s]*\+acc/u.test(step.output),
       `批处理的 voptargs 不带 +acc;实际 ${(step.output.split(/\r?\n/u).find((l) => /voptargs/u.test(l)) ?? "").trim()}`
     );
     // ⑧d `-voptargs` **只在真有内容时传**(2026-09-25 真机)。`OPT_LEVEL {}` 是模板**文档承诺**的
@@ -1023,7 +1032,12 @@ if (vsimProbe.status !== 0) {
       step.output.slice(-400)
     );
     const badLibDo = join(hdrVerif, "run-bad-lib.do");
-    writeFileSync(badLibDo, bundledRunOnly.replace(/set VENDOR_LIBS\s+\{\}/u, "set VENDOR_LIBS    {no_such_lib}"));
+    // 把 `set VENDOR_LIBS <任意默认值>` 换成不存在的库名。
+    // 2026-10-28：默认值从 `{}` 改成了 `{unisim unimacro}`，所以正则要匹配任意内容，
+    // 不能只匹配空 `{}` —— 否则替换不生效，这条断言就变成在测正常路径（假绿）。
+    const patched = bundledRunOnly.replace(/^set VENDOR_LIBS\s+\{.*\}$/mu, "set VENDOR_LIBS    {no_such_lib}");
+    check(patched !== bundledRunOnly, "夹具:VENDOR_LIBS 真被改成不存在的库名");
+    writeFileSync(badLibDo, patched);
     step = modeStep("run", { doFile: badLibDo, tag: "child-bad-lib" });
     check(
       step.status === 1 && /\[ME\] ERROR/u.test(step.output),

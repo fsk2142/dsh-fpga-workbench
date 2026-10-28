@@ -187,22 +187,38 @@ git tag --list | ForEach-Object {
 
 ## 九、从 GitHub 侧验证（别只看本地）
 
-本地干净不代表远端干净。用 API 拉真实数据：
+本地干净不代表远端干净，要拉真实数据看。
+
+**不要用 `$env:GITHUB_TOKEN = ...` 或从环境变量读 token** —— 那样做有两处泄露面：
+终端回显（被旁人/日志看到）和 shell 历史文件。这个仓库早先的版本曾这么写过，
+2026-10-28 因此触发过一次凭据暴露警报，已删除。
+
+**推荐顺序**：
+
+1. **公开仓库**：直接 `git ls-remote` 看远端引用，或用网页强刷（`Ctrl+Shift+R`）。
+   不需要任何凭据 —— 能证明"远端是这个状态"就够了。
+2. **私有仓库**：用 `gh auth login` 走一次交互登录（凭据存进系统凭据管理器，
+   不会回显），之后 `gh api` 免 token。
+3. 非要手工传 token 时，**用 `Read-Host -AsSecureString` 现输**，不要预置环境变量：
 
 ```powershell
-$tok = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN', 'User')
-$h = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json" }
-$c = Invoke-RestMethod `
-  -Uri 'https://api.github.com/repos/<owner>/<repo>/commits?per_page=5' `
-  -Headers $h
-$c | ForEach-Object {
-  $m = $_.commit.message
-  if ($m -match '用户|原话|报障') { "⚠ $($_.sha.Substring(0,7)) 仍有痕迹" }
+$sec = Read-Host 'GitHub token（不会回显）' -AsSecureString
+$tok = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+try {
+  $h = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json" }
+  $c = Invoke-RestMethod -Uri 'https://api.github.com/repos/<owner>/<repo>/commits?per_page=5' -Headers $h
+  $c | ForEach-Object {
+    $m = $_.commit.message
+    if ($m -match '用户|原话|报障') { "⚠ $($_.sha.Substring(0,7)) 仍有痕迹" }
+  }
+} finally {
+  Remove-Variable tok -ErrorAction SilentlyContinue
 }
 ```
 
-**页面缓存的坑**：GitHub 网页可能要几分钟才刷新。用 `Ctrl+Shift+R` 强刷。
-另外，**文件夹右侧那一列显示的是提交标题**（技术描述），不是正文——
+**页面缓存的坑**：GitHub 网页可能要几分钟才刷新，用 `Ctrl+Shift+R` 强刷。
+另外，**文件夹右侧那一列显示的是提交标题**（技术描述），不是正文 ——
 正文要鼠标悬停才看得到，别验证错位置。
 
 ---

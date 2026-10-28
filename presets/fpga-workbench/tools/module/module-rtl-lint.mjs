@@ -34,7 +34,7 @@
  * ## 用法
  *
  * ```
- * node module-lint-verilator.mjs <模块根> [--json] [--strict-modules] [--verilator <路径>]
+ * node module-rtl-lint.mjs <模块根> [--json] [--strict-modules] [--verilator <路径>]
  * ```
  *
  * 退出码：0 = 无 error 且无新增 warning；1 = 有 error 或 warning；

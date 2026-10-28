@@ -86,7 +86,7 @@
 #   COVERAGE_SPEC 覆盖率类别，单字母：s=语句 b=分支 c=条件 e=表达式 f=状态机
 #                 不含 t/x（翻转 / 扩展翻转）—— 与功能覆盖关系弱且体积大。
 #   COVERAGE_UCDB 落盘文件名（相对当前目录，即 verif/work/ 同级）。
-#                 读它用 `module-coverage.mjs <模块根>`。
+#                 读它用 `module-verif-coverage.mjs <模块根>`。
 #   RESULT_LOG    simulation transcript captured by vsim -l
 #   Environment inputs: MODELSIM_INI / MODELSIM / TB_DEFINES / XILINX_VIVADO
 set RTL_DIR        {../rtl}

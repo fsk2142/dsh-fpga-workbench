@@ -128,6 +128,10 @@ node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> 
 骨架不是填空模板 —— 它是**已跑通的起点**,证明环境好、结构对。七个实测坑与
 scoreboard 的关键设计见 [什么时候用 UVM](references/uvm-when-and-how.md)。
 
+骨架本体是 `references/uvm-selfcheck.sv`(自带 demo DUT、实测可编译),
+由 `module-verif-new.mjs --kind uvm` 复制到 `verif/` —— 它不是给 `--template`
+用的普通模板,所以留在 references 而不是 templates。
+
 **参考模型会错**(同源错误),可靠性排序:**SVA 断言 > 真实数据当黄金标准 >
 不同路径实现模型 > 手写模型**。断言不要求重写功能,只陈述不变量,最不容易错。
 

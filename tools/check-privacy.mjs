@@ -60,7 +60,7 @@ const STDIN_MODE = process.argv.includes("--stdin");
 /**
  * 本文件自身不参与扫描。
  *
- * 它的注释与自检样例里**必须**写出会被检测的形态（`C:\Users\xxx`、`someone@qq.com`），
+ * 它的注释与自检样例里**必须**写出会被检测的形态（`C:\Users\xxx`、`someone@example.org`），
  * 否则读代码的人看不出判据长什么样。不排除自己就是永久的自指误报
  * —— 2026-10-26 第一次跑就撞上了。
  */
@@ -144,7 +144,7 @@ check(
   "占位名判据把 `John` 当占位、`John Doe` 不匹配（后者含空格，实际靠别名匹配）"
 );
 check(
-  EMAIL_ALLOW.test("someone@users.noreply.github.com") && !EMAIL_ALLOW.test("someone@qq.com"),
+  EMAIL_ALLOW.test("someone@users.noreply.github.com") && !EMAIL_ALLOW.test("someone@example.org"),
   "邮箱白名单只放行 noreply / 依赖包域，不放行普通邮箱域"
 );
 

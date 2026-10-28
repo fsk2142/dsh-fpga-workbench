@@ -662,12 +662,25 @@ for (const [label, pattern] of [
   ["用法行给出三个模式", /usage: do run\.do compile\|run\|load/u],
   // 2026-09-24(审查报告:compile configuration fingerprint):编译配置也进 stamp,run 时逐项比对。
   //
-  // 2026-10-28 起指纹记录的是**原件**（`$::INI_SOURCE`）而不是 `$::INI`：
-  // `-modelsimini` 现在指向工作副本 `work/modelsim.ini`，副本名恒定，拿它当身份
-  // 就看不出"换了一份原件"。原件才是配置来源。
+  // 2026-10-28 定稿：指纹**只记 ini 的路径，不记 mtime / size / 内容**。
+  //
+  // 两次弯路都踩过（真机）：
+  //   ① 记原件 mtime/size —— 原件全局共享，别的工程一条 `vmap` 就改了它，
+  //      compile 记完半秒后被外部改写，紧接着 run 报「配置变了」，重编后照样复发；
+  //   ② 改记副本内容摘要 —— 也不行，`refresh_ini_copy` 每个模式都跑，
+  //      run 时副本会重新从（已被改过的）原件复制，摘要必然对不上。
+  //
+  // 结论：ini 是**共享外部资源**，把它的内容算进身份，等于让别人的操作决定你重不重编。
+  // 所以只保留「路径变了要重编」（用户真的换了一份 ini），内容变更不再触发。
+  // 这条断言反过来钉住这个取舍 —— 别再"改回去更严谨"。
   ["配置身份:仿真器路径", /lappend items "exe=\[info nameofexecutable\]"/u],
-  ["配置身份:ini 路径 + mtime + size", /lappend items "ini_mtime=\[file mtime \$::INI_SOURCE\]"/u],
-  ["配置身份:ini 指向原件而非工作副本", /lappend items "ini=\$::INI_SOURCE_FWD"/u],
+  ["配置身份:ini 只记路径(不记 mtime/size/内容)", /lappend items "ini=\$::INI_SOURCE_FWD"/u],
+  // 负向断言：这两个赋值必须**不存在**。用 `(?!…)` 在整段文本上表达，
+  // 因为本循环里每项只能是正则、不能是布尔。
+  [
+    "配置身份:不再把 ini 的 mtime/size 算进身份(外部改 ini 不该触发重编)",
+    /^(?![\s\S]*ini_mtime=\[file mtime)(?![\s\S]*ini_size=\[file size)[\s\S]*$/u
+  ],
   ["配置身份:defines / incdirs / vendor_libs / opt", /lappend items "defines=/u],
   ["身份写进 stamp", /\{ puts \$stamp_fh "# cfg \$item" \}/u],
   ["run 模式逐项比对配置身份", /compile configuration changed after the last compile/u],
@@ -937,7 +950,8 @@ if (vsimProbe.status !== 0) {
     //    让 run 拒绝 —— 否则"源码一字未动、直接 run"会静默跑在按旧配置编出来的库上(实测形态)。
     step = modeStep("compile");
     check(
-      step.status === 0 && /compile identity:/u.test(step.output) && /exe=/u.test(step.output) && /ini_size=/u.test(step.output),
+      // 2026-10-28：ini 的 size 已不再进身份（见上面那组断言的说明），改看 ini= 这一行。
+      step.status === 0 && /compile identity:/u.test(step.output) && /exe=/u.test(step.output) && /ini=/u.test(step.output),
       `配置身份:compile 把身份写进 stamp 并打印(实际 ${String(step.status)})`,
       step.output.slice(-300)
     );

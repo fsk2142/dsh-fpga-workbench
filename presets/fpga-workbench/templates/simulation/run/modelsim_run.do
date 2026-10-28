@@ -488,7 +488,8 @@ proc compile_step {what cmd} {
 }
 
 # ── compile configuration identity(编译配置身份)─────────────────────────────── #
-# 编译结果不只取决于源码:**用哪个仿真器 / 哪个 modelsim.ini(以及它有没有被改) / TB_DEFINES /
+#
+# 编译结果不只取决于源码:**用哪个仿真器 / 哪个 modelsim.ini / TB_DEFINES /
 # EXTRA_INCDIRS / VENDOR_LIBS / OPT_LEVEL** 任何一个变了,work/ 就不再是"当前配置"的产物。
 # 实测踩过的形态:把 TB_DEFINES 从 A 改成 B 直接 run —— 源码一个字节没动,work/ 被判 current,
 # 跑的是按 A 编出来的库,而且**不报错**。所以这些也进 stamp,run 模式重算比对(比的不是 mtime,
@@ -498,19 +499,29 @@ proc compile_step {what cmd} {
 proc config_identity {} {
   set items {}
   lappend items "exe=[info nameofexecutable]"
-  # 记录**原件**路径与 mtime/size，不记录副本。
+  # **只记 ini 的路径，不记它的 mtime / size / 内容**（2026-10-28 真机踩到，改了两次才对）。
   #
-  # 副本永远叫 work/modelsim.ini（2026-10-28 的"只改副本"改动），所以拿副本当身份
-  # 会让"换了一份 ini 原件"看不出差异 —— 那样 run 就不会拒绝，而库其实是用另一份
-  # 映射编出来的。原件才是配置身份的来源。
+  # 走过的弯路：
+  #   ① 最早记 `file mtime/size $::INI_SOURCE` —— 原件是**全局共享**的，别的工程的
+  #      do 脚本一条 `vmap work <path>` 就会改它。于是 compile 记下 mtime=T0，
+  #      半秒后外部脚本写原件变 T1，紧接着 run 就报「配置变了，请重编」——
+  #      而用户什么都没改，重编后照样复发。
+  #      实测：`ini_mtime: was '1793176408' -> now '1793176411'`、
+  #            `ini_size: was '135455' -> now '135459'`。
+  #   ② 改成记副本的内容摘要 —— 也不行：`refresh_ini_copy` 在**每个模式**都会执行，
+  #      run 时副本会被重新从（已被外部改过的）原件复制，摘要必然对不上。
+  #
+  # 根本问题：**这个字段的用途是"判断要不要重编"，而 ini 是共享外部资源。**
+  # 把共享资源的内容也算进身份，等于让别人的操作决定你的重编。
+  #
+  # 现在的取舍（明确写下，免得以后又被"改回去更严谨"的想法推倒）：
+  #   · **记路径**：用户真的**换了一份 ini**（改了 INI_OVERRIDE / 环境变量 / 安装目录）时，
+  #     这是一次明确的配置变更，应该重编 —— 这条保护保留。
+  #   · **不记内容**：别人在同一份 ini 里加几条映射，**不影响已经编好的库能不能用**
+  #     （库里的 design unit 不会因为 ini 多了条目而失效）。下次 compile 时自然会用新映射。
+  #
+  # 这是一次**有意识的放松**：宁可漏判「ini 内容被改」，也不要让外部操作把 run 卡死。
   lappend items "ini=$::INI_SOURCE_FWD"
-  if {[file isfile $::INI_SOURCE]} {
-    lappend items "ini_mtime=[file mtime $::INI_SOURCE]"
-    lappend items "ini_size=[file size $::INI_SOURCE]"
-  } else {
-    lappend items "ini_mtime=-"
-    lappend items "ini_size=-"
-  }
   lappend items "opt=$::OPT_LEVEL"
   lappend items "defines=[expr {[info exists ::env(TB_DEFINES)] ? $::env(TB_DEFINES) : {}}]"
   lappend items "incdirs=$::EXTRA_INCDIRS"

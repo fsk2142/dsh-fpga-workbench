@@ -69,7 +69,7 @@ node tools/sync-installed.mjs
 
 ### 自检
 
-设置页底部「自检」按钮（点一下才跑，挂载时不请求），按清单核对已装副本的 8 项内容：12 份内置模板文件、9 个自带命令入口及 4 个辅助模块、16 个技能目录及各自的 `SKILL.md` 与 `references/*.md`、运行时子树与 `workspace/AGENTS.fpga.md`、补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录。
+设置页底部「自检」按钮（点一下才跑，挂载时不请求），按清单核对已装副本的 8 项内容：12 份内置模板文件、10 个自带命令入口及 4 个辅助模块、16 个技能目录及各自的 `SKILL.md` 与 `references/*.md`、运行时子树与 `workspace/AGENTS.fpga.md`、补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录。
 
 结论分 `pass` / `warn` / `fail` 三档，缺哪份文件就点名哪份。**只读**：不写设置、不改文件、不起进程。
 
@@ -88,6 +88,7 @@ node tools/sync-installed.mjs
 | 模块级 | 综合 | `node presets/fpga-workbench/tools/module/module-synth-new.mjs <模块根> <模块名> --template <模板>` | 起约束文件或综合脚本 |
 | 模块级 | 验收 | `node presets/fpga-workbench/tools/module/module-report-check.mjs <模块目录> [--json]` | 核报告引用的证据路径是否存在 |
 | 工程级 | RTL/lint | `node presets/fpga-workbench/tools/project/project-rtl-check.mjs <工程目录> [--json]` | 检查工程 RTL 与 IP 时序卡 |
+| 工程级 | 约束 | `node presets/fpga-workbench/tools/project/project-constraints-check.mjs <工程根> [--json]` | XDC 机械检查（缺 `create_clock` / 时钟重复 / 管脚冲突；时序意图不判） |
 
 脚本只做机械化的事：起模板、建骨架、替占位符、跑固定命令、机械规范检查、把事实摆出来。
 **不**决定该走哪个环节、**不**判"算不算过"、**不**做阶段推进。判据写在技能文档里，由 AI 逐条看。

@@ -246,6 +246,12 @@ export const TOOLS = [
     level: "project",
     stage: "工程 RTL / lint 环节",
     what: "检查工程 src/rtl、src/sim 与根 sim/ 中的 Verilog/SystemVerilog 源码,以及根 ip/ 的 IP 时序卡(缺卡只警告)"
+  },
+  {
+    file: "project-constraints-check.mjs",
+    level: "project",
+    stage: "约束环节",
+    what: "XDC 机械检查:有时钟端口却没 create_clock、时钟重复定义、管脚分配冲突(时序意图不判)"
   }
 ];
 

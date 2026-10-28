@@ -130,7 +130,7 @@ spec 确认后没有固定流水线:集成、专用 RTL、仿真、lint、综合
 方案、框图和文件清单均确认 → `PASS`;真实不符 → `FAIL`;缺用户资料或可复用模块 → `BLOCKED`;
 证据或工作未完成 → `UNVERIFIED`;本次确实无工程级规格工作 → `NOT_APPLICABLE`。
 判定词含义见 `fpga-module-verif` 的状态表(唯一权威)。
-  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
+  · 速记:`PASS`有证据 / `FAIL`真不符 / `BLOCKED`缺条件 / `UNVERIFIED`没验 / `NOT_APPLICABLE`确不适用且不掩盖无法验证
 
 ## 必须停下来问用户的时候
 

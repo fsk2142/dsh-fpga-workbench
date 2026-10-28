@@ -58,9 +58,22 @@ description: 编写或核对 FPGA 工程时钟、管脚、电平和时序例外�
 
 ## 判据
 
-- **PASS**:约束文件被 Vivado 接受(`constraint_status = PASS`);管脚逐条与 `sch/` 原理图核对过;
+**先跑机械检查,再人工判读**:
+
+```
+node "<自带命令目录>\project\project-constraints-check.mjs" <工程根>
+```
+
+它只查**能确定对错**的三类:时钟端口没 `create_clock`、时钟重复定义、管脚分配冲突
+(同一 pin 给两端口 / 同一端口给两 pin —— 后者静默覆盖,Vivado 不报错)。
+
+**它不判**(别拿"通过"当约束正确):时钟频率对不对、`set_false_path` 该不该有、
+IO 延迟数值是否合理 —— 这些要设计/协议/板级知识,仍按下面人工核。
+
+- **PASS**:机械检查通过,且约束文件被 Vivado 接受(`constraint_status = PASS`);管脚逐条与 `sch/` 原理图核对过;
   时钟与 spec 时钟目标一致;没有未约束的 I/O;每条时序例外都有理由
-- **FAIL**:管脚与原理图不符、IO 标准不对、时钟与 spec 不符、有时序例外但没写理由、有未约束的 I/O
+- **FAIL**:管脚与原理图不符、IO 标准不对、时钟与 spec 不符、有时序例外但没写理由、有未约束的 I/O、
+  或机械检查报了冲突
 - **BLOCKED**:`sch/` 里拿不到原理图或管脚表 —— 本环节**过不去**,如实说,不得凭接口名猜管脚
 - **NOT_APPLICABLE**:这次不涉及新的管脚(比如只改了内部逻辑)
 
@@ -70,7 +83,7 @@ description: 编写或核对 FPGA 工程时钟、管脚、电平和时序例外�
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `UNVERIFIED` / `NOT_APPLICABLE`)+ **`xdc/` 下约束文件路径**
   (判定词的含义见 `fpga-module-verif` 的**状态表**,唯一权威)
-  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
+  · 速记:`PASS`有证据 / `FAIL`真不符 / `BLOCKED`缺条件 / `UNVERIFIED`没验 / `NOT_APPLICABLE`确不适用且不掩盖无法验证
 - **管脚对照表**:信号名 | 管脚号 | IO 标准 | 来源(`sch/` 里哪份图第几页/哪个连接器)
 - 时钟清单:名字、周期(与 spec 一致)、来源
 - 时序例外清单:哪条路径、为什么、谁确认的

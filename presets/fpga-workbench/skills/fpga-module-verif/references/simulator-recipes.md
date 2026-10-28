@@ -72,6 +72,32 @@ try {
 - **编译顺序:被例化的在前**,按层级自底向上排;顺序错了会报未解析的模块
 - 多个测试平台**一个平台一个进程**跑(`tb_sub_*` → 其余 `tb_*` → `tb_top_*`),`$finish` 结束一个进程
 
+## 模板的旋钮(改行为不用改脚本体)
+
+自带模板 `modelsim_run.do` 已经把常用场景固化了。**要改行为先看这张表**,
+别去改脚本正文 —— 改正文会在下次安装模板时被覆盖,而且容易破坏新鲜度判定。
+
+| 旋钮 | 默认 | 什么时候改 |
+| --- | --- | --- |
+| `RTL_DIR` | `{../rtl}` | HDL 不在 `../rtl` 时（工程布局会自动切到 `../src/rtl`） |
+| `TB_PATTERN` | `{tb_*.sv tb_*.v tb_*.vhd tb_*.vhdl}` | 测试平台不叫 `tb_*` 时 |
+| `TOP_OVERRIDE` | `{}` | **多个 TB 匹配**时指定跑哪个，不写会报歧义 |
+| `FULL_REBUILD` | `0` | 怀疑 `work/` 里残留旧 design unit 时；设 1 清库全量重编 |
+| `OPT_LEVEL` | `{-O5}` | 要 `vopt` 别的优化级别；设 `{}` 退回工具默认（-O4） |
+| `BATCH_VOPT_ARGS` | `{}` | 批处理要事后从 wlf 出波形时设 `{+acc=rn}`（代价：慢 2.3–2.6×） |
+| `DEBUG_VOPT_ARGS` | `{+acc=rn}` | GUI `load` 的可见性；想要更快可设 `{}` |
+| `EXTRA_INCDIRS` | `{}` | 源码用 `` `include `` 且不在当前目录时 |
+| `INI_OVERRIDE` | `{}` | 要指定另一份库映射文件（不必设环境变量，用完即弃） |
+| `VENDOR_LIBS` | `{unisim unimacro}` | 用原语时保持默认；换别的厂商库时替换 |
+| `GLBL_TOP` | `1` | 用 XPM 时保持默认；确定不用 XPM 且找不到 `glbl.v` 时设 0 消掉提示 |
+| `COVERAGE` | `1` | 不关心覆盖率时设 0 换速度（编译 + 运行都快些） |
+| `COVERAGE_SPEC` | `{sbcef}` | 要换统计类别时（s 语句 b 分支 c 条件 e 表达式 f 状态机） |
+| `COVERAGE_UCDB` | `{coverage.ucdb}` | 要改覆盖率数据库文件名时；`module-verif-coverage.mjs` 默认找 `verif/coverage.ucdb` |
+| `RESULT_LOG` | `{sim.log}` | 要换仿真日志名时；gate 靠读它判成功标记 |
+
+改法：在 `verif/run.do` 里改对应的 `set` 行，或从模板复制一份另存（模板每次安装会覆盖）。
+`verif/work/` 与 `*.ucdb` 是可再生产物，不要提交。
+
 ## 厂商原语仿真:先查库映射,别先怀疑 RTL
 
 用到 `IBUF` / `BUFG` / `FDRE` 这类厂商原语、或 IP 核的仿真模型时,下面四条是**实测**出来的

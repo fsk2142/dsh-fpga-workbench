@@ -72,7 +72,7 @@ description: 验证 FPGA 工程的模块接口、背压、跨时钟或整机行�
 - **NOT_APPLICABLE**:这次没有可仿的逻辑(纯粘合且用户认可不仿)
 
 判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。简单 tb 过了 ≠ 验证 `PASS`;
-  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
+  · 速记:`PASS`有证据 / `FAIL`真不符 / `BLOCKED`缺条件 / `UNVERIFIED`没验 / `NOT_APPLICABLE`确不适用且不掩盖无法验证
 要写进验收链的结论,须有独立判据(见 `fpga-module-verif`)。
 
 **工程级同样适用 95% 覆盖率门槛**(口径与报告格式见 `fpga-module-verif` 的「覆盖率门槛」):

@@ -199,6 +199,52 @@ export function runSelfCheck(
     )
   );
 
+  // 2b) **PTY 后端重名**（2026-10-28 真机崩溃的防线）。
+  //
+  // `terminal_store` 注册 PTY 后端时是「重名就抛」：
+  //     if (this.backends.has(backend.type)) throw new TerminalError(
+  //       `a PTY backend named "${backend.type}" is already registered`)
+  // 而这些工具注册的类型就是 `"shell"`。抛错发生在 composition 装载期 ——
+  // 那时插件已激活失败，**DSH 直接起不来、连界面都没有**，用户只能手动改 YAML。
+  //
+  // 所以在这里提前算出来：预设启用 `tool-bash`/`tool-pwsh` 之一，而 profile 的
+  // 补丁里把 `optional-terminal-bash` 也打开了，就是确定的冲突。
+  // 报 warn 而不是 fail：用户可能确实想让预设提供终端（那种情况该关 profile 那行）。
+  {
+    const presetText = readText(join(packageRoot, "presets", "fpga-workbench", "agent.cordis.yml")) ?? "";
+    /** 预设里某个 id 的行是否处于启用态（`disabled: true` 才算停用）。 */
+    const rowEnabled = (id: string): boolean => {
+      const block = new RegExp(`^- id: ${id}\\s*$([\\s\\S]*?)(?=^- id: |(?![\\s\\S]))`, "mu").exec(presetText);
+      if (block === null) return false;
+      return !/^\s+disabled:\s*true\s*$/mu.test(block[1]);
+    };
+    const presetShellOn = rowEnabled("tool-bash") || rowEnabled("tool-pwsh");
+
+    // profile 补丁：`optional-terminal-bash` 显式 enabled（`disabled: false` 或没写 disabled 行）
+    const profilePatch = readText(join(process.env.USERPROFILE ?? "", ".dsh", "profiles", "desktop", "cordis.patch.yml"));
+    let profileShellOn = false;
+    if (profilePatch !== undefined) {
+      const block = /^- id: optional-terminal-bash\s*$([\s\S]*?)(?=^- id: |(?![\s\S]))/mu.exec(profilePatch);
+      if (block !== null) profileShellOn = !/^\s+disabled:\s*true\s*$/mu.test(block[1]);
+    }
+
+    const ptyConflict = presetShellOn && profileShellOn;
+    checks.push(
+      entry(
+        "pty",
+        "PTY 后端不重复注册",
+        ptyConflict ? "warn" : "pass",
+        ptyConflict
+          ? "预设的 tool-bash/tool-pwsh 与 profile 的 optional-terminal-bash 都在启用 —— "
+            + "两者都注册名为 shell 的 PTY 后端,启动时会抛 TerminalError 导致 DSH 打不开。"
+            + "二选一:停用预设里那两个,或在 profile 里把 optional-terminal-bash 设成 disabled: true"
+          : presetShellOn
+            ? "由本预设提供终端后端(profile 的 optional-terminal-bash 未启用)"
+            : "由 profile 提供终端后端(预设的 tool-bash/tool-pwsh 已停用)"
+      )
+    );
+  }
+
   // 3) 模板:**双向**核对。
   //
   // 一开始只做了"清单 → 文件"这一个方向（清单里有、文件在不在）。那个方向有个盲区:

@@ -113,7 +113,8 @@ const clean = makeFixture("clean", new Set());
     `完整夹具:无 fail,只有两项预期提醒(failed=${String(report.failed)},warn=${warnedIds || "无"})`,
     report.checks.filter((item) => item.status === "fail").map((item) => `${item.label}:${item.detail}`).join(" / ")
   );
-  check(report.checks.length === 8, `自检共 8 项(实际 ${String(report.checks.length)})`);
+  // 2026-10-28：新增「PTY 后端不重复注册」一项（真机崩溃的防线），8 → 9。
+  check(report.checks.length === 9, `自检共 9 项(实际 ${String(report.checks.length)})`);
   check(
     statusOf(report, "templates")?.detail.includes(`${String(BUILTIN_TEMPLATES.length)} 份内置模板全在`),
     `模板那一项报的是"逐份核对通过",不是常量数字(${String(statusOf(report, "templates")?.detail)})`

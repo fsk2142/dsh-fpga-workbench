@@ -15,9 +15,20 @@ const tracked = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" 
   .split(/\r?\n/u)
   .filter((line) => /\.(?:ts|mjs|js|md|yml|yaml|do|sv|py)$/u.test(line));
 
+/**
+ * 本文件自身不参与扫描。
+ *
+ * 它的注释里**必须**写出被判据命中的形态（「默认读 verif/work/」「关心前五类」），
+ * 否则读代码的人看不出判据长什么样。不排除自己就是永久的自指误报
+ * —— `check-privacy.mjs` 早先踩过同一个坑并留下过同样的说明，这里照抄。
+ * （2026-10-28 第十五轮复审 C10：第一版没排除自己，一进 CI 就自报自、必红。）
+ */
+const SELF = "tools/check-stale-comments.mjs";
+
 const findings = [];
 
 for (const rel of tracked) {
+  if (rel === SELF) continue;
   const full = join(ROOT, rel);
   if (!existsSync(full)) continue;
   const text = readFileSync(full, "utf8");

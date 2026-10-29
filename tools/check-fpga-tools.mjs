@@ -508,7 +508,7 @@ check(
 const stamp = String(Date.now());
 const scaffoldMod = join(SANDBOX, `scaffold-mod-${stamp}`);
 const modulePlan = planScaffold(scaffoldMod, { kind: "module" });
-check(modulePlan.dirs.length === 5, `模块级骨架 5 个目录(4 个环节 + spec/explore;实际 ${modulePlan.dirs.length})`);
+check(modulePlan.dirs.length === 4, `模块级骨架 4 个目录(对应 4 个环节;实际 ${modulePlan.dirs.length})`);
 check(
   modulePlan.dirs.some((dir) => dir.endsWith("rtl")) && !modulePlan.dirs.some((dir) => dir.endsWith("lint")),
   "机械检查报告跟 RTL 同目录,所以不建 lint/ 目录"
@@ -528,8 +528,8 @@ check(
 check(modulePlan.anchors.length === 1 && modulePlan.anchors[0].value.kind === "module", "模块级写一个 kind: module 的锚点");
 check(modulePlan.anchors[0].value.spec === "spec/spec.md", "锚点里的 spec 路径相对模块根");
 check(
-  modulePlan.dirs.some((dir) => dir.endsWith(join("spec", "explore"))),
-  "给 spec 建 explore(探索产物有地方放)"
+  !modulePlan.dirs.some((dir) => dir.endsWith(join("spec", "explore"))),
+  "骨架不建 spec/explore —— 探索产物放工程外(它本来就不作正式证据)"
 );
 
 const dryRun = applyScaffold(modulePlan, { dryRun: true });

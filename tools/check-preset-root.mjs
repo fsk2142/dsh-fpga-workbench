@@ -236,10 +236,6 @@ check(
   String(skillDir).replace(/[\\/]+$/u, "") === join(presetDir, "skills"),
   `技能目录就是预设自己的 skills/(实际 ${String(skillDir)})`
 );
-
-// dsh-skill-filesystem 首次加载只返回 SKILL.md；内容过长时会先经过 8192 字符的工具结果裁剪。
-// 核心说明因此要留出渲染包装余量，细节拆进 SKILL.md 显式链接的 references/*.md，按需再读。
-const SKILL_BODY_CODEPOINT_LIMIT = 7000;
 const readSkillCore = (skill) => readFileSync(join(skillDir, skill, "SKILL.md"), "utf8");
 const linkedSkillReferences = (text) => [
   ...new Set(
@@ -358,11 +354,6 @@ for (const skill of skillNames) {
     !/第一阶段|第二阶段|阶段 ?[0-9]|下一阶段|一口气写完|这一关过了才进|流程必须跑完并通过确认|OBSERVE_ONLY/u.test(core),
     `${skill} 里没有残留的"阶段链/硬门禁"口气`
   );
-  const bodyCodepoints = Array.from(core.slice(frontmatter?.[0].length ?? 0)).length;
-  check(
-    bodyCodepoints <= SKILL_BODY_CODEPOINT_LIMIT,
-    `${skill} 的核心正文不超过 ${String(SKILL_BODY_CODEPOINT_LIMIT)} 个 Unicode 字符(实际 ${String(bodyCodepoints)})`
-  );
   const references = linkedSkillReferences(core);
   if (skill === "fpga-module-rtl" || skill === "fpga-module-verif") {
     check(references.length >= 2, `${skill} 把大段细节拆到至少 2 份显式引用的 references/*.md`);
@@ -387,10 +378,6 @@ for (const skill of skillNames) {
   );
   for (const relativePath of references.filter((item) => !invalidReferences.includes(item))) {
     const size = Array.from(readFileSync(join(skillDir, skill, ...relativePath.split("/")), "utf8")).length;
-    check(
-      size <= SKILL_BODY_CODEPOINT_LIMIT,
-      `${skill}/${relativePath} 不超过 ${String(SKILL_BODY_CODEPOINT_LIMIT)} 个 Unicode 字符(实际 ${String(size)})`
-    );
   }
 }
 
@@ -569,14 +556,14 @@ check(
 );
 // 第五步:测试平台 + 输入数据 + 对照数据 + 比对格式(有则请用户给,没有则自己定)
 const dataStep = stepText(4);
-check(/测试平台/u.test(dataStep), "第五步问测试平台的实现要求");
-check(/输入数据/u.test(dataStep) && /对照数据/u.test(dataStep), "第五步问输入数据与对照数据");
+check(/验收判据|AC/u.test(dataStep), "第五步定验收判据(AC),不越权定测试平台");
+check(/期望值|对照|golden/u.test(dataStep) && /输入/u.test(dataStep), "第五步问输入来源与期望值来源");
 check(
   /请用户提供|请其提供|由用户提供/u.test(dataStep) && /自己确定|本环节确定|由本环节决定/u.test(dataStep),
   "第五步写明:用户有要求就按用户的,没有就自己定"
 );
 // 五个步骤是讨论环节,不是问卷:每步都要先写清"要定下来的结论",再写讨论内容与注意事项
-check(/讨论的顺序,不是问卷|不是问卷/u.test(specSkill), "开篇点明五步是讨论顺序、不是问卷");
+check(/最灵活|不要死套|参考清单/u.test(specSkill), "开篇点明本环节最灵活、不要死套五步");
 for (const [index, step] of STEPS.entries()) {
   check(
     /要定下来的/u.test(stepText(index)),

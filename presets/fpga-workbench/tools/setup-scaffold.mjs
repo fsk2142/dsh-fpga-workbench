@@ -3,7 +3,7 @@
 // 为什么要有它:目录名与个数是固定的,但手工逐个建立容易漏(漏了后面的技能会去找不存在的目录),
 // 不同会话建出来的也不一致。这把"建骨架"变成一条命令:
 //   · 写锚点 `.fpga-workbench.json`(kind 与 spec 路径)—— 整套流程靠它定位
-//   · 建该级别全部环节目录,并给 spec/ 建 explore/(探索产物有地方放)
+//   · 建该级别全部环节目录(探索产物放工程外,不在骨架里留目录)
 //   · 幂等:已存在的目录不动;已有锚点不覆盖(除非 --force,且锚点类型与本次一致)
 //   · `--force` 的覆盖**可恢复**:旧内容先留一份同目录 `<文件>.bak-<时间戳>` 快照(路径会打印
 //     出来),新内容写临时文件核验过才替换 —— 理由见 `lib/stamp.mjs` 的 {@link writeFileRecoverable}
@@ -98,7 +98,6 @@ export function planScaffold(root, options = {}) {
 
   const moduleAt = (moduleRoot) => {
     for (const stage of MODULE_STAGES) dirs.push(join(moduleRoot, stage));
-    dirs.push(join(moduleRoot, "spec", "explore"));
     anchors.push({
       file: join(moduleRoot, ".fpga-workbench.json"),
       value: { kind: "module", spec: "spec/spec.md" }

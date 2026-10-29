@@ -60,22 +60,40 @@ node project-timing-report.mjs <报告文件或 prj/ 的 run 目录>
 
 拿到数字后，下面三条判据由你自己按工程实际情况执行。
 
-**① 未约束路径必须为 0**
+**① 未约束的东西必须为 0**
 
 `WNS ≥ 0` 只统计**被约束到**的路径。漏了一条 `create_clock`,那条路径根本不进时序分析 ——
 报告照样全绿,但它可能跑在 1/3 的频率上。
 
-取数（Vivado）：
+**先纠正一个容易搞错的地方**（2026-10-29 实测）：`report_timing_summary` 的输出里
+**没有一个叫 "Unconstrained Paths" 的段落**。真正反映这件事的是 `check_timing report`
+那 12 项 —— 其中这几项才是「没被约束到」：
 
-```tcl
-# 每次实现后都要看这个数，不是 0 就停下来
-report_timing_summary -no_header -no_detailed_paths
-# 输出里找 "Unconstrained Paths" 段；或直接：
-get_timing_paths -delay_type max -max_paths 1 -no_report_unconstrained
+| check_timing 项 | 含义 | 要它为 0 |
+|---|---|---|
+| `unconstrained_internal_endpoints` | 内部端点没有任何时钟约束 | ✅ |
+| `no_clock` | 有寄存器但没时钟 | ✅ |
+| `no_input_delay` / `no_output_delay` | 端口没有输入/输出延迟 | 看设计目标 |
+| `partial_input_delay` / `partial_output_delay` | 只约束了一部分 | 看设计目标 |
+| `generated_clocks` | 衍生时钟没连到源 | ✅ |
+
+取数两条路，选一条：
+
+```
+# 一、用本项目工具（推荐 —— 它会取各角最大值，人工容易只看第一份）
+node project-timing-report.mjs <报告>
+
+# 二、Vivado 里直接问
+report_timing_summary -file timing_summary.rpt
+# 然后在报告里找 "check_timing report" 段
 ```
 
-判据：`report_timing_summary` 的 **Unconstrained Paths 计数 = 0**。
-不为 0 就点出是哪条路径、为什么没进分析。
+**注意 `check_timing` 那段在报告里出现多次**（每个角一份）。只看第一份会漏 ——
+某个角有 3 个未约束端点、另一个角是 0，真实情况是 3。
+
+**`no_input_delay` / `no_output_delay` 要不要清零，取决于这个设计**：
+LED、低速 GPIO、异步按键这类端口本来就没有建立保持要求；
+接 SDRAM、以太网、高速总线的端口必须有。这一条**没有通用答案**，按工程判断。
 
 **未约束路径的六类来源**（对着这张表逐个排除，比盲查快得多）：
 

@@ -26,6 +26,16 @@ description: 开始或变更 FPGA 模块,或讨论功能、接口、器件、验
 模块根,收尾时用脚本建骨架。锚点内容为 `kind: module`、`spec: spec/spec.md`;模块根固定含
 `spec/`、`rtl/`、`verif/`、`synth/`,探索产物放 `spec/explore/`,审查报告放 `<模块根>/review.md`。
 
+> **两层目录别搞混**（2026-10-29 补）:模块根的规格在 **`spec/`**,工程根的规格在 **`doc/`**。
+> 两处都有 `spec.md` / `flow.md` / `timing.md` 这类同名文件 —— 它们分属**不同层级**,不是同一个文件:
+>
+> | 层级 | 规格 | 框图 | 时序 |
+> |---|---|---|---|
+> | 模块根(`kind: module`) | `spec/spec.md` | `spec/flow.md` | `synth/timing.md` |
+> | 工程根(`kind: project`) | `doc/spec.md` | `doc/flow.md` | `doc/timing.md` |
+>
+> 引用时**always 带目录前缀**,别只写 `spec.md`。
+
 **注意**:路径必须在对话与规格中记录,不要靠推断。
 
 ## 第二步:确定器件

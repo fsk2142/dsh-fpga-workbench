@@ -37,6 +37,17 @@ description: 开始或变更整个 FPGA 工程、模块划分、接口、时钟�
 - `bit/` 可由每次实现覆盖同名 bit/ltx;其它用户文件不得静默覆盖
 - 找不到 `kind: project` 锚点就确认工程/模块边界与工程根,再用脚本建树
 
+> **两层目录别搞混**（2026-10-29 补）:工程根的规格在 **`doc/`**,模块根的规格在 **`spec/`**。
+> 两处都有 `spec.md` / `flow.md` 这类同名文件 —— 它们分属**不同层级**,不是同一个文件:
+>
+> | 层级 | 规格 | 框图 | 时序 |
+> |---|---|---|---|
+> | 工程根(`kind: project`) | `doc/spec.md` | `doc/flow.md` | `doc/timing.md` |
+> | 模块根(`kind: module`) | `spec/spec.md` | `spec/flow.md` | `synth/timing.md` |
+>
+> 引用时**always 带目录前缀**,别只写 `spec.md`。模块从库拷入本工程时,
+> 它的 `spec/` 留在模块根,不会搬进 `doc/`。
+
 ## 讨论顺序
 
 ### 1. 工程目标

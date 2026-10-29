@@ -282,6 +282,12 @@ export const TOOLS = [
     level: "project",
     stage: "上板环节",
     what: "生成 L0–L3 的上板自检 Vivado Tcl(电源配置/时钟锁定/复位释放/寄存器读写),任一级失败即停;寄存器地址需按项目填 TODO,生成的脚本未经真机验证"
+  },
+  {
+    file: "project-timing-report.mjs",
+    level: "project",
+    stage: "时序环节",
+    what: "解析 report_timing_summary 输出,抠出 WNS/TNS/WHS/时钟/分析角/check_timing 12 项;只给数字不给结论——过不过取决于这个设计的目标"
   }
 ];
 

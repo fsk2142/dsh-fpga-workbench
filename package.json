@@ -1,6 +1,6 @@
 {
   "name": "dsh-fpga-workbench",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "FPGA 开发模式 + 工具链设置:一个 DSH agent 预设(人设/工具/技能 + 本机工具链提示),外加「插件 → dsh-fpga-workbench → 配置」里配置 Vivado / ModelSim / QuestaSim / Verilator 与仿真库映射文件,以及可选的 AMD Vivado MCP 接入与版本检查。",
   "license": "MIT",
   "packageManager": "pnpm@11.24.0",

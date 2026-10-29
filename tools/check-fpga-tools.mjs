@@ -3752,6 +3752,161 @@ if (vsimPath === undefined) {
     check(/\[SVA\] state=6/u.test(illegal.out), "非法编码被断言拦下（state=6）", illegal.out.slice(-350));
     check(/\*\* Error/u.test(illegal.out), "ModelSim 把它报成 Error 而不是静默 Note");
   }
+
+  // ⑤ 时序报告解析（project-timing-report.mjs）
+  //
+  // 用**构造夹具**而不是真实工程报告：真实报告是某个项目的状态，
+  // 拿它当断言基准 = 把那个项目当时的状况固化成规定。
+  // 夹具只忠于 Vivado 的输出格式（实测 2020.2 / 2025.2 抓下来的形状）。
+  console.log("\n=== 时序报告解析（project-timing-report.mjs）===");
+  {
+    const timingDir = join(SANDBOX, "timing-report");
+    mkdirSync(timingDir, { recursive: true });
+
+    /** 造一份符合 Vivado 真实格式的报告。 */
+    const makeReport = (numbers, checks, extra = "") =>
+      [
+        "Copyright 1986-2020 Xilinx, Inc. All Rights Reserved.",
+        "--------------------------------------------------------------------------------",
+        "| Tool Version : Vivado v.2020.2 (win64)",
+        "| Design       : fixture",
+        "| Device       : 7a100t-fgg484",
+        "--------------------------------------------------------------------------------",
+        "",
+        "Timing Summary Report",
+        "",
+        "    Enable Multi Corner Analysis               :  Yes",
+        "",
+        "    Corner  Analyze    Analyze",
+        "    Name    Max Paths  Min Paths",
+        "    ------  ---------  ---------",
+        "    Slow    Yes        Yes",
+        "    Fast    Yes        Yes",
+        "",
+        "check_timing report",
+        ...Object.entries(checks).map(([name, count]) => `   ${String(count)}. checking ${name} (${count})`),
+        "",
+        "--------------------------------------------------------------------------------",
+        "| Design Timing Summary",
+        "| ---------------------",
+        "--------------------------------------------------------------------------------",
+        "",
+        "    WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)",
+        "    -------      -------  ---------------------  -------------------      -------      -------",
+        numbers,
+        "",
+        extra,
+        ""
+      ].join("\n");
+
+    const runTiming = (file, args = []) =>
+      runTool(projectTool("project-timing-report.mjs"), [file, ...args], timingDir);
+
+    // ① 正常报告：数字必须抠对
+    const okReport = join(timingDir, "ok_timing_summary_routed.rpt");
+    writeFileSync(
+      okReport,
+      makeReport(
+        "        3.134        0.000                      0                  839        0.114        0.000",
+        { no_clock: 0, unconstrained_internal_endpoints: 0, loops: 0 },
+        "  All user specified timing constraints are met."
+      )
+    );
+    const okResult = runTiming(okReport, ["--json"]);
+    let okPayload = null;
+    try {
+      okPayload = JSON.parse(okResult.output);
+    } catch {
+      okPayload = null;
+    }
+    check(okResult.status === 0, `正常报告 → 退 0(实际 ${String(okResult.status)})`, okResult.output.slice(-250));
+    check(okPayload?.summary?.WNS === 3.134, `WNS 抠对了（实际 ${String(okPayload?.summary?.WNS)}）`);
+    check(okPayload?.summary?.WHS === 0.114, `WHS 抠对了（实际 ${String(okPayload?.summary?.WHS)}）`);
+    check(okPayload?.hasConstraints === true, "识别出「有约束」");
+
+    // ② 无约束报告：NA 必须如实转成 null，不能变成 0
+    const naReport = join(timingDir, "na_timing_summary_routed.rpt");
+    writeFileSync(
+      naReport,
+      makeReport(
+        "         NA           NA                     NA                   NA           NA           NA",
+        { no_clock: 0 },
+        "  There are no user specified timing constraints."
+      )
+    );
+    const naResult = runTiming(naReport, ["--json"]);
+    let naPayload = null;
+    try {
+      naPayload = JSON.parse(naResult.output);
+    } catch {
+      naPayload = null;
+    }
+    check(naResult.status === 0, `NA 报告也能解析（不是错误）(实际 ${String(naResult.status)})`);
+    check(naPayload?.summary?.WNS === null, `NA 转成 null 而不是 0（实际 ${JSON.stringify(naPayload?.summary?.WNS)}）`);
+    check(naPayload?.hasConstraints === false, "识别出「无约束」");
+
+    // ③ 关键性质：**工具不给结论**
+    //    报告里有违例数字，工具也必须退 0 —— 判不判由使用者决定。
+    const badReport = join(timingDir, "bad_timing_summary_routed.rpt");
+    writeFileSync(
+      badReport,
+      makeReport(
+        "       -1.234        5.000                     12                  839       -0.050        0.200",
+        { no_clock: 3, unconstrained_internal_endpoints: 7 },
+        "  There are 12 failing endpoints."
+      )
+    );
+    const badResult = runTiming(badReport);
+    check(badResult.status === 0, `有违例也不判 FAIL（退 0，实际 ${String(badResult.status)}）`);
+    check(
+      !/^\s*FAIL\b|\bPASS:/mu.test(badResult.output),
+      "输出里没有 PASS/FAIL 字样（只给数字）"
+    );
+    check(/不给结论/u.test(badResult.output), "明文说明「本工具不给结论」");
+    check(/no_clock: 3/u.test(badResult.output), "非零的 check_timing 如实列出");
+
+    // ④ check_timing 多角重复 —— 必须取最大值
+    const multiCorner = join(timingDir, "multi_timing_summary_routed.rpt");
+    writeFileSync(
+      multiCorner,
+      [
+        "    WNS(ns)   WHS(ns)",
+        "    -------   -------",
+        "      0.100     0.050",
+        "",
+        "  1. checking no_clock (0)",
+        "  4. checking unconstrained_internal_endpoints (0)",
+        "",
+        "  1. checking no_clock (5)",
+        "  4. checking unconstrained_internal_endpoints (2)",
+        ""
+      ].join("\n")
+    );
+    const multiResult = runTiming(multiCorner, ["--json"]);
+    let multiPayload = null;
+    try {
+      multiPayload = JSON.parse(multiResult.output);
+    } catch {
+      multiPayload = null;
+    }
+    check(
+      multiPayload?.checks?.no_clock === 5,
+      `多角重复时取最大值（no_clock 实际 ${String(multiPayload?.checks?.no_clock)}，应为 5）`
+    );
+
+    // ⑤ 不是 timing summary → 退 2，不能假装解析成功
+    const notTiming = join(timingDir, "not_timing.rpt");
+    writeFileSync(notTiming, "some other report\nwith no timing section\n");
+    const notResult = runTiming(notTiming);
+    check(notResult.status === 2, `非时序报告 → 退 2(实际 ${String(notResult.status)})`);
+
+    // ⑥ 目录输入：自动找 routed 那份
+    const dirResult = runTiming(timingDir, ["--json"]);
+    check(
+      dirResult.status === 0 && /routed/u.test(dirResult.output),
+      "给目录时优先选 routed 报告"
+    );
+  }
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");

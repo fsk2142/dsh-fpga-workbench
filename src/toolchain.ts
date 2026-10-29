@@ -245,7 +245,7 @@ export const TOOLS = [
     file: "module-verif-xinit.mjs",
     level: "module",
     stage: "验证环节",
-    what: "查 testbench 声明处初值(logic x = 0 这类),它们把上电的 X 变成确定值、掩盖依赖初值的 bug;有时钟类可豁免项退 3"
+    what: "查两类 X 源头:testbench 声明处初值(logic x = 0)与 RTL 里未做 X 化的存储器(仿真器选项覆盖不到 BRAM/FIFO 数组);有时钟类或初始化文件可豁免项退 3"
   },
   {
     file: "module-verif-uvm-selftest.mjs",
@@ -276,6 +276,12 @@ export const TOOLS = [
     level: "project",
     stage: "约束环节",
     what: "引脚/IO 机器比对:把工程实际分配与板级期望表逐项对照(引脚号、电平标准、驱动、上下拉),并查引脚重复占用;电平不一致会烧器件,所以是阻塞项"
+  },
+  {
+    file: "project-board-selftest.mjs",
+    level: "project",
+    stage: "上板环节",
+    what: "生成 L0–L3 的上板自检 Vivado Tcl(电源配置/时钟锁定/复位释放/寄存器读写),任一级失败即停;寄存器地址需按项目填 TODO,生成的脚本未经真机验证"
   }
 ];
 

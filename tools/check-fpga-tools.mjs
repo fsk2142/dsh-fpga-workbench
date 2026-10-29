@@ -3632,6 +3632,126 @@ if (vsimPath === undefined) {
     check(missResult.status === 1 && /漏约束/u.test(missResult.output), `期望有实际无 → 阻塞(实际 ${String(missResult.status)})`, missResult.output.slice(-250));
     check(/led\[0\]/u.test(missResult.output), "总线端口名 led[0] 被正确解析（含 ] 不截断）");
   }
+
+  // ③ L0–L3 上板自检脚本生成器
+  //
+  // 只验**生成器行为**。生成的 Tcl 没在真机上跑过（本机没接板子，
+  // open_hw_manager 跑不起来；用 ModelSim 的 Tcl 代跑不可行 —— 引号未闭合
+  // 时 info complete 仍判完整，而 Vivado 命令在 ModelSim 里必然报无效命令）。
+  // 所以这里不断言 Tcl 的语法正确性，只断言"生成的东西包含该有的结构"。
+  console.log("\n=== L0–L3 上板自检（project-board-selftest.mjs）===");
+  {
+    const projDir = scratch("board-selftest", {
+      ".fpga-workbench.json": JSON.stringify({ name: "selftest_proj", kind: "project" })
+    });
+    const result = runTool(projectTool("project-board-selftest.mjs"), [projDir], projDir);
+    check(result.status === 0, `生成成功 → 退 0(实际 ${String(result.status)})`, result.output.slice(-250));
+
+    const tclPath = join(projDir, "prj", "board_selftest.tcl");
+    check(existsSync(tclPath), "输出到 prj/board_selftest.tcl");
+    if (existsSync(tclPath)) {
+      const tcl = readFileSync(tclPath, "utf8");
+      check(/L0/u.test(tcl) && /L1/u.test(tcl) && /L2/u.test(tcl) && /L3/u.test(tcl), "含 L0–L3 四段");
+      check(/stop_if_failed/u.test(tcl), "有「失败就停」逻辑（L0/L1 没过不往下走）");
+      check(/connect_hw_server/u.test(tcl) && !/pyjnius/u.test(tcl), "走 hw_server，不依赖 pyjnius");
+      check(/TODO:/u.test(tcl), "标了 TODO 供填寄存器地址");
+      check(/selftest_proj/u.test(tcl), "工程名取自 .fpga-workbench.json");
+    }
+
+    // 缺参数 → 退 2，不能静默生成一个空文件
+    const noArg = runTool(projectTool("project-board-selftest.mjs"), [], projDir);
+    check(noArg.status === 2, `无参数 → 退 2(实际 ${String(noArg.status)})`);
+  }
+
+  // ④ SVA 断言真的能拦住非法状态
+  //
+  // 为什么必须真跑：本机**没有形式化工具**（JasperGold / VC Formal / SymbiYosys / qverify
+  // 全无），SVA 是唯一能在桌面抓「状态机进非法编码」这类不变量的手段。
+  // 只写文档不验证的话，断言写错了也不会有人知道 —— 那比不写更危险。
+  //
+  // 没有 ModelSim 时明确跳过（不把跳过记成 PASS）—— 与文件里其它真机用例同一口径。
+  const svaProbeFd = openSync(join(SANDBOX, "sva-probe.log"), "w");
+  const svaProbe = spawnSync("vsim", ["-c", "-do", "quit -f"], { stdio: ["ignore", svaProbeFd, "ignore"] });
+  closeSync(svaProbeFd);
+  const simAvailable = svaProbe.error === undefined && svaProbe.status === 0;
+
+  if (!simAvailable) {
+    console.log("  SKIP 真机 SVA:本机 vsim 不可用 —— 记 NOT_TESTED");
+  } else {
+    console.log("\n=== SVA 断言（真跑，验证它真的会拦）===");
+    const svaDir = join(SANDBOX, "sva-check");
+    mkdirSync(svaDir, { recursive: true });
+    for (const [rel, text] of Object.entries({
+      "dut.sv": [
+        "module dut(input logic clk, input logic rst_sync_n, input logic go_bad, output logic [2:0] state);",
+        "  always_ff @(posedge clk or negedge rst_sync_n) begin",
+        "    if (!rst_sync_n)      state <= 3'd0;",
+        "    else if (go_bad)      state <= 3'd6;",   // 非法编码
+        "    else if (state < 3'd5) state <= state + 3'd1;",
+        "  end",
+        "endmodule"
+      ].join("\n"),
+      "dut_assertions.sv": [
+        "module dut_assertions(input logic clk, input logic rst_sync_n, input logic [2:0] state);",
+        "  property p_legal;",
+        "    @(posedge clk) disable iff (!rst_sync_n) state <= 3'd5;",
+        "  endproperty",
+        "  ap_legal: assert property (p_legal) else $error(\"[SVA] state=%0d illegal\", state);",
+        "endmodule"
+      ].join("\n"),
+      "tb_ok.sv": [
+        "module tb_ok;",
+        "  logic clk = 0, rst_sync_n = 0, go_bad = 0;",
+        "  logic [2:0] state;",
+        "  dut u(.clk(clk), .rst_sync_n(rst_sync_n), .go_bad(go_bad), .state(state));",
+        "  dut_assertions a(.clk(clk), .rst_sync_n(rst_sync_n), .state(state));",
+        "  always #5 clk = ~clk;",
+        "  initial begin #20 rst_sync_n = 1; #80 $display(\"SVA_LEGAL_OK\"); $finish; end",
+        "endmodule"
+      ].join("\n"),
+      "tb_bad.sv": [
+        "module tb_bad;",
+        "  logic clk = 0, rst_sync_n = 0, go_bad = 0;",
+        "  logic [2:0] state;",
+        "  dut u(.clk(clk), .rst_sync_n(rst_sync_n), .go_bad(go_bad), .state(state));",
+        "  dut_assertions a(.clk(clk), .rst_sync_n(rst_sync_n), .state(state));",
+        "  always #5 clk = ~clk;",
+        "  initial begin #20 rst_sync_n = 1; #10 go_bad = 1; #40 $display(\"SVA_BAD_DONE\"); $finish; end",
+        "endmodule"
+      ].join("\n")
+    })) {
+      writeFileSync(join(svaDir, rel), text);
+    }
+
+    /** 编译并跑一个 top，返回合并输出。 */
+    const runSva = (top) => {
+      const logPath = join(svaDir, `${top}.log`);
+      const fd = openSync(logPath, "w");
+      const compile = spawnSync(
+        "vlog",
+        ["-sv", "-quiet", "dut.sv", "dut_assertions.sv", `${top}.sv`],
+        { cwd: svaDir, stdio: ["ignore", fd, "ignore"] }
+      );
+      closeSync(fd);
+      if (compile.status !== 0) return { status: compile.status, out: readFileSync(logPath, "utf8") };
+      const runLog = join(svaDir, `${top}-run.log`);
+      const runFd = openSync(runLog, "w");
+      const status = spawnSync("vsim", ["-c", "-do", "run -all; quit -f", top], {
+        cwd: svaDir,
+        stdio: ["ignore", runFd, "ignore"]
+      }).status;
+      closeSync(runFd);
+      return { status, out: readFileSync(runLog, "utf8") };
+    };
+
+    const legal = runSva("tb_ok");
+    check(legal.status === 0 && /SVA_LEGAL_OK/u.test(legal.out), `合法设计断言不报(实际 ${String(legal.status)})`, legal.out.slice(-250));
+    check(!/\[SVA\] state=/u.test(legal.out), "合法设计没有断言触发");
+
+    const illegal = runSva("tb_bad");
+    check(/\[SVA\] state=6/u.test(illegal.out), "非法编码被断言拦下（state=6）", illegal.out.slice(-350));
+    check(/\*\* Error/u.test(illegal.out), "ModelSim 把它报成 Error 而不是静默 Note");
+  }
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");

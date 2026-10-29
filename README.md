@@ -69,7 +69,7 @@ node tools/sync-installed.mjs
 
 ### 自检
 
-设置页底部「自检」按钮（点一下才跑，挂载时不请求），按清单核对已装副本的 8 项内容：12 份内置模板文件、16 个自带命令入口及 4 个辅助模块、16 个技能目录及各自的 `SKILL.md` 与 `references/*.md`、运行时子树与 `workspace/AGENTS.fpga.md`、补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录。
+设置页底部「自检」按钮（点一下才跑，挂载时不请求），按清单核对已装副本的 8 项内容：12 份内置模板文件、17 个自带命令入口及 4 个辅助模块、15 个技能目录及各自的 `SKILL.md` 与 `references/*.md`、运行时子树与 `workspace/AGENTS.fpga.md`、补丁里的预设声明行、设置模型版本、已登记工具路径、用户模板库目录。
 
 结论分 `pass` / `warn` / `fail` 三档，缺哪份文件就点名哪份。**只读**：不写设置、不改文件、不起进程。
 
@@ -124,7 +124,7 @@ lib/client.js            浏览器半侧：配置页分区
 presets/fpga-workbench/
     preset.yml           选择器里的名字与描述
     agent.cordis.yml     模式组装：人设 + 工具行 + 模式半侧 + 技能目录
-    skills/              16 个技能，只在本模式可见
+    skills/              15 个技能，只在本模式可见
     templates/           12 份内置模板
     tools/               自带命令（module/ project/ lib/ + 顶层共用）
 tools/                   （不在发布包内）分层自检 + install / sync-installed

@@ -523,7 +523,7 @@ check(
 );
 check(
   !modulePlan.dirs.some((dir) => dir.endsWith("review")),
-  "审查是按需能力,不占目录(报告写 <模块根>/review.md)"
+  "模块骨架不含 review/ 目录(审查环节已移除,判定只看仿真验证与测试)"
 );
 check(modulePlan.anchors.length === 1 && modulePlan.anchors[0].value.kind === "module", "模块级写一个 kind: module 的锚点");
 check(modulePlan.anchors[0].value.spec === "spec/spec.md", "锚点里的 spec 路径相对模块根");

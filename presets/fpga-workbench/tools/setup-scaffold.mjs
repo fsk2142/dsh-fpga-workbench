@@ -71,7 +71,6 @@ export function readModeRules() {
  *
  * 两个刻意的例外:
  * · **机械检查报告跟 RTL 放一起**(`rtl/lint.md`)—— 所以这里没有 lint/ 目录
- * · **审查是按需能力,不占目录** —— 报告写 `<模块根>/review.md`,这里也没有 review/ 目录
  */
 export const MODULE_STAGES = ["spec", "rtl", "verif", "synth"];
 

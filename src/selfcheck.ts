@@ -41,7 +41,6 @@ export { REQUIRED_PRESET_FILES };
  * 两者逐项一致,漏改会在 `npm test` 里红。
  */
 export const BUNDLED_SKILLS = [
-  "fpga-module-review",
   "fpga-module-rtl",
   "fpga-module-spec",
   "fpga-module-synth",

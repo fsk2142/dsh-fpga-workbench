@@ -271,7 +271,7 @@ const readSkillBundle = (skill) => {
 // 机制上靠**两层分工**:
 //   · profile 层(cordis.patch.yml 的宿主行,全局):只挂插件行(设置读写 + 状态/浏览路由);
 //   · 预设层(@deepseek-ai/dsh-agent-preset 的 config.plugins,只有点名本预设的会话挂载):
-//     人设、工具链提示、16 个技能。
+//     人设、工具链提示、15 个技能。
 // 官方 registry 用 @deepseek-ai/dsh-agent-preset 的 isolate 语义隔离这些行;宿主行里出现
 // 提示/技能/模式半侧才会泄漏给所有会话。所以这里只检查**宿主 insert 行**。
 const hostRowText = JSON.stringify(inserted[0] ?? {});
@@ -307,7 +307,7 @@ const skillNames = existsSync(skillDir)
   : [];
 const skillDescriptions = new Map();
 check(skillNames.length > 0, `预设带了至少一个技能(实际 ${skillNames.length} 个)`);
-// 设置页自检按 BUNDLED_SKILLS 这份期望清单核对已装副本(只数目录的话,"16 个变 15 个"照样通过)。
+// 设置页自检按 BUNDLED_SKILLS 这份期望清单核对已装副本(只数目录的话,"15 个变 14 个"照样通过)。
 // 两边必须一致:删技能就得同时改清单,漏改在这里红。
 check(
   BUNDLED_SKILLS.length === skillNames.length && BUNDLED_SKILLS.every((name) => skillNames.includes(name)),
@@ -414,16 +414,16 @@ const skillEntryBytes = skillNames.reduce(
 );
 if (skillEntryBytes > SKILL_ENTRY_BYTES_WARN && skillEntryBytes <= SKILL_ENTRY_BYTES_LIMIT) {
   console.warn(
-    `WARN  16 个入口 SKILL.md 总计 ${String(skillEntryBytes)} B，已超过 ${String(SKILL_ENTRY_BYTES_WARN)} B 的建议值 —— 考虑把细节挪进 references（不阻塞）`
+    `WARN  15 个入口 SKILL.md 总计 ${String(skillEntryBytes)} B，已超过 ${String(SKILL_ENTRY_BYTES_WARN)} B 的建议值 —— 考虑把细节挪进 references（不阻塞）`
   );
 }
 check(
   skillEntryBytes <= SKILL_ENTRY_BYTES_LIMIT,
-  `16 个入口 SKILL.md 总计不超过 ${String(SKILL_ENTRY_BYTES_LIMIT)} B(实际 ${String(skillEntryBytes)} B;建议值 ${String(SKILL_ENTRY_BYTES_WARN)} B)`
+  `15 个入口 SKILL.md 总计不超过 ${String(SKILL_ENTRY_BYTES_LIMIT)} B(实际 ${String(skillEntryBytes)} B;建议值 ${String(SKILL_ENTRY_BYTES_WARN)} B)`
 );
 
 // 技能目录会把全部 description 放进模型可见的能力目录。description 只负责触发、边界与移交，
-// 详细步骤留在按需加载的 SKILL.md；否则 16 个技能会在每轮都占用不必要的上下文。
+// 详细步骤留在按需加载的 SKILL.md；否则 15 个技能会在每轮都占用不必要的上下文。
 const SKILL_DESCRIPTION_CODEPOINT_LIMIT = 220;
 const SKILL_CATALOG_CODEPOINT_LIMIT = 1300;
 const descriptionCodepoints = [...skillDescriptions.entries()].map(([skill, description]) => [
@@ -442,8 +442,6 @@ check(
   `技能 description 目录总长不超过 ${String(SKILL_CATALOG_CODEPOINT_LIMIT)} 个 Unicode 字符(实际 ${String(catalogCodepoints)})`
 );
 
-const reviewDescription = skillDescriptions.get("fpga-module-review") ?? "";
-check(/只审不改/u.test(reviewDescription), "review 的 description 直接声明只审不改");
 const releaseDescription = skillDescriptions.get("fpga-project-release") ?? "";
 check(
   /只在用户明确[\s\S]{0,20}(交付|发布)/u.test(releaseDescription),
@@ -497,15 +495,16 @@ check(
   "project-rtl 只判 BD 文件与复现步骤,elaborate 结论归 project-integrate"
 );
 
-// ── 级别划分清楚:模块 5 个 / 工程 11 个 ─────────────────────────────────────
-// 模块级五个 = 四个环节(spec/rtl/verif/synth)+ 审查(按需能力,不占目录)
+// ── 级别划分清楚:模块 4 个 / 工程 11 个 ─────────────────────────────────────
+// 模块级四个 = 四个环节(spec/rtl/verif/synth)。审查环节已移除(2026-10-29 用户定案:
+// 判定只看仿真验证与测试能否通过)。
 const moduleSkills = skillNames.filter((name) => name.startsWith("fpga-module-"));
 const projectSkills = skillNames.filter((name) => name.startsWith("fpga-project-"));
 check(
   moduleSkills.length + projectSkills.length === skillNames.length,
   `每个技能都能看出属于哪一级(没前缀的:${skillNames.filter((name) => !/^fpga-(module|project)-/u.test(name)).join("、") || "无"})`
 );
-check(moduleSkills.length === 5, `模块级 5 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
+check(moduleSkills.length === 4, `模块级 4 个(实际 ${moduleSkills.length}:${moduleSkills.join("、")})`);
 check(projectSkills.length === 11, `工程级 11 个(实际 ${projectSkills.length}:${projectSkills.join("、")})`);
 // 工程级各篇都要有「前置」与「产物」两节:前置条件不该散在正文里,
 // 产物是这一环节的交付物。审计那一篇按用户口径删掉了(验证已经覆盖它),所以不在这里。
@@ -709,10 +708,6 @@ check(
   /rtl\/lint\.md/u.test(readSkillBundle("fpga-module-rtl")),
   "机械检查报告写在 rtl/lint.md"
 );
-check(
-  /<模块根>\/review\.md/u.test(readSkillBundle("fpga-module-review")),
-  "审查报告写在 <模块根>/review.md"
-);
 // 综合环节要同时管门禁与时序(用户口径);验证环节的产物落 verif/
 const synthSkillText = readSkillBundle("fpga-module-synth");
 check(
@@ -897,7 +892,6 @@ const VERDICT_SETS = {
   "fpga-module-rtl": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-synth": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE"],
   "fpga-module-verif": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
-  "fpga-module-review": ["APPROVED", "CHANGES_REQUESTED", "BLOCKED"],
   // 工程级各篇环节报告都用同一套五个词
   "fpga-project-spec": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
   "fpga-project-integrate": ["PASS", "FAIL", "BLOCKED", "UNVERIFIED", "NOT_APPLICABLE"],
@@ -1203,11 +1197,6 @@ check(
   /摘要/u.test(verifText) && /--record/u.test(verifText),
   "verif 技能写明:检查也看「依据的摘要变没变」,以及 --record 怎么记"
 );
-const reviewText = readSkillBundle("fpga-module-review");
-check(
-  /module-report-check\.mjs/u.test(reviewText),
-  "review 技能把证据路径校验收进审查清单"
-);
 // 一个文件写不下就拆子模块(用户 2026-09-19 指出原来缺这条):要写明**什么时候拆**
 // (一个文件写不完整块逻辑就拆),而且**判据是功能、不是代码行数**(用户当场点明),
 // 以及要用现成的子模块时先问用户"他提供还是本环节写" —— 与 IP 那条同一套问法。
@@ -1415,10 +1404,8 @@ check(
   tableCopies.length === 1 && tableCopies[0] === "fpga-module-verif",
   `五行状态表只有一份权威(实际:${tableCopies.join("、") || "无"})`
 );
-// 每个会写判定词结论的技能都要引这张表(review 用的是 approved / changes requested,不在这一套里)
-const verdictRefSkills = Object.keys(VERDICT_SETS).filter(
-  (skill) => skill !== "fpga-module-verif" && skill !== "fpga-module-review"
-);
+// 每个会写判定词结论的技能都要引这张表(verif 自己是权威,不用引自己)
+const verdictRefSkills = Object.keys(VERDICT_SETS).filter((skill) => skill !== "fpga-module-verif");
 for (const skill of verdictRefSkills) {
   const text = readSkillBundle(skill);
   check(

@@ -218,7 +218,7 @@ export function hasDigestBlock(text) {
  * 一个模块里被引用的证据路径清单。
  *
  * 扫描范围**刻意收窄**到"给判定词撑腰的那几份":`spec/spec.md` 的 AC 行、`verif/*.md`、`synth/*.md`。
- * 不含 `review.md`(按需报告,写的是**当时**的事)与 `*explore*.md`(探索产物)—— 它们引用后来
+ * 不含 `*explore*.md`(探索产物) —— 它们引用后来
  * 被移走/改名的路径是正常的,拿它们判 FAIL 只会变成噪音。
  * @param moduleRoot - 模块根。
  * @returns `{ files, missing, concluded }`:`files` 每项 `{ file, paths }`;

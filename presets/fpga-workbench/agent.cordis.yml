@@ -52,7 +52,6 @@
       | 跑模块综合、解释报错、看资源与综合后时序 | fpga-module-synth |
       | 跑工程综合、看资源与综合后时序摘要 | fpga-project-synth |
       | 判工程级 post-route 时序是否收敛 | fpga-project-timing |
-      | 审代码或方案、查早期风险、通盘看东西齐不齐对不对 | fpga-module-review(按需,不强制) |
       | 顶层骨架、接口对接、elaboration | fpga-project-integrate |
       | 管脚、时钟、IO 标准 | fpga-project-constraints |
       | 多模块联仿、接口与背压 | fpga-project-syssim |

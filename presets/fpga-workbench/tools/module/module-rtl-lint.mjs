@@ -70,7 +70,7 @@ const IMPORTANT = new Set([
 ]);
 
 const usage = () => {
-  console.error("用法：node module-lint-verilator.mjs <模块根> [--json] [--strict-modules] [--verilator <路径>]");
+  console.error("用法：node module-rtl-lint.mjs <模块根> [--json] [--strict-modules] [--verilator <路径>]");
   console.error("");
   console.error("  <模块根>            含 rtl/ 的目录；扫 rtl/ 下所有 .v/.sv");
   console.error("  --json              输出机器可读 JSON");
@@ -130,23 +130,30 @@ const toMsysPath = (path) => {
 /** 单引号转义，供 bash -lc 使用。 */
 const shellQuote = (text) => `'${text.replace(/'/gu, "'\\''")}'`;
 
-/**
- * 跑一次 verilator lint。
- * @returns `{ ok, status, stdout, stderr }`。
- */
 const runVerilator = (bash, sources, strictModules, verilatorPath) => {
   const dir = resolve(sources[0], "..");
   const files = sources.map((file) => shellQuote(toMsysPath(file))).join(" ");
 
   // `-Wno-MODMISSING`：Vivado XPM/IP 不在 Verilator 库里。严格模式下不加。
   const weaken = strictModules ? "" : "-Wno-MODMISSING -Wno-PINMISSING ";
+
   const binary = verilatorPath === "" ? "verilator" : shellQuote(toMsysPath(verilatorPath));
+
+  // **`-Wall` 不含 WIDTH 系列，必须显式打开**（2026-10-29）。
+  //
+  // 位宽隐式截断/扩展是溢出 bug 的主要来源，也是「仿真对、上板错」的常见根因：
+  // 仿真在赋值处截断，综合可能按不同宽度优化。
+  //
+  // 只加 `-Wwarn-WIDTH` 一个就够 —— 它是父类，打开后 trunc/expand 的细分都会报出来。
+  // 不去分别试 WIDTHTRUNC / WIDTHEXPAND：那是更细的分类名，各版本支持不一致，
+  // 逐个探测会让每条命令多跑几次进程、还要往用户目录写探针文件，得不偿失。
+  const widthWarnings = "-Wwarn-WIDTH ";
 
   // 固定走 msys2 bash：Verilator 的 VERILATOR_ROOT 是 unix 路径，Windows 直调解析不到。
   const script = [
     "export PATH=/mingw64/bin:/usr/bin:$PATH",
     `cd ${shellQuote(toMsysPath(dir))}`,
-    `${binary} --lint-only -Wall -Wno-fatal ${weaken}${files} 2>&1`
+    `${binary} --lint-only -Wall -Wno-fatal ${widthWarnings}${weaken}${files} 2>&1`
   ].join(" && ");
 
   const result = spawnSync(bash, ["-lc", script], { encoding: "utf8", timeout: 600_000 });

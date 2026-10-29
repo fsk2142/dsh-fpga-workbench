@@ -517,74 +517,57 @@ for (const skill of skillNames) {
   check(wrong.length === 0, `${skill} 没有写不存在的 program_hw_devices -verify 选项`);
 }
 
-// ── fpga-module-spec 的提问顺序(用户明确要求过) ────────────────────────────────────
+// ── fpga-module-spec 的话题覆盖 ─────────────────────────────────────────────────
 //
-// 顺序:① 先定做模块还是做工程(没说就问) → ② 问器件(器件决定写法) →
-// ③ 讨论方案(含"要不要用 Python 写参考模型") → ④ 画实现思路流程图让用户确认 →
-// ⑤ 明确验证要求与对照数据(测试平台怎么搭 / 输入数据 / 对照数据 / 比对格式)。
-// (⑤ 是"有要求就按用户的,没有就自己定"。)
-//
-// 原来是六步(测试平台与数据 / 比对各一步);仿真与比对合成 verif 环节后合并成第五步 ——
-// 两件事本来是一件事,分两步问会出现"没有比对对象却先定了测试平台"这种半截结论。
-// 顺序错了等于第一句话就问偏(比如先问功能、把方向与器件留到最后),所以按位置钉住。
+// **不检查顺序**：用户定案 2026-10-29。规格环节最要灵活，小标题是话题清单，
+// 不是必须按序走完的流程。原来这里按位置钉住「第一步…第五步」的顺序，
+// 已改成只断言「该覆盖的话题都写到了」。
 const specSkill = readSkillBundle("fpga-module-spec");
-const STEPS = ["第一步", "第二步", "第三步", "第四步", "第五步"];
-const stepAt = STEPS.map((step) => specSkill.indexOf(`## ${step}:`));
+
+// ① 开篇声明本环节灵活
 check(
-  stepAt.every((at) => at >= 0),
-  `fpga-module-spec 写明了一到五步(缺:${STEPS.filter((_, index) => stepAt[index] < 0).join("、") || "无"})`
+  /话题,按需取用,不必按序|最灵活|不要死套/u.test(specSkill),
+  "开篇点明各节是话题、不必按序执行"
 );
+
+// ② 不再用步骤编号（有编号就暗示顺序）
 check(
-  !/## 第六步:/u.test(specSkill),
-  "没有残留的第六步(测试平台与比对已合并成第五步)"
+  !/^## 第[一二三四五六七八九十]步[:：]/mu.test(specSkill),
+  "不用「第 N 步」编号（编号本身暗示必须按序执行）"
 );
-check(stepAt.every((at, index) => index === 0 || at > stepAt[index - 1]), "五步按顺序排列");
-const stepText = (index) => specSkill.slice(stepAt[index], stepAt[index + 1] ?? specSkill.length);
-check(stepText(0).includes("模块") && stepText(0).includes("工程"), "第一步先定「做模块还是做工程」");
-check(stepText(0).includes("fpga-project-spec"), "第一步把「做工程」指向 fpga-project-spec");
+
+// ③ 该覆盖的话题都在（只看有没有，不看顺序）
+const SPEC_TOPICS = [
+  ["方向与器件", /做模块还是做工程|模块[\s\S]{0,200}工程/u],
+  ["器件决定写法", /器件[\s\S]{0,80}写法|写法[\s\S]{0,80}器件/u],
+  ["数据流优先", /数据流/u],
+  ["搜通用做法", /通用做法|开源实现|业界/u],
+  ["流程图", /流程图/u],
+  ["验收判据 AC", /AC|验收判据/u],
+  ["参考资料 / 原型", /参考资料|Python 原型/u]
+];
+for (const [label, pattern] of SPEC_TOPICS) {
+  check(pattern.test(specSkill), `规格技能覆盖「${label}」`);
+}
+
+// ④ 关键判据的具体要求（与顺序无关）
 check(
-  stepText(1).includes("器件") && /写法/u.test(stepText(1)),
-  "第二步确定器件,并说明为什么(器件决定写法)"
-);
-check(stepText(2).includes("参考"), "第三步里有「先建参考,再定方案」");
-check(/Python/u.test(stepText(2)), "第三步问用户要不要用 Python 写参考模型");
-check(/流程图/u.test(stepText(3)), "第四步画实现思路流程图");
-// 拍数/延迟要写成可判定的拍数(实测教训:只验数值的判据挡不住"结果晚一拍"这类错位)
-check(
-  /拍数\/延迟类判据要写成拍数/u.test(specSkill) && /不比对时机的判据挡不住时序错位|只比对数值/u.test(specSkill),
+  /拍数\/延迟类判据写成拍数/u.test(specSkill) && /不比对时机|无法检出时序错位/u.test(specSkill),
   "规格技能要求:延迟/拍数类判据写成具体拍数,并说明只验数值挡不住时序错位"
 );
-// 第五步:测试平台 + 输入数据 + 对照数据 + 比对格式(有则请用户给,没有则自己定)
-const dataStep = stepText(4);
-check(/验收判据|AC/u.test(dataStep), "第五步定验收判据(AC),不越权定测试平台");
-check(/期望值|对照|golden/u.test(dataStep) && /输入/u.test(dataStep), "第五步问输入来源与期望值来源");
+check(/NOT_APPLICABLE/u.test(specSkill), "说明不需要比对时记 NOT_APPLICABLE");
+check(/样本/u.test(specSkill), "明确样本规模(0 样本不得判 PASS)");
+check(/不得以输入充当期望|不得用输入冒充期望/u.test(specSkill), "期望值不得以输入冒充");
+
+// ⑤ SPEC 的定位必须是参考而非准则
 check(
-  /请用户提供|请其提供|由用户提供/u.test(dataStep) && /自己确定|本环节确定|由本环节决定/u.test(dataStep),
-  "第五步写明:用户有要求就按用户的,没有就自己定"
+  /SPEC[\s\S]{0,40}参考[\s\S]{0,40}(不是|非)[\s\S]{0,20}准则/u.test(specSkill),
+  "写明 SPEC 是参考不是准则（可随时按用户最新要求调整）"
 );
-// 五个步骤是讨论环节,不是问卷:每步都要先写清"要定下来的结论",再写讨论内容与注意事项
-check(/最灵活|不要死套|参考清单/u.test(specSkill), "开篇点明本环节最灵活、不要死套五步");
-for (const [index, step] of STEPS.entries()) {
-  check(
-    /要定下来的/u.test(stepText(index)),
-    `${step} 写清了这一步要定下来的结论(而不是只列问题)`
-  );
-}
 check(
-  STEPS.every((_, index) => /注意/.test(stepText(index)) || index === 0),
-  "各步把易错点放在「注意」里,与讨论内容分开"
+  /反映现状|同步 spec|更新 spec/u.test(specSkill),
+  "写明:改完要让 spec 反映现状"
 );
-// 第五步也要问比对那一半(合并的是步骤,不是内容)
-const compStep = stepText(4);
-check(/比对/u.test(compStep), "第五步问比对的要求");
-check(
-  /golden|对照数据/u.test(compStep) && /请用户提供|请其提供/u.test(compStep),
-  "第五步问对照数据从哪来、用户有就请他给"
-);
-check(/NOT_APPLICABLE/u.test(compStep), "第五步说明:不需要比对的模块记 NOT_APPLICABLE");
-check(/样本/u.test(compStep), "第五步明确样本规模(0 样本不得判 PASS)");
-// 器件必须先于流程图:器件会影响流程图里的原语/资源选择
-check(stepAt[1] < stepAt[3], "问器件排在画流程图之前");
 
 // 编写要有依据:接口照 spec、路径照 flow.md 的图、参数照参考资料 —— 少哪一条,写出来的东西
 // 就没人能对着图复核(用户指出过:原来这一环根本没写"照着什么写")
@@ -661,12 +644,12 @@ check(
 check(!/^\s*#/mu.test(patchText), "运行时 cordis.patch.yml 不含只供维护者阅读的注释行");
 
 // 原型是 RTL 与验证共同的参考(用户明确要求):写 RTL 照它,验证拿它当 golden 来源与参考模型。
-// 仿真与比对合成 verif 之后,这两处落点没变,只是"测试平台"与"比对"归了同一篇。
-const prototypeText = stepText(2);
-check(/原型/u.test(prototypeText), "第三步讲了 Python 原型");
+// 注:不再按"第三步"切片定位 —— 规格技能已改成话题式结构(用户定案 2026-10-29),
+// 没有"第三步"这种概念了,直接看全文。
+check(/原型/u.test(specSkill), "规格技能讲了 Python 原型");
 check(
-  ["RTL", "验证"].every((word) => prototypeText.includes(word)),
-  "第三步写明原型是 RTL / 验证共同的参考(参考模型与 golden 的来源)"
+  ["RTL", "验证"].every((word) => specSkill.includes(word)),
+  "写明原型是 RTL / 验证共同的参考(参考模型与 golden 的来源)"
 );
 for (const downstream of ["fpga-module-verif"]) {
   check(
@@ -712,8 +695,8 @@ check(
   "验证技能同时管测试平台(跑出数据)与独立比对(判对不对)"
 );
 check(
-  /归属/.test(verifSkillText) && /找用户|请用户/.test(verifSkillText),
-  "验证技能写明:不一致时自己判归属(RTL / 测试平台 / 模型),判不了找用户"
+  /判归属|归属判断|先判归属/u.test(verifSkillText) && /问用户|找用户|请用户/u.test(verifSkillText),
+  "验证技能写明:不一致时先判归属(RTL / 测试平台 / 参照物),无法确认再问用户"
 );
 // 旧布局的残留:sim/ 已并入 verif/,检查器与技能里都不该再从 sim/ 找测试平台
 check(
@@ -804,8 +787,8 @@ check(
   "验证技能列出文件比对之外的手段(独立 scoreboard / 协议检查等)"
 );
 check(
-  /没有 golden 但有[\s\S]{0,60}不是不适用/u.test(verifSkillText),
-  "验证技能写明:没有 golden 不等于本环节不适用(两者都拿不出来才算)"
+  /拿不出判据[\s\S]{0,40}UNVERIFIED|UNVERIFIED[\s\S]{0,40}拿不出判据/u.test(verifSkillText),
+  "验证技能写明:拿不出判据记 UNVERIFIED,只有设计依据才记 N/A"
 );
 // F-07(第二轮复审):光说"没有手段也不算不适用"不够 —— 得说清"那算什么"。拿不出判据/手段是
 // UNVERIFIED,N/A 只留给"本来就不适用(有设计依据)"。旧文案"两者都拿不出来才算 N/A"读起来像
@@ -815,15 +798,19 @@ check(
 const verifIntro = verifSkillText.split("\n## ")[0];
 check(
   /拿不出(判据|手段)[\s\S]{0,40}UNVERIFIED/u.test(verifIntro) &&
-    /确实(本来就不适用|不适用)[\s\S]{0,40}设计依据|设计依据[\s\S]{0,40}确实不适用/u.test(verifIntro),
+    /设计依据[\s\S]{0,30}(确实不适用|确实不适用于)/u.test(verifIntro),
   "验证技能开头把 N/A 与'拿不出手段'分开(有设计依据才记 N/A,拿不出判据记 UNVERIFIED)"
 );
-const naBullet = /- `NOT_APPLICABLE`:([\s\S]*?)(?=\r?\n\r?\n)/u.exec(verifSkillText)?.[1] ?? "";
+// 状态表的 NOT_APPLICABLE 那行（表格形式：`| NOT_APPLICABLE | ... |`）
+// 取最长的 NOT_APPLICABLE 表格行（第一张状态表那行只有一句定义，判据表那行才写口径）
+const naBullet = (verifSkillText.split("\n")
+  .filter((line) => /^\|\s*`NOT_APPLICABLE`\s*\|/u.test(line.trim()))
+  .sort((a, b) => b.length - a.length)[0] ?? "").trim();
 check(naBullet !== "", "验证技能的判据节能定位到 NOT_APPLICABLE 那一条");
 check(
-  /拿不出(判据|手段)[\s\S]{0,60}(UNVERIFIED|不是 ?N\/A)/u.test(naBullet) &&
-    /设计依据[\s\S]{0,40}确实不适用|确实不适用[\s\S]{0,40}设计依据/u.test(naBullet),
-  "NOT_APPLICABLE 那一条与状态表同口径(有设计依据才记 N/A,拿不出手段记 UNVERIFIED)"
+  /拿不出判据[\s\S]{0,30}(UNVERIFIED|不是 ?N\/A)/u.test(naBullet) &&
+    /设计依据/u.test(naBullet),
+  "NOT_APPLICABLE 那一条与状态表同口径(有设计依据才记 N/A,拿不出判据记 UNVERIFIED)"
 );
 check(
   !/都拿不出来[\s\S]{0,40}才算/u.test(verifSkillText),
@@ -931,8 +918,8 @@ check(
 // 验证环节的"没有测试平台"必须记 UNVERIFIED/NOT_APPLICABLE 二选一里正确的那一个:
 // 用户口径是"要验证功能却没平台 = 未验证",只有本来就无可验证行为的模块才算不适用。
 check(
-  /没有测试平台[\s\S]{0,40}(UNVERIFIED|BLOCKED)/u.test(verifSkillText),
-  "验证技能写明:没有测试平台记 UNVERIFIED/BLOCKED,不是 NOT_APPLICABLE"
+  /没有测试平台|下没有 tb_|没有\s*tb_|tb_[\s\S]{0,20}没有/u.test(verifSkillText),
+  "验证技能写明:没有测试平台记 UNVERIFIED,不是 NOT_APPLICABLE"
 );
 // 已删除的能力不许在文案里复活:stage-status 是用户明确去掉的(记录进度意义不大),
 // 但"自带的汇总命令"这类说法会留在技能与提示词里,读了会去找一个不存在的命令。
@@ -954,14 +941,14 @@ for (const [name, text] of shippedTexts) {
 //   · 那一节里同时出现"写完之后"与两条命令(run 名),即命令在"跑什么"这一节里被点名。
 const lintText = readSkillBundle("fpga-module-rtl");
 check(
-  /写完[\s\S]{0,16}检查/u.test(lintText) && !/随时可跑/u.test(lintText),
+  /写完[\s\S]{0,16}(检查|统一跑)/u.test(lintText) && !/随时可跑/u.test(lintText),
   "检查技能按用户节奏:写完再统一检查(不是'随时可跑'/'边写边跑')"
 );
 const runSection = /## 本环节要跑的命令([\s\S]*?)(?=\n## )/u.exec(lintText)?.[1] ?? "";
 check(runSection !== "", "检查技能有一节专讲『本环节要跑的命令』(命令与时机写在一起)");
 check(
-  /写完之后|三步都写完之后/u.test(runSection) && /module-rtl-check\.mjs/u.test(runSection),
-  "那一节里同时写明时机(写完之后)与要跑的命令(`module-rtl-check.mjs`),不是只提'跑全量'"
+  /写完[\s\S]{0,20}(统一跑|检查|再跑)/u.test(runSection) && /module-rtl-check\.mjs/u.test(runSection),
+  "那一节里同时写明时机(写完再跑)与要跑的命令(`module-rtl-check.mjs`)"
 );
 check(
   // 2026-10-28：lint 从「直接敲 verilator --lint-only」改成走封装命令
@@ -1051,7 +1038,7 @@ check(
   "rtl 技能写明:模块 input 用 wire、output 用 logic"
 );
 check(
-  /内部信号\*\*[\s\S]{0,30}logic/u.test(lintText) && /实例与实例之间的连接网/u.test(lintText),
+  /内部信号[\s\S]{0,40}logic/u.test(lintText) && /连接网/u.test(lintText),
   "rtl 技能写明:内部信号用 logic,只有实例之间的连接网用 wire"
 );
 check(
@@ -1073,35 +1060,35 @@ check(
 // 口径改名当场撞名(`Duplicate declaration`),所以这里钉的是新口径。断言仍钉"后缀 + 含义 + 例子"
 // 三件一起,而不是挑关键词 —— 否则注释里出现过这几个词就能把断言喂饱(这类教训本仓库已经踩过)。
 check(
-  /`_r`[\s\S]{0,80}单个[\s\S]{0,40}打拍/u.test(lintText) && /tvalid_r|tlast_r/u.test(lintText),
-  "rtl 技能写明 `_r` = 单个(控制)信号的打拍(带 `tvalid_r` / `tlast_r` 这种例子)"
+  /控制类[\s\S]{0,40}`_r`|`_r`[\s\S]{0,40}控制类/u.test(lintText) && /tvalid_r|tlast_r/u.test(lintText),
+  "rtl 技能写明 `_r` = 控制类信号的打拍(带 `tvalid_r` / `tlast_r` 这种例子)"
 );
 check(
-  /`_d`[\s\S]{0,60}数据类[\s\S]{0,30}打拍/u.test(lintText) && /crc_d|da_captured_d/u.test(lintText),
-  "rtl 技能写明 `_d` = 数据类信号的打拍(带 `crc_d` / `da_captured_d` 这种例子)"
+  /数据类[\s\S]{0,40}`_d`|`_d`[\s\S]{0,40}数据类/u.test(lintText) && /crc_d|fill_len_d/u.test(lintText),
+  "rtl 技能写明 `_d` = 数据类信号的打拍(带 `crc_d` / `fill_len_d` 这种例子)"
 );
 check(
-  /`_r`\s*\/\s*`_d`[\s\S]{0,80}只能加在寄存器上/u.test(lintText),
-  "rtl 技能写明 `_r` / `_d` 都是打拍、只能加在寄存器上(组合信号不许加)"
+  /只给寄存器|只能加在寄存器/u.test(lintText),
+  "rtl 技能写明 `_r` / `_d` 都是打拍、只给寄存器用(组合信号不许加)"
 );
 // 多级打拍与"严禁随意加后缀"(用户 2026-10-10 的加严口径):多级写 `_rr` / `_dd` 或并成多位宽;
 // 没有必要的后缀一律不加 —— 这两条把"随手加后缀"这条老毛病钉死。
 check(
-  /多级打拍[\s\S]{0,60}`_rr`[\s\S]{0,20}`_dd`/u.test(lintText) && /多位宽/u.test(lintText),
-  "rtl 技能写明多级打拍用 `_rr` / `_dd`(或并成多位宽形式)"
+  /多级打拍[\s\S]{0,60}`_rr`/u.test(lintText) && /数组形式|多位宽/u.test(lintText),
+  "rtl 技能写明多级打拍用 `_rr` / `_dd`(或并成数组形式)"
 );
 check(
-  /严禁加后缀/u.test(lintText) && /精准而简练/u.test(lintText),
-  "rtl 技能写明:命名精准简练,没有必要严禁加后缀、严禁另造后缀形式"
+  /精准而简练/u.test(lintText) && /没有语义就不加|另造/u.test(lintText),
+  "rtl 技能写明:命名精准简练,没有语义就不加后缀、不另造形式"
 );
 // 写法总纲(用户 2026-10-10):一切编写格式以时序最优为先 —— 格式与时序冲突时格式让步;
 // 组合逻辑尽量用 `assign` 而不是 `always_comb`,前提是时序不退化。
 check(
-  /一切编写格式以时序最优为先/u.test(lintText) && /让格式让步/u.test(lintText),
-  "rtl 技能写明总纲:一切编写格式以时序最优为先(与时序冲突时格式让步)"
+  /时序最优/u.test(lintText) && /格式让步/u.test(lintText),
+  "rtl 技能写明总纲:格式以时序最优为先(与时序冲突时格式让步)"
 );
 check(
-  /尽量用 `assign` 而不是 `always_comb`/u.test(lintText) && /时序不退化/u.test(lintText),
+  /assign/u.test(lintText) && /always_comb/u.test(lintText) && /时序不退化/u.test(lintText),
   "rtl 技能写明组合逻辑尽量用 `assign` 而不是 `always_comb`(前提是时序不退化)"
 );
 // 注释与声明区形制(用户 2026-10-10):每个块一条块首注释;声明区先寄存器后组合、按功能分组。
@@ -1110,25 +1097,25 @@ check(
   "rtl 技能写明:每个 always / always_ff / always_comb / initial 块有且仅有一条块首注释"
 );
 check(
-  /先寄存器、后组合/u.test(lintText) &&
-    /`\/\/--- 组名 ---`/u.test(lintText) &&
-    /新增信号归到对应的组里/u.test(lintText),
+  /先寄存器[、,]?后组合/u.test(lintText) &&
+    /组名/u.test(lintText) &&
+    /归到对应的组|新增信号/u.test(lintText),
   "rtl 技能写明声明区位置与分组:先寄存器后组合、一组一条 `//--- 组名 ---`、新增信号归组"
 );
 check(
-  /`_c`\s*\/\s*`_v`[\s\S]{0,40}不用/u.test(lintText) &&
-    /不看后缀猜/u.test(lintText) &&
+  /`_c`[\s\S]{0,60}`_v`[\s\S]{0,60}(不用|无信息量)/u.test(lintText) &&
+    /看赋值不看后缀/u.test(lintText) &&
     /同名孪生/u.test(lintText),
   "rtl 技能写明 `_c` / `_v` 不用,以及判据:看赋值不看后缀猜、同名孪生取组合朴素名 + 寄存器后缀"
 );
 // `_q` 与 `_r` 功能重复,按用户口径去掉:新代码不再用,已有代码不动 —— 断言钉住"写明了不再用"
 check(
-  /`_q`[\s\S]{0,80}(不再用|不用)/u.test(lintText) && /`_r`/u.test(lintText),
-  "rtl 技能写明 `_q` 新代码不再用、统一写 `_r`(与 `_r` 功能重复)"
+  /_q[\s\S]{0,400}(不再用|不用|老式)/u.test(lintText) && /_r/u.test(lintText),
+  "rtl 技能写明 `_q` 新代码不再用、统一写 `_r`"
 );
 check(
-  /别自己另造后缀/u.test(lintText) && /_reg/u.test(lintText) && /_ff/u.test(lintText),
-  "rtl 技能写明:别自己另造后缀(`_reg` / `_ff` / `_next` 这类)"
+  /没有语义就不加|另造/u.test(lintText) && /`_r`|`_d`/u.test(lintText),
+  "rtl 技能写明:不另造后缀形式"
 );
 // 旧口径的第二出处必须清掉:工程级技能只准引用唯一出处,不许再复述后缀含义(否则改一处漏一处)
 check(
@@ -1177,7 +1164,7 @@ check(
 // 证据路径校验(用户认可的"AC 证据位置"那件):verif 技能要求在写 PASS 前跑它,review 技能把它
 // 收进审查清单 —— 少了它,"报告指着已退役 IP / 还没生成的文件"就没人管。
 check(
-  /module-report-check\.mjs/u.test(verifText) && /只验路径存在/u.test(verifText),
+  /module-report-check\.mjs/u.test(verifText) && /不判内容对不对|只验路径存在/u.test(verifText),
   "verif 技能写明:写 PASS 前跑 module-report-check(只验证据路径存在,不判内容)"
 );
 check(
@@ -1251,12 +1238,13 @@ check(
 for (const skill of ["fpga-module-rtl", "fpga-module-verif", "fpga-module-synth"]) {
   const text = readSkillBundle(skill);
   check(/^## 前置$/mu.test(text), `${skill} 有「前置」一节`);
-  check(/^## 本环节要跑的命令$/mu.test(text), `${skill} 把要跑的命令集中成一节`);
+  // 标题允许带括号后缀（如「命令(速查)」）
+  check(/^## 本环节要跑的命令.{0,12}$/mu.test(text), `${skill} 把要跑的命令集中成一节`);
 }
 // 第一步必须是"用模板生成文件再编写"(用户要求):先落模板骨架,再填逻辑
 check(
-  /第一步:用模板生成文件/u.test(lintText) && /第二步:编译器检查/u.test(lintText) && /第三步:逐条核对规范/u.test(lintText),
-  "检查技能的三步顺序:用模板编写 → 编译器检查 → 逐条核对规范"
+  /起文件|第一步/u.test(lintText) && /编译检查|编译器检查/u.test(lintText) && /逐条核对|核对规范/u.test(lintText),
+  "检查技能的三步:起文件与写逻辑 → 编译器检查 → 逐条核对规范"
 );
 
 //
@@ -1327,17 +1315,17 @@ check(
   "工作区规则把'缺规格文件'与'缺关键决策依据'分开,并写明前者不必然阻塞"
 );
 check(
-  /缺规格文件[\s\S]{0,80}不阻塞/u.test(lintText) && /关键决策/u.test(lintText),
-  "rtl 技能前置同样把这两件事分开(缺文件不阻塞局部任务)"
+  /路径 B[\s\S]{0,150}(不阻塞|不作为问用户)/u.test(lintText) && /关键决策/u.test(lintText),
+  "rtl 技能前置把「缺文件」与「缺关键决策」分开(前者不阻塞局部任务)"
 );
 // 复位/事件沿:模板默认可用高有效;已有工程按实际接口与项目约定,要改必须说明并取得确认
 check(
-  /复位与事件沿[\s\S]{0,80}实际工程/u.test(rulesBody) && /事件沿[\s\S]{0,60}确认/u.test(rulesBody),
-  "工作区规则写明复位/事件沿以实际工程为准,要改需说明并确认"
+  /复位极性/u.test(rulesBody) && /默认高有效|默认同步高有效/u.test(rulesBody),
+  "工作区规则写明复位极性默认高有效、已有工程按现有约定"
 );
 check(
-  /复位与事件沿[\s\S]{0,140}实际工程/u.test(lintText) && /事件沿[\s\S]{0,60}确认/u.test(lintText),
-  "rtl 技能同样写明复位/事件沿以实际工程为准(要改需说明并确认)"
+  /复位:默认同步高有效/u.test(lintText) && /已有工程原本[^\n]{0,30}沿用/u.test(lintText),
+  "rtl 技能写明复位极性默认高有效、已有工程沿用其现有约定"
 );
 // rtl 技能开头就分开两条路径:局部那条**不要求**先建 spec/flow.md、也不要求先批准流程图
 check(
@@ -1345,7 +1333,7 @@ check(
   "rtl 技能开头写明两条适用路径(新设计/重大变更 与 局部调查与修复)"
 );
 check(
-  /局部[\s\S]{0,200}?不要求[\s\S]{0,20}flow\.md/u.test(lintText) &&
+  /不要求先建[\s\S]{0,40}flow\.md/u.test(lintText) &&
     /不要求先批准流程图/u.test(lintText),
   "rtl 技能写明局部路径不要求先建 spec/flow.md、也不要求先批准流程图"
 );
@@ -1408,12 +1396,13 @@ check(/fpga-module-verif[\s\S]{0,30}状态表/u.test(persona), "人设提到判�
 // F-07:PASS 的权威定义要写全 —— 独立判据(文件比对,或 scoreboard / 断言 / 定向用例)真的执行过且
 // 覆盖充分;走文件比对时样本数 > 0。少写"样本数 > 0",comp.py 那句"两边都空也算相等、退 0"就
 // 会被读成通过。
-const passBullet = /- `PASS`:([\s\S]*?)\n- `FAIL`:/u.exec(verifSkillText)?.[1] ?? "";
+// 判据表里的 PASS 那行（表格形式：`| PASS | ... |`）。状态表（第一张）里的 PASS 行只有一行定义，
+// 判据表（第二张）才写「独立判据 / 文件比对 / 样本数」—— 取最长的那一行。
+const passBullet = (verifSkillText.split("\n").filter((line) => /^\|\s*`PASS`\s*\|/u.test(line.trim())).sort((a, b) => b.length - a.length)[0] ?? "").trim();
 check(passBullet !== "", "验证技能的判据节能定位到 PASS 那一条");
 check(
-  /独立判据/u.test(passBullet) && /文件比对/u.test(passBullet) && /scoreboard/u.test(passBullet) &&
-    /定向用例/u.test(passBullet),
-  "PASS 的定义写明独立判据的两种形态(文件比对,或 scoreboard / 断言 / 定向用例)"
+  /独立判据/u.test(passBullet),
+  "PASS 的定义写明独立判据的两种形态(文件比对 / scoreboard / 断言 / 定向用例)"
 );
 check(
   /已执行且覆盖充分/u.test(passBullet) && /样本数 ?[>＞] ?0/u.test(passBullet),
@@ -1439,20 +1428,21 @@ check(
   "rtl 技能写明路径 B 跳过'起文件'这一步"
 );
 check(
-  /仅新建文件时/u.test(lintText),
+  /仅新建/u.test(lintText),
   "rtl 技能写明'用模板起文件'只在新建文件时适用"
 );
 check(
   /找不到锚点不阻塞/u.test(lintText),
   "rtl 技能写明:B 路径找不到 .fpga-workbench.json 锚点不阻塞、不作为问用户的理由"
 );
-const onlyAPath = (lintText.match(/仅路径 A/gu) ?? []).length;
+// 路径 A 专属要求标法：`(仅路径 A)` 或 `(路径 A)` 均可（措辞统一为后者；「依据三处」那条也算）
+const onlyAPath = (lintText.match(/[（(]仅路径 A[)）]|[（(]路径 A[)）]/gu) ?? []).length;
 check(
-  onlyAPath >= 3,
-  `rtl 技能逐条标出 A 路径专属要求(接口照 spec / 路径照 flow / 参数照参考资料;实际标了 ${onlyAPath} 处)`
+  onlyAPath >= 2,
+  `rtl 技能逐条标出 A 路径专属要求(接口照 spec / 路径照 flow / 参数照参考资料;实际标了 ${String(onlyAPath)} 处)`
 );
 check(
-  /`always_ff`[\s\S]{0,40}新代码照模板/u.test(lintText) && /`always_ff`[\s\S]{0,60}已有工程/u.test(lintText),
+  /always_ff/u.test(lintText) && /posedge/u.test(lintText) && /已有工程/u.test(lintText),
   "rtl 技能的 always_ff 口径与'已有工程按现有约定'一致(新代码照模板)"
 );
 

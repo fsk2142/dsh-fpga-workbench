@@ -7,8 +7,8 @@ description: 综合 FPGA 模块并检查资源、约束、CDC 与 post_synth 时
 
 本环节管两件事,**都通过才算这个环节过**:
 
-1. **综合门禁**:代码能不能综合出来 —— 报错为零、资源与时钟报得出来
-2. **综合后时序**:约束干不干净 —— `constraint_status`、时钟齐不齐、有没有未约束路径、跨时钟是否处理
+1. **综合门禁**:代码能否综合出来:报错为零、资源与时钟报得出来
+2. **综合后时序**:约束是否干净:`constraint_status`、时钟齐全性、未约束路径、跨时钟处理
 
 模块级只到这里。**布局布线与真实板级时序属工程级**(`fpga-project-impl` / `fpga-project-timing`),
 所以这里量的是 `analysis_stage = post_synth`(估计值),**不得说成"时序收敛了"**。
@@ -24,26 +24,26 @@ description: 综合 FPGA 模块并检查资源、约束、CDC 与 post_synth 时
 1. 找约定文件 `.fpga-workbench.json`(模块根),见 `fpga-module-spec`
 2. `spec/spec.md`:目标器件与封装(**未定即不得开综合**)、时钟与参考周期(来自指标)
 3. 约束文件按模板写,放 `<模块根>/synth/<模块名>.xdc`(用 `module-synth-new.mjs` 起文件,见「本环节要跑的命令」)
-4. **建议**机械检查(`rtl/lint.md`)与 `verif` 都已 PASS —— 没验证就综合,问题容易拖到时序才暴露;
+4. **建议**机械检查(`rtl/lint.md`)与 `verif` 都已 PASS。没验证就综合,问题容易拖到时序才暴露;
    但正在定位综合报错、或用户只想要一次资源评估时,不必先回去补前面的环节
 
 > ⚠️ **XDC 里不能写 Tcl 控制流**(`if` / `source` / `file` 这些)。
-> XDC 会给一条 CRITICAL WARNING 然后**静默跳过**那条约束,最终现象是"没有时钟"或管脚没生效 ——
+> XDC 会给一条 CRITICAL WARNING 然后**静默跳过**那条约束,最终现象是"没有时钟"或管脚没生效,
 > 这个坑很难查,因为它不报错,只是没生效。
 
 ## 器件与参考时钟只写一处
 
-一个模块只有**一处**器件与时钟参考来源,**模块 spec 不重述器件**(用户口径):
-- 属于某个工程时 → 器件以**工程 spec**(`<用户指定工程目录>/doc/spec.md`)为准,模块 spec 只写一句
-  「器件见工程 spec」;`module-synth-new.mjs` 起综合脚本时就是按这个顺序读的(模块 spec → 工程 spec),
-  **两处都没有会直接拒绝生成**(继承模板里的默认器件 = 拿错器件去综合,实测查过很久)
-- 独立交付的模块(不进工程)→ 写在本模块的 `spec/spec.md` 里这几条:
+一个模块只有**一处**器件与时钟参考来源,**模块 spec 不重述器件**:
 
-- 器件型号 + 器件族
-- 分析参考周期(只是分析输入,**不是性能目标**)
-- 每个时钟的参考周期 —— 时钟名必须与约束文件里的**完全一致**
+- **属于某个工程时** → 器件以**工程 spec**(`<用户指定工程目录>/doc/spec.md`)为准,
+  模块 spec 只写一句「器件见工程 spec」。`module-synth-new.mjs` 按此顺序读(模块 spec → 工程 spec),
+  **两处都没有会直接拒绝生成**(继承模板默认器件 = 拿错器件综合,实测查过很久)
+- **独立交付的模块**(不进工程)→ 写在本模块 `spec/spec.md`:
+  - 器件型号 + 器件族
+  - 分析参考周期(只是分析输入,**不是性能目标**)
+  - 每个时钟的参考周期;时钟名必须与约束文件里的**完全一致**
 
-换器件只改这一处,不要去改综合脚本;约束文件名与里面的时钟名也跟着这一处走。
+换器件只改这一处,不改综合脚本;约束文件名与里面的时钟名也跟着这一处走。
 
 ## 约束只要时钟(模块级)
 
@@ -52,52 +52,52 @@ description: 综合 FPGA 模块并检查资源、约束、CDC 与 post_synth 时
 - **一个 xdc 里的段落顺序固定**:IO 约束 → 时钟约束 → CFG 命令 → debug 约束;模块级只填
   「时钟约束」这一段(自带模板已按这个顺序分段)
 - **每个时钟域一条 `create_clock`**;分频/倍频出来的时钟另写 `create_generated_clock`
-- 几个时钟之间没有真实时序关系时,加 `set_clock_groups -asynchronous` ——
+- 几个时钟之间没有真实时序关系时,加 `set_clock_groups -asynchronous`,
   否则工具会把跨域路径算成未约束(判据要求 `unconstrained_path_count = 0`)
-- **不写**:管脚分配、IO 标准与电平、input/output delay —— 那些是板子的事,
-  在工程级 `fpga-project-constraints` 里
+- **不写**:管脚分配、IO 标准与电平、input/output delay。那些属于板子,在工程级
+  `fpga-project-constraints` 里
 - 模块级 I/O 延迟不适用,判据里记 `NOT_APPLICABLE`
 
 ## 本环节要跑的命令
 
-**先起约束文件**(按模板复制,只替模块名):
+**① 起约束文件**(按模板复制,只替模块名):
 
 ```
 node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> --template "<约束模板路径>"
 ```
 
-**再起综合脚本**(模块名照给 —— 它是必填位置参数;脚本再从 spec 读器件型号填进去):
+落 `<模块根>/synth/<模块名>.xdc`。已有不覆盖(`--force` 才覆盖)。
+
+**② 起综合脚本**:
 
 ```
 node "<自带命令目录>\module\module-synth-new.mjs" <模块根> <模块名> --kind synth-script
 ```
 
-模块名虽然会被 spec 里的顶层模块名覆盖,但**命令这一位不能省**:省了它报用法错误退 2
-(`synth-script` 与其它 `--kind` 一样要求 `<模块根> <模块名>`)。
+落 `<模块根>/synth/run_synth.tcl`。器件型号与顶层名**从 spec 读**(器件只写一处,别手抄);
+**读不到器件就拒绝生成**(退 2),不会留模板默认器件。顶层名没写就按模块名填。
 
-落 `<模块根>/synth/run_synth.tcl`,**器件型号从工程 spec(或本模块 spec)读、顶层模块名也从那里读**,
-填进那两行 —— 器件只写一处,别再手抄。**读不到器件就拒绝生成**(退出码 2),不会把模板的默认器件留下;
-顶层名没写就按**模块名**填(本模式约定 `rtl/<模块名>.sv` 就是顶层)。
-已存在不覆盖(`--force` 才覆盖);换自己的脚本用 `--template`。
+`<模块名>` 是必填位置参数;即使会被 spec 的顶层名覆盖,省了会报用法错误退 2。
 
-**再跑综合**(全程批处理,不弹界面)。Vivado 启动统一设 `XILINX_LOCAL_USER_DATA=NO`，
-避免 Tcl Store 写 `%APPDATA%\Xilinx`；这是工作区规则的唯一口径，不得重定向 `APPDATA`：
+**③ 跑综合**(全程批处理):
 
 ```powershell
-$oldLocalUserData = $env:XILINX_LOCAL_USER_DATA
+$old = $env:XILINX_LOCAL_USER_DATA
 try {
-  $env:XILINX_LOCAL_USER_DATA = "NO"
-  & "<综合器路径>" -mode batch -source <综合脚本.tcl> -log <日志路径> -journal <记录路径>
+  $env:XILINX_LOCAL_USER_DATA = "NO"    # 防止 Tcl Store 写 %APPDATA%\Xilinx
+  & "<综合器路径>" -mode batch -source <综合脚本.tcl> -log <日志> -journal <记录>
 } finally {
-  if ($null -eq $oldLocalUserData) { Remove-Item Env:XILINX_LOCAL_USER_DATA -ErrorAction SilentlyContinue }
-  else { $env:XILINX_LOCAL_USER_DATA = $oldLocalUserData }
+  if ($null -eq $old) { Remove-Item Env:XILINX_LOCAL_USER_DATA -ErrorAction SilentlyContinue }
+  else { $env:XILINX_LOCAL_USER_DATA = $old }
 }
 ```
 
-- **`-mode batch` 必须加** —— 不加会拉起图形界面等人操作,无人值守就跑不下去
-- **别手抄**:用上面那条 `--kind synth-script` 起一份,再按工程改(器件预检、失败判定都固化在里面了)
-- 流程:建模块本地工程 → 加 `rtl/`(含 `rtl/ip/` 下的 IP 与 `.xci`)→ 跑 `synth_design` → 写报告
-- 报告落 `<模块根>/synth/`;Vivado 工程与中间产物**就地落在 `synth/` 下**(可再生的,别提交),**不得把工程塞进 `rtl/`**
+**`-mode batch` 必须加**:不加会拉起 GUI 等人操作,无人值守跑不下去。
+**不得重定向 `APPDATA`**;`XILINX_LOCAL_USER_DATA=NO` 是唯一口径。
+
+流程:建模块本地工程 → 加 `rtl/`(含 `rtl/ip/` 下的 IP 与 `.xci`)→ `synth_design` → 写报告。
+报告落 `<模块根>/synth/`;Vivado 工程与中间产物**就地落 `synth/` 下**(可再生,别提交),
+**不得把工程塞进 `rtl/`**。
 
 ## 综合门禁的判据
 
@@ -106,17 +106,39 @@ try {
 - **BLOCKED**:综合器没就绪(设置里标「未就绪」)/ 器件型号没填 / 没有可综合的源码
 - **NOT_APPLICABLE**:这个模块不做综合
 
+### 常见综合报错与真正原因
+
+| 报错 | 真正原因 | 去哪修 |
+|---|---|---|
+| `[Synth 8-327] inferring latch` | 组合块有分支没赋值 | RTL 规范「组合块覆盖所有分支」 |
+| `[Synth 8-448] named port connection` / `[Synth 8-6859] unconnected port` | 端口名拼错或漏连 | 对照 `spec/spec.md` 的接口 |
+| `[Synth 8-1031] module not found` | 文件没加进来,或 `.xci` 与器件不匹配 | 查 `rtl/` 是否引用了未加入的文件;`.xci` 需按当前器件重新 `generate_target` |
+| `[Common 17-55] no part specified` | 器件没填 | 按「器件只写一处」补 spec |
+| `[Synth 8-2715] syntax error` | 语法/宏展开问题 | 先过 `module-rtl-check`,再看是否 VHDL 与 SV 混编 |
+| `[Synth 8-403] concurrent assignment` | 多驱动 | RTL 规范「一根信号只能一个驱动源」 |
+
+**报错要看第一条**:后面多是级联产物,修了第一条往往全消。**不要逐条改**,先修根因。
+
+### 综合警告
+
+**综合警告必须解决,不许留着。**
+
+唯一例外:`rtl/ip/` 下的厂商代码：在 `synth/synth.md` 里单列一节,说明属厂商代码、未修改。
+
+**压制不是解决。** 用 `set_msg_config -suppress` 躲警告等于没检过它：除非确认是工具误报,
+并写明为什么。
+
 ## 综合后时序的判据:不是"频率达标",是"约束干净"
 
 接受条件只有三条:
 
-1. `constraint_status = PASS` —— 约束确实被应用上了
+1. `constraint_status = PASS`:约束确实被应用上了
 2. 需要的时钟**都在**(缺一个都不行)
 3. `missing_clock_count`、`unconstrained_path_count`、`no_clock_path_count` **全为 0**
 
 `timing_exception_count` 记下来供后续查看;模块级 I/O 延迟属 `NOT_APPLICABLE`。
 
-**没有统一的 200 / 250 / 300 MHz 阈值。** 实测 Fmax 是**记录下来的观察值**,不是门禁 ——
+**没有统一的 200 / 250 / 300 MHz 阈值。** 实测 Fmax 是**记录下来的观察值**,不是门禁,
 因此不得为了让某个数字好看去改约束。
 
 三种容易混的结果:
@@ -131,7 +153,7 @@ CDC(跨时钟域):综合后跑 `report_cdc`,记下未解决跨时钟、不安全
 
 - **当前不接受 CDC 豁免**:有 waived 计数也算失败
 - 命令不可用 → 记 `BLOCKED`,不得当成"没有跨域"
-- **CDC 永不降级成"提醒"** —— 跨域没处理就是没处理
+- **CDC 永不降级成"提醒"**:跨域没处理就是没处理
 
 ## 策略要有界,不得无限重试
 
@@ -141,7 +163,7 @@ CDC(跨时钟域):综合后跑 `report_cdc`,记下未解决跨时钟、不安全
 default → AreaOptimized_high → AlternateRoutability → PerformanceOptimized → RuntimeOptimized
 ```
 
-**每一轮都要留日志**,不得只留最后那轮 —— 否则"换策略试过"这句话没有证据。
+**每一轮都要留日志**,不得只留最后那轮;否则"换策略试过"这句话没有证据。
 
 ## 产物
 
@@ -158,4 +180,4 @@ default → AreaOptimized_high → AlternateRoutability → PerformanceOptimized
 并说明挑法)。
 
 **时序不过时结论就是 FAIL**,不得只写"综合通过"把时序问题留在报告角落里。
-**违例不达标时不得改约束去凑数字** —— 先判断是设计问题还是约束问题,并说清依据。
+**违例不达标时不得改约束去凑数字**;先判断是设计问题还是约束问题,并说清依据。

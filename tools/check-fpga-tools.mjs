@@ -135,7 +135,10 @@ check(tbIssues.length === 0, "合规测试平台零问题(不要求九个小节�
 
 const badIssues = blocking(join(SANDBOX, "bad-mod", "rtl", "bad.sv"), false);
 const rules = new Set(badIssues.map((issue) => issue.rule));
-for (const expected of ["文件头", "编译隔离", "端口类型", "always_ff", "复位极性", "end/else", "九个小节块", "设计断言", "Tab 字符", "代码行非英文"]) {
+// 注意:「文件头」与「九个小节块」两条机械检查已移除 —— 它们只查格式（字段名、banner 宽度），
+// 对正确性无帮助，且字段名一改或加个中文字就红，属于「留下会造成编写问题」的那类。
+// 结构要求保留在规范描述里（模板自带文件头与 9 个 banner，照模板即可）。
+for (const expected of ["编译隔离", "端口类型", "always_ff", "复位极性", "end/else", "设计断言", "Tab 字符", "代码行非英文"]) {
   check(rules.has(expected), `违规样本报出了「${expected}」`);
 }
 const tabIssue = badIssues.find((issue) => issue.rule === "Tab 字符");
@@ -3428,7 +3431,7 @@ endmodule
 );
 const simRoleRun = runStdout("project-rtl-check.mjs", [simRoleRoot]);
 check(
-  simRoleRun.code === 0 && !/九个小节块|设计断言/u.test(simRoleRun.output),
+  simRoleRun.code === 0 && !/设计断言/u.test(simRoleRun.output),
   `sim/ 下的仿真辅助代码不套 RTL 结构门禁(实际退出码 ${String(simRoleRun.code)})`,
   simRoleRun.output.slice(-300)
 );
@@ -3447,9 +3450,10 @@ writeFileSync(join(simSupportNegRoot, "src", "rtl", "good.sv"), readFileSync(cat
 writeFileSync(join(simSupportNegRoot, "sim", "bad_helper.sv"), "module bad_helper; endmodule\n");
 const simSupportNeg = runStdout("project-rtl-check.mjs", [simSupportNegRoot]);
 check(
-  // 负向:白名单保留了"文件头"与编译隔离那几条 —— 实测它们都报在"文件头"这一类下(resetall / default_nettype)。
-  simSupportNeg.code === 1 && /文件头/u.test(simSupportNeg.output) && /resetall|default_nettype/u.test(simSupportNeg.output),
-  `sim-support 仍要查通用规则(缺文件头 / 缺 default_nettype)→ 退 1(实际 ${String(simSupportNeg.code)})`,
+  // 负向：白名单保留了编译隔离那几条 —— 输出里报的是 `resetall` / `default_nettype` 的字样
+  // （「文件头」那条已移除，不再作为判据）。
+  simSupportNeg.code === 1 && /`resetall|`default_nettype/u.test(simSupportNeg.output),
+  "sim-support 仍要查通用规则(缺 resetall / default_nettype)→ 退 1(实际 " + String(simSupportNeg.code) + ")",
   simSupportNeg.output.slice(-300)
 );
 const simRoleJson = JSON.parse(runStdout("project-rtl-check.mjs", [simRoleRoot, "--json"]).output);

@@ -146,18 +146,11 @@ export function checkFile(file, isTestbench) {
   const lf = (raw.match(/(?<!\r)\n/gu) ?? []).length;
   if (crlf > 0 && lf > 0) add("行尾混用", 0, `同一个文件里既有 CRLF(${crlf})又有 LF(${lf})`);
 
-  // ── 文件头:顶部有分隔条(>=20 个 =) + 前 15 行内字段齐全 ──
-  if (lines.length < 8) {
-    add("文件头", 1, `文件只有 ${lines.length} 行,文件头至少需要 8 行`);
-  } else {
-    const banner = /^\s*\/\/={20,}\/\/\s*$/u;
-    if (!lines.slice(0, 3).some((line) => banner.test(line))) {
-      add("文件头", 1, "开头三行内没有 '//====…====//' 分隔条(至少 20 个 =)");
-    }
-    const head = lines.slice(0, 15).join("\n").toLowerCase();
-    const missing = HEADER_FIELDS.filter((field) => !head.includes(field));
-    if (missing.length > 0) add("文件头", 1, `前 15 行缺字段:${missing.join(", ")}`);
-  }
+  // ── 文件头：不做机械检查 ──
+  //
+  // 原检查要求「前 15 行出现全部必填字段」+ banner 宽度。字段名一改就红，而规范里
+  // 已写明「已有工程不为了统一而重排」—— 命中已有代码时纯属误报。
+  // 文件头格式由模板带过来（起文件时已是完整的），不必再机械核一遍。
 
   // ── 编译隔离:开头 `resetall + `default_nettype none,结尾收回 ──
   let start = 0;
@@ -232,17 +225,21 @@ export function checkFile(file, isTestbench) {
 
     // ── always_ff 只用 posedge ──
     // 用 codeOf 而不是原始 line：注释里写「这里不要用 negedge」也会被误判成违规。
+    // **例外**：AXI 复位按 AMBA 规范是低有效（`ARESETn` / `aresetn`），随接口照官方。
     const codeLine = codeOf(line);
-    if (codeLine.includes("always_ff") && codeLine.includes("negedge")) {
-      add("always_ff", number, "always_ff 里用了 negedge(只允许 posedge)");
+    const isAxiReset = /aresetn|ARESETN|areset_n/iu.test(codeLine);
+    if (codeLine.includes("always_ff") && codeLine.includes("negedge") && !isAxiReset) {
+      add("always_ff", number, "always_ff 里用了 negedge(只允许 posedge;AXI 复位例外)");
     }
 
-    // ── 复位一律高有效(2026-09-02 裁决) ──
-    // 同上：AGENTS.fpga.md 第 9 条要求「按工程实际约定来，要改先说明理由」——
-    // 在注释里写明这条理由（可能正好含 `negedge rst_n` 字样）不该被判 FAIL。
+    // ── 复位默认高有效（2026-09-02 裁决）──
+    // 例外一：AXI 接口按 AMBA 规范低有效（`ARESETn`），照官方。
+    // 例外二：用户明确要求低有效。
+    // 已有工程原本低有效（非 AXI）沿用其现有约定。
+    // 同上：注释里写「这里不要用 negedge rst_n」不该被判 FAIL（用 codeOf 已排除注释）。
     const lowReset = /if\s*\(\s*[!~]\s*rst\w*\b|negedge\s+rst\w*\b|if\s*\(\s*~?\s*rst_n\b|posedge\s+rst_n\b/u.exec(codeLine);
-    if (lowReset !== null) {
-      add("复位极性", number, `低有效复位用法:「${lowReset[0]}」(本项目 rst/rst_* 一律高有效)`);
+    if (lowReset !== null && !isAxiReset) {
+      add("复位极性", number, `低有效复位用法:「${lowReset[0]}」(默认高有效;AXI 接口或用户明确要求时除外 —— 对照 spec 确认)`);
     }
 
     // ── 数据比对禁 `!=`(只查测试平台) ──
@@ -313,19 +310,18 @@ export function checkFile(file, isTestbench) {
     }
   }
 
-  // ── 九个小节块:只要求名字作为 banner 存在(宽度容忍 84-86) ──
+  // ── 九个小节块：不做机械检查 ──
   //
-  // 测试平台跳过这一条:九个小节(Local Parameters / Combinational Logic / …)是 RTL 的
-  // 结构,模板里的 tb.sv 本来就没有它们 —— 照旧包一律套用,会让我们自己发的模板过不了
-  // 我们自己的检查器。断言那一条对 TB 也是放宽的(写了的断言才要求说明),这里同理。
-  if (!isTestbench) {
-    const banners = lines
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith("//") && line.endsWith("//") && line.length >= 84 && line.length <= 86)
-      .map((line) => line.slice(2, -2).trim());
-    const absent = NINE_SECTIONS.filter((name) => !banners.includes(name));
-    if (absent.length > 0) add("九个小节块", 0, `缺小节 banner:${absent.join(" / ")}`);
-  }
+  // 原检查要求 banner 字符宽度恰好 84~86 —— 加一个中文字或改个节名就红，而对正确性
+  // 没有任何帮助。为过检查去数注释宽度是纯浪费，属于「留下会造成编写问题」的那类。
+  // 结构要求保留在规范描述里（模板自带那 9 个 banner，照模板即可）。
+
+  // ── 例化连接方式：不做机械检查 ──
+  //
+  // 判定「这一行是不是模块例化」需要子模块定义，正则猜形状会大量误判
+  // （实测：曾把 `assign f(a)`、`always_ff @(posedge clk)` 当成例化，连自带模板都过不了）。
+  // 规范里写成倾向性要求（尽量用命名连接），由 Verilator `-Wpinmissing` 与综合的
+  // unconnected 警告兜底 —— 本规范已要求「警告必须解决」。
 
   // ── 设计断言:代码里有 assert/assume/cover,且说明写清 Purpose/Trigger/Failure ──
   //     (测试平台不要求"必须有断言",与旧包一致;但**写了的**断言一样要逐条写清说明)

@@ -1,12 +1,30 @@
 #!/usr/bin/env node
 /**
- * 覆盖率统计：从 ModelSim 的 ucdb 提取覆盖率，对照 95% 门槛给出判定。
+ * 覆盖率统计：从 ModelSim 的 ucdb 提取覆盖率，对照门槛给出判定。
  *
  * ## 为什么需要这个命令
  *
- * `fpga-module-verif` 技能要求「判 `PASS` 必须给出量化覆盖率并达到 95%」，但此前
+ * `fpga-module-verif` 技能要求「判 `PASS` 必须给出量化覆盖率并达到门槛」，但此前
  * **没有任何命令能算** —— AI 只能手工数行数、估百分比，必然编数字。规范有要求、
  * 工具没支撑，是最容易出假证据的那类缺口。
+ *
+ * ## 门槛：默认 95%，用户可要求更高
+ *
+ * | 要求 | 怎么执行 |
+ * |---|---|
+ * | 用户没提 | **95%**（默认），不自行加码 |
+ * | 用户要 98% / 100% | `--threshold 98` / `--threshold 100` |
+ *
+ * **不加档位规则的理由**：「仿真对、上板错就自动升到 98%」这种规则，等于用历史症状推当前
+ * 门槛；该不该加严取决于模块性质与用途，判断权在用户。
+ *
+ * ## 本工具只算代码覆盖，不算 covergroup
+ *
+ * `+cover=sbcef` 统计的是**代码**覆盖（语句 / 分支 / 条件 / 表达式 / FSM）。
+ * **covergroup（功能覆盖）是另一个开关**，且在 ModelSim 报告里位于独立的
+ * `=== Covergroup:` 段 —— 本工具的正则只匹配 `=== File:` 段下的类别行，**读不到它**。
+ *
+ * 所以：**代码覆盖达标 ≠ 覆盖率达标**。报告里要如实写明功能覆盖率是另外统计的。
  *
  * ## ModelSim 覆盖率的四个步骤（全部实测，2026-10-28）
  *
@@ -68,7 +86,8 @@ const usage = () => {
   console.error("  --ucdb <路径>   显式指定 ucdb 文件");
   console.error("  --vsim <路径>   显式指定 vsim.exe（默认按 MODELSIM 环境变量与常见安装位置探测）");
   console.error("  --json          输出机器可读 JSON");
-  console.error("  --threshold N   门槛百分比（默认 95）");
+  console.error("  --threshold N   门槛百分比(默认 95,不自行加码)。用户要求更高时才调:98 / 100");
+  console.error("                  注意:本工具只算代码覆盖,+cover=sbcef 不含 covergroup");
   console.error("");
   console.error("前提：模板用 `vsim -coverage` 跑过，且覆盖率为 `coverage save -onexit` 落盘。");
   process.exit(2);

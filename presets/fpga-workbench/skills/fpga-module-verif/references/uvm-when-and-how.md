@@ -2,7 +2,7 @@
 
 ## 先说结论：UVM 提的是「产能」，不是「发现力」
 
-**UVM 本身不发现 bug** —— 它没有内建任何检查手段。它发现更多 bug，是因为**能跑更多、更随机的激励**。
+**UVM 本身不发现 bug**：它没有内建任何检查手段。它发现更多 bug，是因为**能跑更多、更随机的激励**。
 
 决定发现率的是这个顺序：
 
@@ -24,12 +24,12 @@
 
 按可靠性排：
 
-1. **断言（SVA）** —— 最可靠。它不要求你重新实现功能，只要求陈述不变量
+1. **断言（SVA）**：最可靠。它不要求你重新实现功能，只要求陈述不变量
    （「`req` 后 3 拍内必须有 `ack`」）。即使功能理解有偏差，协议常识也不会写错。
-2. **真实数据当黄金标准** —— 抓包、datasheet 示例、第三方实现（如 TCP 用 scapy 造包）。
+2. **真实数据当黄金标准**：抓包、datasheet 示例、第三方实现（如 TCP 用 scapy 造包）。
    不依赖你的理解。
-3. **不同路径实现模型** —— RTL 用 SV、模型用 Python。降低（不是消除）同源错误。
-4. 手写参考模型 —— 最直接，也最容易同源错误。
+3. **不同路径实现模型**：RTL 用 SV、模型用 Python。降低（不是消除）同源错误。
+4. 手写参考模型：最直接，也最容易同源错误。
 
 **实用组合**：断言兜时序契约 + 真实数据兜功能 + 覆盖率兜「验够了没」。
 
@@ -53,7 +53,7 @@ node "<自带命令目录>\module\module-verif-uvm-selftest.mjs"
 它会查 vsim、UVM 库、C 编译器，然后**编译并跑一个 demo**，确认整条链路真通。
 
 退出码：0 可用 / 1 demo 跑不通 / 2 用法错 / **3 环境缺失（BLOCKED）**。
-3 与 1 要分开记 —— **环境缺失不等于设计有问题**。
+3 与 1 要分开记：**环境缺失不等于设计有问题**。
 
 ## 第二步：生成骨架，改两处
 
@@ -77,7 +77,7 @@ node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> 
 > 它是"起点样例"不是"填空模板"。但你不该为此多走一步手动复制，所以留了
 > `--kind uvm` 入口。
 
-## 七个实测坑（ModelSim SE-64 2020.4 + UVM 1.2，2026-10-28）
+## 七个实测坑（ModelSim SE-64 2020.4 + UVM 1.2）
 
 ### 环境类（自检命令能查）
 
@@ -94,13 +94,13 @@ node "<自带命令目录>\module\module-verif-new.mjs" <模块根> <模块名> 
 | ④ | `Failed to find 'run_test' in hierarchical name 'run_test'` | **module 里也要 `import uvm_pkg::*`**，只写在 package 里不够 |
 | ⑤ | `[RUNPHSTIME] No non-zero delays are allowed before run_test()` | `run_test()` 之前**不能有任何非零延时**；复位要放进 `run_phase` |
 | ⑥ | `syntax error, unexpected "SystemVerilog keyword 'expect'"` | `expect` 是 SV 关键字，变量名改用 `exp_acc` 之类 |
-| ⑦ | `(vlog-2892) Net type of 'clk' was not explicitly declared` | **UVM 模板里不要用 `` `default_nettype none ``** —— interface 的端口声明会被当成未声明网络 |
+| ⑦ | `(vlog-2892) Net type of 'clk' was not explicitly declared` | **UVM 模板里不要用 `` `default_nettype none ``**：interface 的端口声明会被当成未声明网络 |
 | ⑧ | `uvm_analysis_imp_in is not defined` | 一个 scoreboard 接多个 analysis port 时，先 `uvm_analysis_imp_decl(_in)` / `(_out)` |
 
 ## scoreboard 的关键设计（最容易做错的地方）
 
 ```systemverilog
-// ❌ 错：直接拿 DUT 输出当期望值 —— 永远通过
+// ❌ 错：直接拿 DUT 输出当期望值：永远通过
 expected = vif.dout;
 
 // ✅ 对：monitor 同时采输入，scoreboard 用输入队列独立算

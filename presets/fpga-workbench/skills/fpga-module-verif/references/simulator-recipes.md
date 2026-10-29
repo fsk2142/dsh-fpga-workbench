@@ -5,7 +5,7 @@
 下面的例子按 **SystemVerilog**(`.sv`)写;选了 Verilog / VHDL 就把扩展名换成 `.v` / `.vhd`,
 编译命令也换成对应语言的形式(`vcom` 对应 VHDL,`vlog`/`xvlog -sv` 对应 SV)。
 
-**先用设置里选定的仿真器** —— 看会话开头「本机 FPGA 工具链」的**已就绪清单**:仿真器是
+**先用设置里选定的仿真器**：看会话开头「本机 FPGA 工具链」的**已就绪清单**:仿真器是
 ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里。**不得另行挑选一个。**
 
 **ModelSim / QuestaSim(默认)**
@@ -13,7 +13,7 @@ ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里
 编译与运行使用**同一份**模板 `verif/run.do`,按模式调用:`do run.do compile` 只收集并编译,`do run.do run` 只加载已编译的
 `work/`、运行并判定。这样可反复改激励/换顶层而不把两个职责混成一份不可复核的大脚本。
 
-**模板自己管新鲜度与配置身份(2026-09-25 起)** —— 遇到这几条报错不要手改 stamp、不要绕过:
+**模板自己管新鲜度与配置身份(2026-09-25 起)**：遇到这几条报错不要手改 stamp、不要绕过:
 
 - 改 `.svh`/`.vh` → `compile` **全量重编** Verilog/SystemVerilog(谁 include 了它推不出来);VHDL 一变 → 全量重编
   `vcom`;`.sv`/`.v` 交**全量**给 `vlog -incr`(由 ModelSim 决定重编谁);一个文件都没变时整段跳过 vlog。
@@ -24,8 +24,8 @@ ModelSim / QuestaSim / Vivado XSim / Verilator、路径是什么,都写在那里
   unit 编进库,重试即过(实测反序报 `Could not find the package` → 同命令重跑 0 error)。
 - **批处理不带 `+acc`**(实测快 2.3~2.6×):要看波形就走第三个模式 `load`。
 
-**别手抄脚本**:从设置里选中的那份**仿真脚本**模板起一份(编译与运行本来就是同一份脚本,起第二次会被
-「已存在、不覆盖」挡下 —— 不要起两次),起完按当前模块改旋钮:
+**用命令生成**:从设置里选中的那份**仿真脚本**模板起一份(编译与运行本来就是同一份脚本,起第二次会被
+「已存在、不覆盖」挡下：不要起两次),起完按当前模块改旋钮:
 
 ```powershell
 node "<自带命令目录>\module\module-verif-new.mjs" <模块根> --kind sim-run --template "<仿真脚本模板路径>"
@@ -43,7 +43,7 @@ cd <模块根>/verif
 - run 模式的 **`onfinish stop` 必须在 elaborate 之后**,否则 `$finish`/`$fatal` 直接结束会话;
 - run 模式结尾的 **run-level gate** 扫 `sim.log`:有 `Error`/`Fatal` 或缺成功标记 → `-code 1`。
 
-**判据:先要求 compile 模式退出 0，再看 run 模式的退出码** —— 裸 `vsim` 的退出码**不可信**
+**判据:先要求 compile 模式退出 0，再看 run 模式的退出码**：裸 `vsim` 的退出码**不可信**
 (实测 2020.4:`$fatal` 之后 `run -all` 既不抛错也不改退出码,退出码仍是 0),是**模板里的 gate**
 把它变成可靠判据的。**没有 gate 的脚本不能按退出码判。**
 
@@ -74,7 +74,7 @@ try {
 ## 模板的旋钮(改行为不用改脚本体)
 
 自带模板 `modelsim_run.do` 已经把常用场景固化了。**要改行为先看这张表**,
-别去改脚本正文 —— 改正文会在下次安装模板时被覆盖,而且容易破坏新鲜度判定。
+别去改脚本正文：改正文会在下次安装模板时被覆盖,而且容易破坏新鲜度判定。
 
 | 旋钮 | 默认 | 什么时候改 |
 | --- | --- | --- |
@@ -101,24 +101,24 @@ try {
 
 用到 `IBUF` / `BUFG` / `FDRE` 这类原语或 IP 仿真模型时,**实测**(ModelSim 2020.4):
 
-1. **`-L` 接的是「库名」,不是目录** —— 写绝对路径会报 `Unable to find library` 或
+1. **`-L` 接的是「库名」,不是目录**：写绝对路径会报 `Unable to find library` 或
    `Module 'IBUF' is not defined`。
    库名来自 `modelsim.ini` 的 `[Library]` 段(`库名 = 目录`),指向厂商**编译好的**库。
-2. **编译与仿真两头都要带 `-L`** —— 只给 `vsim` 不给 `vlog`,照样报未定义。
+2. **编译与仿真两头都要带 `-L`**：只给 `vsim` 不给 `vlog`,照样报未定义。
 3. **带 GSR(全局置位)的原语要配 `glbl`**,而且仿真必须**跑过 GSR 释放**(标准 `glbl.v`
-   是 100 ns)。没跑过去会看到"寄存器恒 0" —— 那是**假象**,不得据此判成设计错。
+   是 100 ns)。没跑过去会看到"寄存器恒 0"。那是**假象**,不得据此判成设计错。
    `glbl` 的加载方式见第 5 条。
 4. **`modelsim.ini` ��搜索顺序**:`MODELSIM` 环境变量 → **当前目录的那份** → 安装目录那份。
    工作目录里若冒出一份(工具生成或从别处拷来),它会**盖掉**安装目录那份,表现是
-   "库突然全找不到"而那份 ini 单看没毛病 —— 先查这个文件,再怀疑别的。
-5. **`glbl` 必须作为第二个顶层传给 vsim,不能在 TB 里实例化**(2026-10-28 实测):
+   "库突然全找不到"而那份 ini 单看没毛病：先查这个文件,再怀疑别的。
+5. **`glbl` 必须作为第二个顶层传给 vsim,不能在 TB 里实例化**(实测):
 
    ```
    vsim -L xpm work.tb_top work.glbl     ← 对
    vsim work.tb_top                      ← 错:找不到 glbl.GSR
    ```
 
-   TB 里写 `glbl u_glbl();` **也不行** —— 路径会变成 `tb_top.u_glbl.GSR`,而 XPM 引用的是
+   TB 里写 `glbl u_glbl();` **也不行**：路径会变成 `tb_top.u_glbl.GSR`,而 XPM 引用的是
    **绝对层次名** `glbl.GSR`(`xpm_cdc.sv:213` 的 `tri0 glblGSR_xpmcdc = glbl.GSR;`)。
    `glbl.v` 在 Vivado 安装目录 `data/verilog/src/glbl.v`,**要和设计一起编进 work**。
    五种写法都试过:双顶层 ✅ / TB 实例化 ❌ / glbl 编进别的库 ❌ / `+define+ONESPIN` ❌ /
@@ -135,8 +135,8 @@ try {
 **XPM 比普通原语多一个要求:还要 `glbl`**(见上面第 5 条)。普通原语只要 `-L unisim`,
 XPM 还要第二个顶层 `work.glbl`。
 
-> **自带模板已处理**(2026-10-28):`modelsim_run.do` 的 `VENDOR_LIBS` 默认
-> `{unisim unimacro}`、`GLBL_TOP` 默认 1 —— 会自动找 `glbl.v`、编进 `work/`、
+> **自带模板已处理**:`modelsim_run.do` 的 `VENDOR_LIBS` 默认
+> `{unisim unimacro}`、`GLBL_TOP` 默认 1：会自动找 `glbl.v`、编进 `work/`、
 > 并作为第二顶层传给 `vsim`。**不用手写这些**。
 >
 > 前提是能找到 `glbl.v`:设 `XILINX_VIVADO` 环境变量,或让 `modelsim.ini` 的库映射
@@ -145,7 +145,7 @@ XPM 还要第二个顶层 `work.glbl`。
 > 看到这句先配 `XILINX_VIVADO`,不要去改 RTL。
 
 只有"映射对、库也在、`glbl` 也配了、却仍报未定义"这种硬问题,才退到
-**用原厂源码自己编一份** —— Vivado 安装目录 `data/ip/xpm/**` 下的 `.sv`
+**用原厂源码自己编一份**：Vivado 安装目录 `data/ip/xpm/**` 下的 `.sv`
 (或用它的 `compile_simlib`),编完在结论里写清用的是哪一份。
 **这是退路,不是首选动作**。
 
@@ -158,9 +158,9 @@ XPM 还要第二个顶层 `work.glbl`。
 
 `vmap <名> <路径>` 会把映射**永久写进 `modelsim.ini`**,而安装目录那份是**所有工程共用**的。
 某工程的 `.do` 写了 `vlib work; vmap work work`,结果全局 ini 被追加
-`work = C:/Work/<别的工程>/sim/work_trial` —— **之后所有工程的 `work` 都指向那里**。
+`work = C:/Work/<别的工程>/sim/work_trial`：**之后所有工程的 `work` 都指向那里**。
 
-**正确写法 —— 完全不需要 `vmap`**:
+**正确写法：完全不需要 `vmap`**:
 
 ```tcl
 vlib work                  # work 默认就在当前目录,不必映射

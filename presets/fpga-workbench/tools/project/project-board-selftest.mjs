@@ -113,6 +113,17 @@ const renderTcl = (projectName) => `# ──────────────
 #
 # 任一级 FAIL 就停下 —— L0/L1 没过时，后面几级的结果没有意义。
 #
+# ## 上板前四项硬件前置（P0）
+#
+# 每次上板前都要过，不是首次做完就算：
+#   P0-1 板子在线：hw_server 能枚举到目标器件
+#   P0-2 型号核对：读到的 part / IDCODE 与 doc/spec.md 完全一致
+#   P0-3 只允许 JTAG 在线加载：不写 Flash、不改配置模式引脚
+#   P0-4 bit 新鲜且匹配：bit 时间晚于最后一次源码改动
+#
+# P0 任一项不过就直接 exit 1，不进入 L0。
+# **型号不符会烧板；旧 bit 上的调试全部作废。**
+#
 # ## 为什么 L0 的电源要手工测
 #
 # VCCO / VCCINT 的实际电压只能靠万用表或板载 ADC 读。脚本只能检查
@@ -122,6 +133,15 @@ const renderTcl = (projectName) => `# ──────────────
 
 set script_dir [file dirname [file normalize [info script]]]
 set fail_count 0
+
+# ── 上板前四项硬件前置用到的配置（TODO: 全部换成真实值）──────────────────
+
+# 期望的器件型号，必须与 doc/spec.md 的 part 完全一致（如 xc7a100tfgg484-2）
+set EXPECTED_PART "TODO:EXPECTED_PART"
+
+# bit 文件路径与源码目录（用于新鲜度检查：bit 必须比最后改的源码新）
+set BIT_FILE [file join $script_dir ".." "bit" "TODO_TOP.bit"]
+set SRC_DIR  [file join $script_dir ".." "src" "rtl"]
 
 # ── 帮助函数 ────────────────────────────────────────────────────────────────
 
@@ -171,6 +191,61 @@ if {[llength $devices] == 0} {
 set dev [lindex $devices 0]
 current_hw_device $dev
 puts "  设备：$dev"
+
+# ── P0：上板前四项硬件前置（任一项不过就停）────────────────────────────────
+#
+# 每次上板前都要过。型号不符会烧板；旧 bit 上的调试全部作废。
+
+lv P0 "上板前四项硬件前置"
+
+# P0-1 在线探测：能枚举到器件（上面已经走到这里，说明 hw_target/devices 都存在）
+check {[llength $devices] > 0} "P0-1 板子在线：枚举到 [llength $devices] 个器件"
+
+# P0-2 型号核对：读到的 PART 必须与 doc/spec.md 的 part 完全一致
+#
+# 为什么必须做：xc7a100t 的 bit 下到 xc7a35t 上，配置逻辑完全不同，可能损伤器件。
+if {[string match "TODO*" $EXPECTED_PART]} {
+    puts "  ** 跳过：P0-2 未配置 EXPECTED_PART（TODO）—— 上板前必须填上"
+    incr ::fail_count
+} else {
+    if {[catch {set actual_part [get_property PART [current_hw_device]]} err]} {
+        puts "  ** FAIL: P0-2 读不到器件 PART：$err"
+        incr ::fail_count
+    } else {
+        check {$actual_part eq $EXPECTED_PART} \
+            "P0-2 型号核对：实际 $actual_part / 期望 $EXPECTED_PART"
+    }
+}
+
+# P0-3 只允许 JTAG 在线加载：本脚本只做 program_hw_devices（不写 Flash）
+#
+# 这里只是显式声明口径；真正的加载在下载环节。Flash 固化是独立动作，需用户确认。
+lv P0 "P0-3 加载方式：JTAG 在线加载（不写 Flash、不改配置模式引脚）"
+
+# P0-4 bit 新鲜且匹配：bit 的修改时间必须晚于最后一次源码改动
+if {![file exists $BIT_FILE]} {
+    puts "  ** FAIL: P0-4 找不到 bit：$BIT_FILE"
+    incr ::fail_count
+} else {
+    set bit_mtime [file mtime $BIT_FILE]
+    set newest_src 0
+    if {[file isdirectory $SRC_DIR]} {
+        foreach f [glob -nocomplain -directory $SRC_DIR *] {
+            if {![file isdirectory $f]} {
+                set m [file mtime $f]
+                if {$m > $newest_src} { set newest_src $m }
+            }
+        }
+    }
+    if {$newest_src == 0} {
+        puts "  ** 跳过：P0-4 源码目录为空或不存在（$SRC_DIR）—— 手工确认 bit 是最新的"
+    } else {
+        check {$bit_mtime >= $newest_src} \
+            "P0-4 bit 新鲜：bit 比源码新（bit=[clock format $bit_mtime -format %H:%M:%S] / src=[clock format $newest_src -format %H:%M:%S]）"
+    }
+}
+
+stop_if_failed P0
 
 # ── L0：电源与配置 ──────────────────────────────────────────────────────────
 

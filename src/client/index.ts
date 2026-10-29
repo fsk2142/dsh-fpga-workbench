@@ -239,13 +239,25 @@ const CSS = `
   .fpga-set-entry:hover { background: var(--dsh-hover, rgba(128,128,128,.15)); }
 `;
 
-/** 注入一次样式表,避免重挂载时堆叠多份。 */
+/**
+ * 注入一次样式表,避免重挂载时堆叠多份。
+ *
+ * **不能在渲染期抛**（2026-10-29 复核）：它在 `SettingsPanel()` 的组件体里调用，
+ * 组件体抛异常会让设置页整块挂掉 —— 而用户看到的会是"插件坏了"，
+ * 实际只是 `document` 在某个渲染上下文里不可用（预渲染 / 非浏览器环境）。
+ * 样式注入失败最多是"没有定制外观"，功能必须照常。
+ */
 function ensureStyles(): void {
-  if (document.querySelector("style[data-fpga-workbench]") !== null) return;
-  const style = document.createElement("style");
-  style.setAttribute("data-fpga-workbench", "");
-  style.textContent = CSS;
-  document.head.append(style);
+  try {
+    if (typeof document === "undefined") return;
+    if (document.querySelector("style[data-fpga-workbench]") !== null) return;
+    const style = document.createElement("style");
+    style.setAttribute("data-fpga-workbench", "");
+    style.textContent = CSS;
+    document.head?.append(style);
+  } catch {
+    // 静默失败：样式是装饰，不是功能。
+  }
 }
 
 /**
@@ -296,8 +308,15 @@ function firstUsableColor(
 ): { r: number; g: number; b: number; a: number } | undefined {
   let node: Element | null = element;
   while (node !== null && node !== undefined) {
-    // `getComputedStyle` 返回 CSSStyleDeclaration，按属性名取值需要索引签名。
-    const style = window.getComputedStyle(node) as unknown as Record<string, string | undefined>;
+    // `getComputedStyle` 在非浏览器渲染上下文里不存在，或在已脱离文档的元素上抛。
+    // 这条链路上的任何异常都只该让"读不到主题色"，不该让设置页整块挂掉（2026-10-29）。
+    let style: Record<string, string | undefined> | undefined;
+    try {
+      if (typeof window === "undefined" || typeof window.getComputedStyle !== "function") return undefined;
+      style = window.getComputedStyle(node) as unknown as Record<string, string | undefined>;
+    } catch {
+      return undefined;
+    }
     const color = parseColor(style[property] ?? "");
     if (color !== undefined && (opaqueOnly ? color.a === 1 : color.a !== 0)) return color;
     node = node?.parentElement;

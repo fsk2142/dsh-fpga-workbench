@@ -149,7 +149,6 @@ default → AreaOptimized_high → AlternateRoutability → PerformanceOptimized
 
 - 结论(`PASS` / `FAIL` / `BLOCKED` / `NOT_APPLICABLE`)+ 跑过的**命令原文**
   (判定词的含意见 `fpga-module-verif` 的**状态表**,唯一权威;下面「判据」只写本环节哪种情况记哪个词)
-  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 - 器件型号、用的策略与轮数
 - 资源占用(LUT / FF / BRAM / DSP)
 - 综合后估计的 Fmax 与报出来的时钟

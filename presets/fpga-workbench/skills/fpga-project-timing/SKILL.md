@@ -37,8 +37,7 @@ description: 判断 FPGA 工程 post-route 时序、未约束路径或违例归�
 - **UNVERIFIED**:只读了部分或过期报告,不足以判定当前工程时序
 - **NOT_APPLICABLE**:没有可分析的时序路径(如纯直通)
 
-判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
-  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
+判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。 *PASS* / *FAIL* / *BLOCKED* / *UNVERIFIED* / *NOT_APPLICABLE* 五个词,含义与用法以那张表为准。
 
 ### 三条硬门禁(2026-10-29 补)
 

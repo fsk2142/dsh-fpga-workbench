@@ -111,8 +111,7 @@ description: 编写工程缺少的专用 RTL、顶层、IP/BD 或简单 tb 时�
 - **UNVERIFIED**:RTL 写了但简单 sim / 检查没跑 —— 如实记,不要写成 PASS
 - **NOT_APPLICABLE**:这次不写工程内 RTL
 
-判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
-  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
+判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。 *PASS* / *FAIL* / *BLOCKED* / *UNVERIFIED* / *NOT_APPLICABLE* 五个词,含义与用法以那张表为准。
 
 ## 产物
 

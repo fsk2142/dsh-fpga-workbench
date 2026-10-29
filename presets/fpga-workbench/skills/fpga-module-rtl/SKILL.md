@@ -41,7 +41,6 @@ description: 编写或修改 FPGA 模块 RTL 时用;接口或关键方案未定�
 4. 按设置所选 RTL 语言递归读取 `rtl/` 下 `.sv` / `.v`。
    源码为 VHDL 时本检查器不覆盖 → 结论记 `NOT_APPLICABLE` 并说明原因,**不得视为通过**
    (判定词含义见 `fpga-module-verif` 的状态表,唯一权威)
-  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 
 ## 第一步:用模板生成文件(**仅新建文件时**),再编写逻辑
 

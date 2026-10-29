@@ -103,8 +103,7 @@ bit/<顶层>.ltx
 - **UNVERIFIED**:所选范围没跑完 / 没看日志
 - **NOT_APPLICABLE**:当前任务不涉及布局布线或实现产物,且无需生成新的实现证据
 
-判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
-  · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
+判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。 *PASS* / *FAIL* / *BLOCKED* / *UNVERIFIED* / *NOT_APPLICABLE* 五个词,含义与用法以那张表为准。
 
 **本环节不判定时序是否满足** —— 时序判定在 `fpga-project-timing`。
 

@@ -40,6 +40,62 @@ description: 判断 FPGA 工程 post-route 时序、未约束路径或违例归�
 判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
   · 速记:`PASS`=实测通过有证据 / `FAIL`=观察到真不符 / `BLOCKED`=缺条件做不了 / `UNVERIFIED`=没验或覆盖不足 / `NOT_APPLICABLE`=确不适用(不掩盖无法验证)
 
+### 三条硬门禁(2026-10-29 补)
+
+这三条都是「工具不报错但上板会偶发失败」的形态,所以必须显式查,不能只看 WNS 绿。
+
+**① 未约束路径必须为 0**
+
+`WNS ≥ 0` 只统计**被约束到**的路径。漏了一条 `create_clock`,那条路径根本不进时序分析 ——
+报告照样全绿,但它可能跑在 1/3 的频率上。
+
+取数（Vivado）：
+
+```tcl
+# 每次实现后都要看这个数，不是 0 就停下来
+report_timing_summary -no_header -no_detailed_paths
+# 输出里找 "Unconstrained Paths" 段；或直接：
+get_timing_paths -delay_type max -max_paths 1 -no_report_unconstrained
+```
+
+判据：`report_timing_summary` 的 **Unconstrained Paths 计数 = 0**。
+不为 0 就点出是哪条路径、为什么没进分析（多数是端口没 `create_clock`、或
+`set_input_delay` / `set_output_delay` 漏了）。
+
+**② 四角（multi-corner）必须都过**
+
+单角收敛不等于能跑。FPGA 的延迟随**工艺温度电压**变化，慢角（slow/高温/低压）
+和快角（fast/低温/高压）都可能出问题：
+
+- **慢角**：建立时间违例（逻辑太慢）
+- **快角**：保持时间违例（逻辑太快，数据跑过头）—— 这个单角跑不出来
+
+Vivado 默认就带四角（typical / slow / fast，各含温度电压组合），判据是
+**每个角都 WNS ≥ 0 且 WHS ≥ 0**：
+
+```tcl
+# 看每个 corner 的结果，不只看默认那个
+report_timing -max_paths 1 -delay_type max    ;# 建立
+report_timing -max_paths 1 -delay_type min    ;# 保持
+```
+
+报告里四个 corner 的 WNS/WHS 都要 ≥ 0。**只报了一个角的数就是 `UNVERIFIED`**，
+不是 PASS。
+
+**③ CDC 必须逐条消账**
+
+CDC 违例不能批量 waiver。每一条跨时钟域路径都要能回答：
+
+| 问题 | 合格答案 |
+|---|---|
+| 它真的跨域吗 | 是 → 继续；否 → 为什么被工具判成跨域 |
+| 用了什么同步手段 | 两级触发器 / 异步 FIFO / 握手 / 格雷码 |
+| 同步器本身抗亚稳吗 | 同步级数够（一般 2 级，高频要 3 级）、`ASYNC_REG` 属性加了吗 |
+| 数据总线怎么保证 | 总线必须**整体同步**或走异步 FIFO，不能每 bit 各自打两拍 |
+
+判定：CDC 工具报告里每条违例都有**具体归属**（确认安全 / 已修 / 有理由的例外），
+不能出现「未审」状态。批量 waiver 等于没做。
+
 ## 不收敛怎么办
 
 按顺序判断,**不得一上来就改约束**:

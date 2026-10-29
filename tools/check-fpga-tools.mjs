@@ -3515,6 +3515,83 @@ if (vsimPath === undefined) {
   check(badIniRun.status !== 0 && /modelsim.ini not found/u.test(String(badIniRun.stdout ?? "")), `run 侧显式 ini 不存在 → 拒绝 fallback(实际 ${String(badIniRun.status)})`, String(badIniRun.stdout ?? "").slice(-300));
 }
 
+// ── 上板通过率三项：X 初态 / 引脚比对 / 各自的边界 ──────────────────────────
+// 2026-10-29：这两个命令盯的是「仿真看不到、上板才发现」的形态。
+// 它们的判定出错比没有更糟（会让人以为查过了），所以每类结论都要实跑验证。
+{
+  const moduleTool = (name) => join(ROOT, "presets", "fpga-workbench", "tools", "module", name);
+  const projectTool = (name) => join(ROOT, "presets", "fpga-workbench", "tools", "project", name);
+
+  /** 造一个临时目录并写入若干文件。 */
+  const scratch = (label, files) => {
+    const dir = join(SANDBOX, `board-gate-${label}`);
+    for (const [rel, text] of Object.entries(files)) {
+      const file = join(dir, rel);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, text);
+    }
+    return dir;
+  };
+
+  /** 用 stdio 重定向跑一个命令（沙箱里不能开管道）。 */
+  const runTool = (script, args, cwd) => {
+    const logPath = join(cwd, `out-${String(Date.now())}-${String(Math.random()).slice(2, 7)}.log`);
+    const fd = openSync(logPath, "w");
+    const status = spawnSync(process.execPath, [script, ...args], { cwd, stdio: ["ignore", fd, "ignore"] }).status;
+    closeSync(fd);
+    return { status, output: existsSync(logPath) ? readFileSync(logPath, "utf8") : "" };
+  };
+
+  // ① X 初态：干净 TB 通过，带初值被拦
+  console.log("\n=== X 初态检查（module-verif-xinit.mjs）===");
+  {
+    const clean = scratch("xinit-clean", {
+      "verif/tb_dut.sv": "module tb_dut;\n  logic clk;\n  logic rst_n;\n  logic [7:0] data;\n  initial begin forever #5 clk = ~clk; end\nendmodule\n"
+    });
+    const result = runTool(moduleTool("module-verif-xinit.mjs"), [clean], clean);
+    check(result.status === 0, `无初值的 TB → 退 0(实际 ${String(result.status)})`, result.output.slice(-200));
+
+    const dirty = scratch("xinit-dirty", {
+      "verif/tb_dut.sv": "module tb_dut;\n  logic clk = 0;\n  logic rst_n = 0;\n  logic [7:0] data = '0;\nendmodule\n"
+    });
+    const blocked = runTool(moduleTool("module-verif-xinit.mjs"), [dirty], dirty);
+    check(blocked.status === 1, `有寄存器初值 → 退 1(实际 ${String(blocked.status)})`, blocked.output.slice(-200));
+    check(/rst_n/u.test(blocked.output) && /去掉声明处初值/u.test(blocked.output), "点名信号并给出改法");
+
+    // 显式 'x / 'z 与时钟类都不该被拦成阻塞
+    const exempt = scratch("xinit-exempt", {
+      "verif/tb_dut.sv": "module tb_dut;\n  logic clk = 0;\n  logic rst_n = 'x;\nendmodule\n"
+    });
+    const exemptResult = runTool(moduleTool("module-verif-xinit.mjs"), [exempt], exempt);
+    check(exemptResult.status === 3, `只有时钟类初值 → 退 3(实际 ${String(exemptResult.status)})`, exemptResult.output.slice(-200));
+  }
+
+  // ② 引脚比对：一致通过、电平不一致阻塞、漏约束阻塞
+  console.log("\n=== 引脚/IO 机器比对（project-pin-audit.mjs）===");
+  {
+    const pinCsv = "pin,port,iostandard\nAB12,led[0],LVCMOS33\n";
+    const makeProj = (label, xdc) => {
+      const dir = scratch(label, { "xdc/pins.xdc": xdc, "board/pins.csv": pinCsv });
+      return dir;
+    };
+
+    const same = makeProj("pin-same", "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]\nset_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]\n");
+    const okResult = runTool(projectTool("project-pin-audit.mjs"), [same, "--expect", join(same, "board", "pins.csv")], same);
+    check(okResult.status === 0, `完全一致 → 退 0(实际 ${String(okResult.status)})`, okResult.output.slice(-250));
+
+    const ioBad = makeProj("pin-io", "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]\nset_property IOSTANDARD LVCMOS18 [get_ports {led[0]}]\n");
+    const ioResult = runTool(projectTool("project-pin-audit.mjs"), [ioBad, "--expect", join(ioBad, "board", "pins.csv")], ioBad);
+    check(ioResult.status === 1, `电平标准不一致 → 退 1(实际 ${String(ioResult.status)})`, ioResult.output.slice(-250));
+    check(/电平标准不一致/u.test(ioResult.output) && /损伤/u.test(ioResult.output), "报出电平不一致并说明危害");
+
+    // 总线端口名带 [] —— 第一版正则把它截成 led[0，导致全部误报"漏约束"
+    const miss = makeProj("pin-miss", "set_property PACKAGE_PIN AA99 [get_ports {led[1]}]\n");
+    const missResult = runTool(projectTool("project-pin-audit.mjs"), [miss, "--expect", join(miss, "board", "pins.csv")], miss);
+    check(missResult.status === 1 && /漏约束/u.test(missResult.output), `期望有实际无 → 阻塞(实际 ${String(missResult.status)})`, missResult.output.slice(-250));
+    check(/led\[0\]/u.test(missResult.output), "总线端口名 led[0] 被正确解析（含 ] 不截断）");
+  }
+}
+
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");
 if (failures.length > 0) process.exitCode = 1;
 

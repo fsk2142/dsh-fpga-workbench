@@ -59,8 +59,18 @@ get_timing_paths -delay_type max -max_paths 1 -no_report_unconstrained
 ```
 
 判据：`report_timing_summary` 的 **Unconstrained Paths 计数 = 0**。
-不为 0 就点出是哪条路径、为什么没进分析（多数是端口没 `create_clock`、或
-`set_input_delay` / `set_output_delay` 漏了）。
+不为 0 就点出是哪条路径、为什么没进分析。
+
+**未约束路径的六类来源**（对着这张表逐个排除，比盲查快得多）：
+
+| 来源 | 典型场景 | 约束方式 |
+|---|---|---|
+| 输入路径缺失 | 从输入端口到内部寄存器，端口没 `set_input_delay` | `set_input_delay` + `create_clock` |
+| 输出路径缺失 | 从内部寄存器到输出端口，没 `set_output_delay` | `set_output_delay` |
+| 衍生时钟 | 门控 / 分频产生的时钟没声明 | `create_generated_clock` |
+| 异步复位 | 复位信号没做 `set_false_path` 或复位时序约束 | `set_false_path` 或 `set_max_delay` |
+| 虚拟时钟 | 外部器件接口没建虚拟时钟模型 | `create_clock -name virt` |
+| 纯组合路径 | 输入直通到输出的组合路径 | `set_max_delay` |
 
 **② 四角（multi-corner）必须都过**
 

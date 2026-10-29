@@ -3564,6 +3564,48 @@ if (vsimPath === undefined) {
     });
     const exemptResult = runTool(moduleTool("module-verif-xinit.mjs"), [exempt], exempt);
     check(exemptResult.status === 3, `只有时钟类初值 → 退 3(实际 ${String(exemptResult.status)})`, exemptResult.output.slice(-200));
+
+    // 存储器未 X 化 —— 这是 X 的第一大来源，仿真器的全局初值选项覆盖不到
+    const memOpen = scratch("xinit-mem-open", {
+      "rtl/dut.sv": "module dut(input logic clk, input logic [7:0] din, output logic [7:0] dout);\n  logic [7:0] buf [0:1023];\n  assign dout = buf[din];\nendmodule\n",
+      "verif/tb_dut.sv": "module tb_dut;\n  logic clk;\nendmodule\n"
+    });
+    const memOpenResult = runTool(moduleTool("module-verif-xinit.mjs"), [memOpen], memOpen);
+    check(memOpenResult.status === 1, `存储器未 X 化 → 退 1(实际 ${String(memOpenResult.status)})`, memOpenResult.output.slice(-300));
+    check(/SIM_INIT_X/u.test(memOpenResult.output), "给出 ifdef 改法");
+    check(/读写指针也要一起/u.test(memOpenResult.output), "提醒 FIFO 指针要一起 X 化");
+
+    // 有 SIM_INIT_X 守卫就该通过 —— 断言"有守卫"这个判据真的生效
+    const memGuarded = scratch("xinit-mem-guarded", {
+      "rtl/dut.sv": [
+        "module dut(input logic clk, output logic [7:0] dout);",
+        "  logic [7:0] buf [0:1023];",
+        "`ifdef SIM_INIT_X",
+        "  integer xi;",
+        "  initial for (xi = 0; xi < 1024; xi = xi + 1) buf[xi] = 8'hxx;",
+        "`endif",
+        "  assign dout = buf[0];",
+        "endmodule"
+      ].join("\n"),
+      "verif/tb_dut.sv": "module tb_dut;\n  logic clk;\nendmodule\n"
+    });
+    const memGuardedResult = runTool(moduleTool("module-verif-xinit.mjs"), [memGuarded], memGuarded);
+    check(memGuardedResult.status === 0, `有 SIM_INIT_X 守卫 → 退 0(实际 ${String(memGuardedResult.status)})`, memGuardedResult.output.slice(-250));
+
+    // $readmemh 初始化的存储器必须豁免 —— 否则对 .coe 化的 BRAM 全是假阳性
+    const memReadmem = scratch("xinit-mem-readmem", {
+      "rtl/dut.sv": [
+        "module dut(output logic [7:0] dout);",
+        "  logic [7:0] rom_data [0:255];",
+        "  initial $readmemh(\"init.hex\", rom_data);",
+        "  assign dout = rom_data[0];",
+        "endmodule"
+      ].join("\n"),
+      "verif/tb_dut.sv": "module tb_dut;\nendmodule\n"
+    });
+    const memReadmemResult = runTool(moduleTool("module-verif-xinit.mjs"), [memReadmem], memReadmem);
+    check(memReadmemResult.status === 3, `$readmemh 初始化的存储器 → 豁免退 3(实际 ${String(memReadmemResult.status)})`, memReadmemResult.output.slice(-250));
+    check(/初始化文件/u.test(memReadmemResult.output), "豁免原因写清楚了（不是静默跳过）");
   }
 
   // ② 引脚比对：一致通过、电平不一致阻塞、漏约束阻塞

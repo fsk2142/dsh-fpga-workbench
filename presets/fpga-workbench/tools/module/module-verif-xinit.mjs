@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * X 初态检查：找出 testbench 里「把未知变已知」的初值声明。
+ * X 初态检查：找出「把未知变已知」的两类源头 —— 寄存器声明初值、以及未做 X 化的存储器。
  *
  * ## 为什么这一项值半天工时
  *
@@ -21,11 +21,31 @@
  * TB 写了初值   → 时刻 0 只剩 2/5 个是 X     ← 问题被掩盖
  * ```
  *
- * **关键事实**（实测得出，与网上流传的说法相反）：ModelSim **默认就保留 X**，
- * 不需要 `+initreg` 之类的选项；反而 `-initreg0` 会把寄存器强制成 0，
- * 正好抹掉 X。所以「全 X 初态仿真」的落点是**检查 TB 源码**，不是加仿真器开关。
+ * ## 三档做法（本脚本覆盖后两档的一半）
+ *
+ * | 档 | 做法 | 本脚本 |
+ * |---|---|---|
+ * | 一 | 仿真器全局寄存器初值 | ❌ 不覆盖：ModelSim **默认就保留 X**，见下 |
+ * | 二 | **存储器 / FIFO 的 X 化**（`ifdef SIM_INIT_X`） | ✅ **扫 RTL 存储器有没有包** |
+ * | 三 | X 传播检查（`-xprop`） | ❌ 不覆盖（需仿真器选项） |
+ *
+ * **为什么第二档最重要**：仿真器的全局初值选项**不覆盖** BRAM / FIFO 的存储数组，
+ * 而那是 X 的第一大来源。一个没复位的存储器仿真读 0 不报错，硬件读随机数据 ——
+ * 更隐蔽的是随机数据恰好构成"看起来合法"的包头，故障现象与真问题完全不相干。
+ *
+ * **关键事实**（实测得出，与网上流传的说法相反）：
+ *
+ * - ModelSim **默认就保留 X**（`vopt` 裸跑、甚至 `-O5` 优化后仍是全 X），
+ *   不需要 `+initreg` 之类选项
+ * - 网上给的 `vopt -initreg +X` 在 **ModelSim 2020.4 上直接报错**
+ *   （`vopt-10538: Option "-initreg" is not a valid option`）—— 那是较新 Questa 的语法
+ * - `-initreg0` 反过来会把寄存器强制成 0、**正好抹掉 X**
+ *
+ * 所以第一档在本机不成立，重点落在**第二档**（存储器）与**检查 TB 源码**上。
  *
  * ## 判据
+ *
+ * ### A. 寄存器声明初值（TB 里）
  *
  * 只看**声明处**的初值（`logic x = 0;` / `reg x = 0;` / `bit x = 0;`），因为：
  *
@@ -38,6 +58,19 @@
  * - `clk` 类信号（名字含 clk/clock/osc）→ 允许，但提示用 `initial` 或 `forever` 更清楚
  * - 常数（`localparam` / `parameter`）→ 不算
  * - `logic x = 'z` / `= 'x` → 这是显式声明未知，允许
+ *
+ * ### B. 存储器未做 X 化（RTL 里）
+ *
+ * 找形如 `logic [7:0] mem [0:1023];` 的数组声明，然后判断它有没有被
+ * `ifdef SIM_INIT_X`（或类似名字）包起来。
+ *
+ * **豁免规则**（避免成为噪声源，否则没人会看结果）：
+ *
+ * - 声明处带初值文件 / `.coe` / `$readmemh` → 硬件上确有确定初值，**豁免**
+ * - 名字含 `rom` / `const` / `lookup` → 只读表，通常有初始化文件，报为提示而非阻塞
+ * - 只有一位、或深度 ≤ 2 的数组 → 多半不是真正的存储器，跳过
+ *
+ * 详见下方 `MEMORY_EXEMPT`。
  *
  * 退出码：0 = 无初值声明；1 = 有（阻塞）；2 = 输入错误；3 = 只有可豁免的。
  *
@@ -109,6 +142,52 @@ const isTestbench = (file, root) => {
   return /\/verif\//u.test(rel);
 };
 
+/**
+ * 存储器数组声明：`logic [7:0] mem [0:1023];` / `reg [15:0] buf [256];`
+ *
+ * 要求两个维度都在，否则只是普通向量而不是数组。
+ */
+const MEMORY_DECL =
+  /^\s*(?:logic|reg|bit|wire)\s*(?:signed|unsigned)?\s*(?:\[[^\]]+\]\s*)?(\w+)\s*\[\s*([^\]]+)\]\s*(?:=\s*([^;]+))?;/u;
+
+/** 存储器整段被 X 化必需出现的标记。 */
+const XINIT_GUARD = /`ifdef\s+(?:SIM_INIT_X|XINIT|SIM_X_INIT|INIT_X)\b/u;
+
+/**
+ * 判断某一行存储器声明是否「应当豁免」。
+ *
+ * 误报会让这个检查变成噪声，然后没人看结果 —— 比不检查更糟。
+ * 所以下列情况一律豁免，并在输出里写清原因，不是静默跳过。
+ */
+const memoryExempt = (name, line, context) => {
+  // 声明处直接给了初值（如 `= '{default:'0}`）—— 那本身就是在初始化，不是漏了
+  if (/=\s*['{]/u.test(line)) return "声明处已有初值";
+
+  // 只读表：通常配 .coe / $readmemh，硬件上确有确定内容
+  if (/(?:^|_)(?:rom|const|lookup|lut|table|coeff)(?:$|_)/iu.test(name)) return "只读表（通常是初始化文件驱动的）";
+
+  // 附近有 $readmemh / $readmemb / .coe 引用
+  if (/\$(?:readmem[hb])|\.coe\b|\.mif\b|INIT_FILE|init_file/iu.test(context)) return "有初始化文件（$readmemh / .coe）";
+
+  return undefined;
+};
+
+/** 取声明前后若干行作为上下文，用于判断初始化文件与 X 化守卫。 */
+const contextOf = (lines, index, radius = 6) =>
+  lines.slice(Math.max(0, index - radius), Math.min(lines.length, index + radius + 1)).join("\n");
+
+/** 解析数组深度，判断是不是「太浅不像存储器」的例外。 */
+const looksLikeRealMemory = (depthText) => {
+  // `[256]` 这种单值写法是深度
+  const simple = /^\s*(\d+)\s*$/u.exec(depthText);
+  if (simple !== null) return Number(simple[1]) > 2;
+  // `[0:1023]` 这种范围写法
+  const range = /^\s*(\d+)\s*:\s*(\d+)\s*$/u.exec(depthText);
+  if (range !== null) return Math.abs(Number(range[2]) - Number(range[1])) > 2;
+  // 靠参数决定的（`[0:DEPTH-1]`）—— 不当成例外，因为很可能就是真存储器
+  return true;
+};
+
 const main = () => {
   const argv = process.argv.slice(2);
   const options = { json: false, target: "" };
@@ -129,94 +208,178 @@ const main = () => {
   }
 
   const found = [];
+  const memories = [];
   let scanned = 0;
+  let rtlScanned = 0;
 
   for (const file of collected.files) {
-    if (!isTestbench(file, collected.root)) continue;
-    scanned += 1;
+    const rel = file.slice(collected.root.length).replace(/\\/gu, "/");
     const lines = readFileSync(file, "utf8").split("\n");
+    const tb = isTestbench(file, collected.root);
 
+    // ── A. TB 里的声明初值 ──
+    if (tb) {
+      scanned += 1;
+
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        // 跳过注释行（单行注释开头）
+        const code = line.replace(/\/\/.*$/u, "").replace(/\/\*.*?\*\//gu, "");
+        if (code.trim() === "") continue;
+
+        const decl = DECL_INIT.exec(code);
+        if (decl !== null) {
+          const [, name, value] = decl;
+          if (isExplicitUnknown(value)) continue;
+          if (isConstantRef(value)) continue;
+          const isClock = CLOCK_HINT.test(name);
+          found.push({
+            file: rel,
+            line: i + 1,
+            name,
+            value: value.trim(),
+            kind: isClock ? "时钟类" : "寄存器类",
+            text: line.trim().slice(0, 92)
+          });
+          continue;
+        }
+
+        const initial = INITIAL_ASSIGN.exec(code);
+        if (initial !== null) {
+          const [, name, value] = initial;
+          if (isExplicitUnknown(value) || isConstantRef(value)) continue;
+          if (CLOCK_HINT.test(name)) continue; // 时钟在 initial 里启动是常态
+          found.push({
+            file: rel,
+            line: i + 1,
+            name,
+            value: value.trim(),
+            kind: "initial 赋值",
+            text: line.trim().slice(0, 92)
+          });
+        }
+      }
+      continue;
+    }
+
+    // ── B. RTL 里的存储器是否做了 X 化 ──
+    rtlScanned += 1;
     for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      // 跳过注释行（单行注释开头）
-      const code = line.replace(/\/\/.*$/u, "").replace(/\/\*.*?\*\//gu, "");
+      const code = lines[i].replace(/\/\/.*$/u, "");
       if (code.trim() === "") continue;
 
-      const decl = DECL_INIT.exec(code);
-      if (decl !== null) {
-        const [, name, value] = decl;
-        if (isExplicitUnknown(value)) continue;
-        if (isConstantRef(value)) continue;
-        const isClock = CLOCK_HINT.test(name);
-        found.push({
-          file: file.slice(collected.root.length).replace(/\\/gu, "/"),
-          line: i + 1,
-          name,
-          value: value.trim(),
-          kind: isClock ? "时钟类" : "寄存器类",
-          text: line.trim().slice(0, 92)
-        });
-        continue;
-      }
+      const decl = MEMORY_DECL.exec(code);
+      if (decl === null) continue;
 
-      const initial = INITIAL_ASSIGN.exec(code);
-      if (initial !== null) {
-        const [, name, value] = initial;
-        if (isExplicitUnknown(value) || isConstantRef(value)) continue;
-        if (CLOCK_HINT.test(name)) continue; // 时钟在 initial 里启动是常态
-        found.push({
-          file: file.slice(collected.root.length).replace(/\\/gu, "/"),
-          line: i + 1,
-          name,
-          value: value.trim(),
-          kind: "initial 赋值",
-          text: line.trim().slice(0, 92)
-        });
-      }
+      const [, name, depthText] = decl;
+      if (!looksLikeRealMemory(depthText)) continue;
+
+      const context = contextOf(lines, i);
+      // 已经被 `ifdef SIM_INIT_X 包起来？整段上下文里有守卫就认
+      const guarded = XINIT_GUARD.test(context);
+      if (guarded) continue;
+
+      const exempt = memoryExempt(name, code, context);
+      memories.push({
+        file: rel,
+        line: i + 1,
+        name,
+        depth: depthText.trim(),
+        exempt,
+        kind: exempt === undefined ? "存储器未 X 化" : "存储器（豁免）",
+        text: lines[i].trim().slice(0, 92)
+      });
     }
   }
 
   const registers = found.filter((item) => item.kind === "寄存器类" || item.kind === "initial 赋值");
   const clocks = found.filter((item) => item.kind === "时钟类");
+  const unguarded = memories.filter((item) => item.exempt === undefined);
+  const exempted = memories.filter((item) => item.exempt !== undefined);
 
   const payload = {
     scanned,
+    rtlScanned,
     found,
+    memories,
     blockers: registers,
+    memoryBlockers: unguarded,
     exempt: clocks,
-    verdict: registers.length > 0 ? "FAIL" : clocks.length > 0 ? "WARN" : "PASS"
+    memoryExempt: exempted,
+    verdict:
+      registers.length > 0 || unguarded.length > 0
+        ? "FAIL"
+        : clocks.length > 0 || exempted.length > 0
+          ? "WARN"
+          : "PASS"
   };
 
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
   } else {
-    console.log(`扫描 ${String(scanned)} 个 testbench 文件`);
-    if (found.length === 0) {
-      console.log("");
-      console.log("PASS：没有声明处初值 —— 仿真会从 X 开始，依赖初值的逻辑会暴露出来。");
-    } else {
-      if (registers.length > 0) {
-        console.log("");
-        console.log(`会掩盖 X 的初值 ${String(registers.length)} 处：`);
-        for (const item of registers) {
-          console.log(`  ✗ ${item.file}:${String(item.line)}  ${item.name} = ${item.value}`);
-          console.log(`        ${item.text}`);
-        }
-        console.log("");
-        console.log("这些声明让仿真从确定值开始。上板时对应寄存器是未知的 —— 依赖它的逻辑不会在这里报错。");
-        console.log("改法：去掉声明处初值，在 initial 里按**真实上电顺序**驱动（复位释放前不驱动数据）。");
+    console.log(`扫描 ${String(scanned)} 个 testbench + ${String(rtlScanned)} 个 RTL 文件`);
+    console.log("");
+
+    // ── A. 寄存器声明初值 ──
+    if (registers.length > 0) {
+      console.log(`【寄存器】会掩盖 X 的初值 ${String(registers.length)} 处：`);
+      for (const item of registers) {
+        console.log(`  ✗ ${item.file}:${String(item.line)}  ${item.name} = ${item.value}`);
+        console.log(`        ${item.text}`);
       }
-      if (clocks.length > 0) {
-        console.log("");
-        console.log(`时钟类可豁免 ${String(clocks.length)} 处（仍需确认它们确实先起振）：`);
-        for (const item of clocks) {
-          console.log(`  ! ${item.file}:${String(item.line)}  ${item.name} = ${item.value}`);
-        }
+      console.log("");
+      console.log("这些声明让仿真从确定值开始。上板时对应寄存器是未知的 —— 依赖它的逻辑不会在这里报错。");
+      console.log("改法：去掉声明处初值，在 initial 里按**真实上电顺序**驱动（复位释放前不驱动数据）。");
+      console.log("");
+    }
+
+    // ── B. 存储器未做 X 化 ──
+    if (unguarded.length > 0) {
+      console.log(`【存储器】未做 X 化 ${String(unguarded.length)} 处（这一类仿真器选项覆盖不到）：`);
+      for (const item of unguarded) {
+        console.log(`  ✗ ${item.file}:${String(item.line)}  ${item.name} [${item.depth}]`);
+        console.log(`        ${item.text}`);
+      }
+      console.log("");
+      console.log("没复位的存储器仿真读 0 不报错，硬件读随机数据。更隐蔽的是随机数据恰好构成");
+      console.log("「看起来合法」的包头 —— 故障现象与真问题完全不相干。");
+      console.log("");
+      console.log("改法（RTL 里包一层，只在仿真编译时生效）：");
+      console.log("  `ifdef SIM_INIT_X");
+      console.log("    integer xi;");
+      console.log("    initial for (xi = 0; xi < DEPTH; xi = xi + 1) mem[xi] = {WIDTH{1'bx}};");
+      console.log("  `endif");
+      console.log("  **FIFO 的读写指针也要一起 X 化** —— 只 X 化数据数组、指针仍从 0 开始，");
+      console.log("  两者不一致会产生难以解释的现象。");
+      console.log("");
+    }
+
+    // ── 豁免项（写清原因，不是静默跳过）──
+    if (clocks.length > 0) {
+      console.log(`【豁免】时钟类初值 ${String(clocks.length)} 处（需确认它们确实先起振）：`);
+      for (const item of clocks) {
+        console.log(`  ! ${item.file}:${String(item.line)}  ${item.name} = ${item.value}`);
+      }
+      console.log("");
+    }
+    if (exempted.length > 0) {
+      console.log(`【豁免】存储器 ${String(exempted.length)} 处（硬件上确有确定初值）：`);
+      for (const item of exempted) {
+        console.log(`  ! ${item.file}:${String(item.line)}  ${item.name} — ${item.exempt}`);
+      }
+      console.log("");
+    }
+
+    if (registers.length === 0 && unguarded.length === 0) {
+      if (clocks.length === 0 && exempted.length === 0) {
+        console.log("PASS：没有声明处初值，也没有未 X 化的存储器 —— 仿真会从 X 开始。");
+      } else {
+        console.log("WARN：没有阻塞项，但有上面那些豁免项需要人工确认。");
       }
     }
   }
 
-  process.exit(registers.length > 0 ? 1 : clocks.length > 0 ? 3 : 0);
+  process.exit(registers.length > 0 || unguarded.length > 0 ? 1 : clocks.length > 0 || exempted.length > 0 ? 3 : 0);
 };
 
 main();

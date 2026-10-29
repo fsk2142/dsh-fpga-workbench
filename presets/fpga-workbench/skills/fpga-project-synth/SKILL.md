@@ -34,7 +34,7 @@ wait_on_run synth_1
 
 ### 走 MCP 还是走 shell
 
-**有 `mcp__vivado__*` 时优先走 MCP** —— 常驻会话:工程只 `open_project` 一次,后续命令秒级;
+**有 `mcp__vivado__*` 时优先走 MCP**：常驻会话:工程只 `open_project` 一次,后续命令秒级;
 shell 的 `vivado -mode batch` 每条命令都要重开 Vivado(30–60 秒启动)。
 
 ```
@@ -50,9 +50,9 @@ vivado_status(session_id, action="runs")       ← 隔 30–60 秒查
 
 MCP 不可用时退回 shell(`vivado -mode batch -source prj/run_synth.tcl`),放后台任务别前台死等。
 
-**两种都不改变判据** —— MCP 只是把命令送进 Vivado、把输出送回来,结论仍由你判。
+**两种都不改变判据**：MCP 只是把命令送进 Vivado、把输出送回来,结论仍由你判。
 
-**先看 run 是不是已经新鲜**:`get_property STATUS/PROGRESS/NEEDS_REFRESH [get_runs synth_1]` —— 已经
+**先看 run 是不是已经新鲜**:`get_property STATUS/PROGRESS/NEEDS_REFRESH [get_runs synth_1]`：已经
 `Complete!` 且 `NEEDS_REFRESH=0` 说明源码没动,**直接 `open_run synth_1` 出报告就行,不必重跑**
 (分类模板 `synthesis/vivado_project_synthesis.tcl` 的 `RESET_POLICY=auto` 就是这么做的;
 要拿一次干净结果再 `RESET_POLICY always` 或手工 `reset_run synth_1`)。
@@ -63,6 +63,34 @@ MCP 不可用时退回 shell(`vivado -mode batch -source prj/run_synth.tcl`),放
 4. **时序先过一眼再往上压**(见下节)
 5. 有问题按「出问题往哪跳」回去改,不要在本环节改设计
 
+## 综合警告必须解决
+
+**综合报告里的警告要逐条处理,不许留着。** 与模块级同一口径。
+
+工程级多一层:**先分清警告是谁的**:
+
+| 警告落在哪 | 归属 | 谁改 |
+|---|---|---|
+| 顶层 / 集成胶合逻辑 | 工程 | `fpga-project-rtl` 或本环节对应的 RTL 修改 |
+| `src/rtl/` 下本工程写的专用模块 | 工程 | `fpga-project-rtl` |
+| `src/rtl/` 下**从模块库拷入的** | **模块的问题** | **回模块库改**(`fpga-module-rtl`),改完重新拷入 |
+| `ip/<ip-name>/` 下厂商 IP / 生成的 wrapper | 厂商或 IP 配置 | 改 IP 配置,不改生成文件 |
+
+**典型要处理的警告**:
+
+| 警告 | 含义 | 处理 |
+|---|---|---|
+| `[Synth 8-327] inferring latch` | 组合逻辑漏分支 | **必须修** |
+| `[Synth 8-6014] unused sequential element` | 寄存器写了没读 | 要么用上,要么删掉 |
+| `[Synth 8-3331] design has unconnected port` | 端口悬空 | 接上或明确标注不用 |
+| `[Synth 8-3917] resource contention` | 资源冲突 | 查是否多驱动同一存储器端口 |
+| `[Synth 8-5788] no_clock` / 约束类 | 约束不全 | 回 `fpga-project-constraints` 补 |
+| `[Netlist 29-xxx]` 网络/端口类 | 网表构建问题 | 查实例化与端口连接 |
+
+**压制不是解决**:`set_msg_config -suppress` 躲警告等于没检过它,除非确认是工具误报并写明理由。
+
+**PASS 要求警告清零**,或每条都有「为什么不影响」的书面说明。
+
 ## 综合后先看时序:满足了再提高一些
 
 综合一结束就看**综合后时序摘要**(与 `doc/spec.md` 的时钟目标比):
@@ -70,7 +98,7 @@ MCP 不可用时退回 shell(`vivado -mode batch -source prj/run_synth.tcl`),放
 | 情况 | 怎么做 |
 |---|---|
 | 已经卡着要求(WNS≈0 或负) | 先收时序:插流水、拆逻辑、改写法(回 `fpga-project-rtl`);**不要**急着提频 |
-| **满足要求且还有裕量** | **在仍满足要求的前提下,把性能再提高一些** —— 例如适当提目标频率、压一压周期、或继续减逻辑级;每压一次都回到综合/时序看一眼,**始终以「满足要求」为底线** |
+| **满足要求且还有裕量** | **在仍满足要求的前提下,把性能再提高一些**：例如适当提目标频率、压一压周期、或继续减逻辑级;每压一次都回到综合/时序看一眼,**始终以「满足要求」为底线** |
 | 明显富余很多 | 可以问用户要不要提频/减资源;用户点头再动 spec 时钟目标 |
 | 已经不满足 | 降目标或改设计,先问用户取舍,不要默默放宽约束 |
 

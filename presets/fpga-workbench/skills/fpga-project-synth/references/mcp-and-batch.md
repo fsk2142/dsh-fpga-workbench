@@ -30,7 +30,7 @@ vivado_log_messages(session_id)                        ← 看告警/错误
    `wait_on_run` / `synth_design` / `source` / `write_bitstream` 都要求**单独一次调用**
    （服务器钩子要求它们在字符串开头），不能和别的命令用分号拼。
 2. **同一 session 必须串行**（单线程 TCL）。要并行就跑两个 session，用子代理各管一个。
-3. **长命令返回 `status: running` 时不要空闲等** —— 命令仍在 Vivado 里跑。
+3. **长命令返回 `status: running` 时不要空闲等**：命令仍在 Vivado 里跑。
    用子代理并行读日志 / 看代码 / 准备下一步，自己只隔 30–60 秒轮询 `vivado_status`。
 
 ### 卡住与出错
@@ -55,11 +55,11 @@ vivado -mode batch -source prj/run_synth.tcl
 
 ## 两种都不改变判据
 
-MCP / shell 只是把命令送进 Vivado、把输出送回来 —— **它不判断设计对不对**。
+MCP / shell 只是把命令送进 Vivado、把输出送回来：**它不判断设计对不对**。
 `synth.md` 的结论、资源与时序数字、PASS/FAIL 的判据，照旧走本技能与
 `fpga-project-timing` 的规则。
 
 ## 文档查询
 
 `vivado_doc_search` 需要**另外装 AMD 文档 MCP server**。没装就说查不了，
-**不要凭记忆编文档结论** —— 那比没有结论更糟。
+**不要凭记忆编文档结论**：那比没有结论更糟。

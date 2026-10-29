@@ -8,7 +8,7 @@ description: 工程综合后运行到 route_design 时用;用户需要 bitstream
 **从综合后接着做**(综合见 `fpga-project-synth`):先完成布局布线(implementation)与 DRC;
 用户需要 bitstream 时,再从同一份已完成的 `impl_1` 继续生成 bit/ltx。
 
-**实现报错可以就地排查**:看日志定位、改约束或改代码重跑 —— 不必把每个模块环节重跑一遍。
+**实现报错可以就地排查**:看日志定位、改约束或改代码重跑：不必把每个模块环节重跑一遍。
 只有正式出 bitstream 验收时,才启用下文额外的发布前置。
 
 | 东西 | 在哪 |
@@ -37,10 +37,24 @@ description: 工程综合后运行到 route_design 时用;用户需要 bitstream
 
 `bitstream` 用于正式验收时还要求:
 
-- **`rtl` / `sim` / `xdc` 尽量完好**(次序不限;见 `fpga-project-spec`)
-- **可复用模块**模块级 `rtl` 与 `verif` 是 `PASS` 或有据 `NOT_APPLICABLE` —— 实现一次几十分钟,
-  不得拿它当验证手段
-- **专用模块**在 `src/sim/` 有 `tb_*` 且跑过一次(标准见 `fpga-project-spec`)
+- **`doc/syssim.md` 是 PASS**(仿真验证已通过)—— **这是硬门槛**,见下
+- **可复用模块**模块级 `rtl` 与 `verif` 是 `PASS` 或有据 `NOT_APPLICABLE`:实现一次几十分钟,
+  **不得拿它当验证手段**
+- **专用模块**在 `src/sim/` 有 `tb_*` 且跑过一次
+
+### 仿真没过,不该出 bit
+
+**出 bit 之前的最后一道门是「仿真验证通过」。**
+
+| 情况 | 能不能出 bit |
+|---|---|
+| 联仿 PASS + 时序 PASS | ✅ 可以 |
+| 联仿 `UNVERIFIED` / `FAIL` | ❌ 先补仿真 |
+| 时序 `FAIL` | ❌ 先收时序 |
+| 模块级结论不齐 | ⚠️ 早期探索可以,正式验收不行 |
+
+**为什么**:实现一次几十分钟,出 bit 再上板发现问题,返工成本是仿真里发现的几十倍。
+**实现不是验证手段** —— 拿它去发现功能错误等于用最贵的方式做最慢的调试。
 
 ## 本环节要跑的命令
 
@@ -67,7 +81,7 @@ wait_on_run impl_1
 - `route` 范围不执行 `write_bitstream`;职责分开后,两段才能独立复用与核验。
 - `bitstream` 范围执行②前,确认 `impl_1` 是 `Complete!` 且 `NEEDS_REFRESH=0`;
   **源码在实现之后又改过就别继续出 bit**
-  —— 那要么拿旧布局布线交差,要么让 Vivado 偷偷重跑一遍实现,两条都不行(回①重跑)。
+ ：那要么拿旧布局布线交差,要么让 Vivado 偷偷重跑一遍实现,两条都不行(回①重跑)。
 - `impl_1` 上可以开 `set_property AUTO_INCREMENTAL_CHECKPOINT 1 [get_runs impl_1]`:小改 RTL 时复用
   上一轮 place/route(Vivado 自己判断值不值得)。**正式出图建议关掉**(设 0)拿一次干净结果。
 
@@ -103,9 +117,9 @@ bit/<顶层>.ltx
 - **UNVERIFIED**:所选范围没跑完 / 没看日志
 - **NOT_APPLICABLE**:当前任务不涉及布局布线或实现产物,且无需生成新的实现证据
 
-判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。 *PASS* / *FAIL* / *BLOCKED* / *UNVERIFIED* / *NOT_APPLICABLE* 五个词,含义与用法以那张表为准。
+判定词含义见 `fpga-module-verif` 的**状态表**(唯一权威)。
 
-**本环节不判定时序是否满足** —— 时序判定在 `fpga-project-timing`。
+**本环节不判定时序是否满足**：时序判定在 `fpga-project-timing`。
 
 ## 产物
 

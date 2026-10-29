@@ -161,6 +161,13 @@ for (const file of toolFiles) accepted.set(file.split(/[\\/]/u).pop(), acceptedF
 }
 
 // ── ⑤ 技能正文引用的 references 文件都存在 ─────────────────────────────────
+//
+// **两种写法都要认**：
+//   · `references/x.md`              —— 本技能自己的 references
+//   · `../fpga-module-rtl/references/x.md` —— **跨技能引用**（口径统一到唯一出处时用）
+//
+// 早期只认第一种，于是把跨技能链接误判成「缺文件」。跨技能引用是合法的：
+// 同一个规则（如 RTL 规范清单）只该有一份，别的技能指过去。
 {
   const broken = [];
   for (const dir of readdirSync(join(PRESET, "skills"), { withFileTypes: true }).filter((e) => e.isDirectory())) {
@@ -170,7 +177,18 @@ for (const file of toolFiles) accepted.set(file.split(/[\\/]/u).pop(), acceptedF
     } catch {
       continue;
     }
-    for (const match of text.matchAll(/references\/([\w.-]+\.md)/gu)) {
+    // 先匹配跨技能形式（带 ../<skill>/），再匹配技能内形式
+    const crossSkill = [...text.matchAll(/\.\.\/([\w.-]+)\/references\/([\w.-]+\.md)/gu)];
+    for (const match of crossSkill) {
+      try {
+        statSync(join(PRESET, "skills", match[1], "references", match[2]));
+      } catch {
+        broken.push(`${dir.name} → ../${match[1]}/references/${match[2]}`);
+      }
+    }
+    // 技能内引用：把跨技能的部分剔掉再查，避免重复报
+    const stripped = text.replace(/\.\.\/[\w.-]+\/references\/[\w.-]+\.md/gu, "");
+    for (const match of stripped.matchAll(/references\/([\w.-]+\.md)/gu)) {
       try {
         statSync(join(PRESET, "skills", dir.name, "references", match[1]));
       } catch {
@@ -178,7 +196,10 @@ for (const file of toolFiles) accepted.set(file.split(/[\\/]/u).pop(), acceptedF
       }
     }
   }
-  check(broken.length === 0, `技能正文引用的 references 文件都存在（缺：${broken.join("、") || "无"}）`);
+  check(
+    broken.length === 0,
+    `技能正文引用的 references 文件都存在（含跨技能引用；缺：${broken.join("、") || "无"}）`
+  );
 }
 
 console.log("");

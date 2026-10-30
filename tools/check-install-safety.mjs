@@ -167,9 +167,19 @@ const afterLock = lockVersions();
 console.log(`加入后锁定包数 = ${afterLock.size}`);
 
 // ── 对比:既有依赖有没有被动过 ───────────────────────────────────────────────
+//
+// **本插件自身要排除**（2026-10-30 实测踩到）。
+//
+// 这个检查想守的是「加入本插件**不会**挪动别人」。而基线里本插件本来就以
+// `https://github.com/...` 装着，测试用的是 `file:` —— 它的规格必然从 https 变 file。
+// 那是**测试的安装方式差异**，不是"扰动了既有依赖"。
+//
+// 原实现把本插件也算进对比，于是这个检查**永远红**，而红的原因与它要防的事无关。
+const SELF_NAME = "dsh-fpga-workbench";
 
 const changed = [];
 for (const [name, version] of baseLock) {
+  if (name === SELF_NAME) continue; // 见上：自己的规格变化不算扰动
   const next = afterLock.get(name);
   if (next === undefined) changed.push(`${name}: ${version} -> 被移除`);
   else if (next !== version) changed.push(`${name}: ${version} -> ${next}`);
@@ -183,9 +193,9 @@ if (changed.length === 0) {
   for (const line of changed) console.log("  " + line);
 }
 
-note(changed.length === 0, "加入本插件不会移动任何既有依赖的锁定版本");
+note(changed.length === 0, `加入本插件不会移动任何既有依赖的锁定版本（本插件自身的规格变化已排除）`);
 note(excluded.length === 0, `git 规格的依赖也纳入检查${excluded.length === 0 ? "" : `(排除了 ${excluded.length} 个:版本位移未覆盖)`}`);
-const self = afterLock.get("dsh-fpga-workbench");
+const self = afterLock.get(SELF_NAME);
 note(self !== undefined, "本插件进入了依赖树");
 console.log(`本插件锁定为 dsh-fpga-workbench@${self ?? "(未锁定)"}`);
 

@@ -93,7 +93,14 @@ export function compareTree(sourceRoot, installedRoot) {
     if (hashOf(join(sourceRoot, rel)) !== hashOf(installed)) failures.push(`${rel} 与源不一致`);
   }
   // 反过来:已装副本里多出来的文件 = 上次安装的残留(白名单外的旧文件)
+  //
+  // **但 npm/pnpm 会无条件装这几个元数据文件**，它们不在 `files` 白名单里，
+  // 却一定会出现在 node_modules 下。原实现把它们当"旧副本残留"报出来，
+  // 于是这个检查**永远红**——一旦永远红，人就不看了（2026-10-30 实测：
+  // 逐字节比对 0 项不同、缺失 0 项，只剩这 3 个正常文件在报错）。
+  const ALWAYS_INSTALLED = new Set(["package.json", "README.md", "LICENSE", "LICENSE.md", "LICENCE", "CHANGELOG.md"]);
   for (const rel of shippedFiles(installedRoot)) {
+    if (ALWAYS_INSTALLED.has(rel)) continue;
     if (!expected.includes(rel)) failures.push(`已装多出 ${rel}(旧副本残留)`);
   }
   return failures;

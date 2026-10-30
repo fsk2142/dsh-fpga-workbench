@@ -141,6 +141,11 @@ function scrub(message) {
   text = text.replace(/这个错我犯过([一二三四五六七八九\d]+)次/gu, "这个问题出现过$1次");
   text = text.replace(/我犯过的?错/gu, "出现过的问题");
   text = text.replace(/我当时/gu, "当时");
+  // `我建议加` → `建议加`；`需要你拍板` → `待定`
+  text = text.replace(/我建议/gu, "建议");
+  text = text.replace(/需要你拍板要不要/gu, "是否");
+  text = text.replace(/需要你拍板/gu, "待定");
+  text = text.replace(/你拍板/gu, "决定");
 
   // 4b. **第三人称指代**：比「用户」更容易暴露"AI 在与某个人对话"。
   //     实测漏网（2026-10-21 自检抓到）：`这正是**他**最初的原话——「…」`。

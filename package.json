@@ -59,6 +59,7 @@
     "test:installed": "node tools/check-all.mjs --installed",
     "test:safety": "node tools/check-all.mjs --safety",
     "test:vivado": "node tools/check-all.mjs --vivado",
+    "privacy:history": "node tools/check-privacy-history.mjs",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm run typecheck && npm test"
   },

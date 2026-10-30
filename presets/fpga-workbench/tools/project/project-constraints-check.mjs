@@ -141,11 +141,80 @@ const optionValue = (text, option) => {
   return match === null ? "" : (match[1] ?? match[2] ?? "");
 };
 
-/** 从 `[get_ports xxx]` / `[get_ports {a b}]` 里取端口名。 */
+/**
+ * 从 `[get_ports ...]` 里取端口名。
+ *
+ * ## 支持三种形态（F-12）
+ *
+ * ```
+ * [get_ports clk]              → ["clk"]
+ * [get_ports {led[0]}]         → ["led[0]"]        ← 花括号里的 [ ] 是端口名的一部分
+ * [get_ports {led[0] led[1]}]  → ["led[0]", "led[1]"]
+ * [get_ports [get_ports ...]]  → 嵌套时取最内层
+ * ```
+ *
+ * ## 原实现的 bug（已修）
+ *
+ * 原来用 `/\[get_ports\s+\{?([^\]\}]+)\}?\]/` —— 那个 `[^\]}` 会在**第一个 `]`** 处停下，
+ * 于是：
+ *
+ * | 输入 | 原来 | 现在 |
+ * |---|---|---|
+ * | `[get_ports {led[0]}]` | `["led[0"]` ← 末尾 `]` 被截掉 | `["led[0]"]` |
+ * | `[get_ports {led[0] led[1]}]` | `["led[0"]` ← **第二位完全丢失** | 两个都在 |
+ *
+ * 漏掉端口意味着检查器以为「这个引脚没被约束」，或者完全不知道它的存在。
+ *
+ * ## 解析策略
+ *
+ * 1. 先找**花括号包裹**的形态：`[get_ports { ... }]` —— 花括号内的内容整体取出再按空白拆
+ * 2. 没有花括号时取到**配对**的 `]`（按括号深度匹配，不吃掉总线位的 `]`）
+ * 3. 解析不出来返回空数组（由调用方按「无法解析」处理，不静默当成功）
+ *
+ * @param text - 一行 XDC 命令文本。
+ * @returns 端口名数组。
+ */
 const portNames = (text) => {
-  const match = /\[get_ports\s+\{?([^\]\}]+)\}?\]/u.exec(text);
-  if (match === null) return [];
-  return match[1]
+  const open = /\[get_ports\s+/u.exec(text);
+  if (open === null) return [];
+  let rest = text.slice(open.index + open[0].length);
+
+  let body;
+  if (rest.startsWith("{")) {
+    // 花括号形态：取到配对的 }
+    let depth = 0;
+    let end = -1;
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === "{") depth += 1;
+      else if (rest[i] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    if (end < 0) return []; // 花括号没闭合：解析失败
+    body = rest.slice(1, end);
+  } else {
+    // 无花括号：取到**配对**的 ]（要算深度，否则 `led[0]` 会提前截断）
+    let depth = 0;
+    let end = -1;
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === "[") depth += 1;
+      else if (rest[i] === "]") {
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+        depth -= 1;
+      }
+    }
+    if (end < 0) return [];
+    body = rest.slice(0, end);
+  }
+
+  return body
     .split(/\s+/u)
     .map((name) => name.trim())
     .filter((name) => name !== "" && !name.startsWith("-"));

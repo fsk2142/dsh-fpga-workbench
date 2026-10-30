@@ -34,11 +34,14 @@
  *
  * - **引脚号不一致**：阻塞（接错线）
  * - **电平标准不一致**：阻塞（可能烧器件，最高危）
+ * - **期望有电平标准、实际缺失**：**阻塞**（无法证明电平正确 —— 缺失 ≠ 一致）
  * - **同一引脚被多个端口占用**：阻塞
  * - **期望有、实际没有**（漏约束）：阻塞（那个端口会被工具随便分配）
  * - **实际有、期望没有**（多了约束）：警告（可能是遗留）
- * - **驱动强度 / 上下拉不一致**：警告（多数情况不影响功能，但差分对与开漏要留意）
- * - **Bank 电压冲突**：阻塞（同一 bank 内混用不兼容电平）
+ * - **驱动强度 / 上下拉不一致或缺失**：警告（多数情况不影响功能，但差分对与开漏要留意）
+ *
+ * **不做 Bank/VCCO 冲突检查**：那需要器件 pinout 的权威映射，本工具不猜。
+ * 结论里会明确标 `UNVERIFIED: 未取得 Bank/VCCO 证据`，不假装 PASS（F-03）。
  *
  * 退出码：0 = 完全一致；1 = 有阻塞项；2 = 输入缺失或用不了；3 = 只有警告。
  *
@@ -203,13 +206,28 @@ const parseReportIo = (text) => {
 };
 
 /**
- * 从封装推断 bank。
+ * Bank / VCCO 检查：**本工具不做**（F-03）。
  *
- * 不查器件手册（那要联网/要装 Vivado），只用**引脚编号的命名规律**做保守推断：
- * 同 bank 的引脚在编号上通常相邻，但这不可靠 —— 所以这里**只在两侧都能推断时才比**，
- * 推不出来就跳过。宁可漏报一条 Bank 冲突，也不要因为猜错引脚映射制造误报。
+ * ## 为什么不做
+ *
+ * 判断「同一 Bank 的引脚电压冲突」需要 `PACKAGE_PIN → IO Bank → 支持的 IOSTANDARD`
+ * 的**权威映射**，那份数据只在 Vivado 器件库或厂商 pinout 里。从封装引脚编号猜 Bank
+ * 是不可靠的：不同器件、封装、速度等级、器件变种都可能不同，猜错就是误报或漏报。
+ *
+ * 曾经这里有个 `const bankOf = () => ""` 的空桩，注释还写着"同 bank 相邻引脚可保守推断"，
+ * 文件头把"Bank 电压冲突"列入判据 —— **那是"宣称检查但实际没检查"**，比不检查更危险。
+ *
+ * ## 现在的做法
+ *
+ * 明确输出 `UNVERIFIED`：告诉使用者「这项没查，要查得自己拿器件 pinout 核」。
+ * 不假装 PASS，也不制造基于猜测的误报。
+ *
+ * 真正实现它需要：Vivado `get_package_pins` 导出的 bank 映射，或手工整理的
+ * 板卡级 `PACKAGE_PIN → VCCO` 表。有那份数据才能做，不能靠推断。
  */
-const bankOf = () => "";
+const BANK_CHECK_NOTE =
+  "Bank/VCCO 冲突未检查 —— 需要器件 pinout（PACKAGE_PIN → IO Bank → VCCO），" +
+  "本工具不猜。请用 Vivado 的器件视图或板卡手册核对同 Bank 引脚的电压标准是否兼容。";
 
 const readExpectation = (path) => {
   const text = readFileSync(path, "utf8");
@@ -293,18 +311,42 @@ const main = () => {
     if (want.pin !== "" && got.pin !== "" && want.pin !== got.pin) {
       blockers.push({ kind: "引脚不一致", port: want.port, detail: `期望 ${want.pin}，实际 ${got.pin}` });
     }
-    if (want.iostandard !== "" && got.iostandard !== "" && want.iostandard !== got.iostandard) {
-      blockers.push({
-        kind: "电平标准不一致",
-        port: want.port,
-        detail: `期望 ${want.iostandard}，实际 ${got.iostandard} —— 可能损伤器件`
-      });
+
+    // **F-02：期望有电平标准、实际缺失 → 必须阻断，不能当作"没有差异"**
+    //
+    // 原来的条件要求 got.iostandard 也非空，于是「期望 LVCMOS18 / 实际只有
+    // PACKAGE_PIN、没有 IOSTANDARD」就被跳过，最终还敢报 PASS —— 那是安全漏报：
+    // 没有证据证明这个端口用了正确电平标准。
+    //
+    // 三态分开：期望值、实际值、缺失。缺失 ≠ 一致。
+    if (want.iostandard !== "") {
+      if (got.iostandard === "") {
+        blockers.push({
+          kind: "缺少电平标准",
+          port: want.port,
+          detail: `期望 ${want.iostandard}，实际没有 IOSTANDARD 约束 —— 无法证明电平正确，可能损伤器件`
+        });
+      } else if (want.iostandard !== got.iostandard) {
+        blockers.push({
+          kind: "电平标准不一致",
+          port: want.port,
+          detail: `期望 ${want.iostandard}，实际 ${got.iostandard} —— 可能损伤器件`
+        });
+      }
     }
-    if (want.drive !== "" && got.drive !== "" && want.drive !== got.drive) {
-      warnings.push({ kind: "驱动强度不一致", port: want.port, detail: `期望 ${want.drive}，实际 ${got.drive}` });
+    if (want.drive !== "") {
+      if (got.drive === "") {
+        warnings.push({ kind: "缺少驱动强度", port: want.port, detail: `期望 ${want.drive}，实际没有 DRIVE` });
+      } else if (want.drive !== got.drive) {
+        warnings.push({ kind: "驱动强度不一致", port: want.port, detail: `期望 ${want.drive}，实际 ${got.drive}` });
+      }
     }
-    if (want.pull !== "" && got.pull !== "" && want.pull !== got.pull) {
-      warnings.push({ kind: "上下拉不一致", port: want.port, detail: `期望 ${want.pull}，实际 ${got.pull}` });
+    if (want.pull !== "") {
+      if (got.pull === "") {
+        warnings.push({ kind: "缺少上下拉", port: want.port, detail: `期望 ${want.pull}，实际没有 PULLTYPE` });
+      } else if (want.pull !== got.pull) {
+        warnings.push({ kind: "上下拉不一致", port: want.port, detail: `期望 ${want.pull}，实际 ${got.pull}` });
+      }
     }
   }
 
@@ -345,13 +387,13 @@ const main = () => {
     }
   }
 
-  void bankOf;
-
   const payload = {
     expectation: { path: options.expect, kind: expectation.kind, ports: expectMap.size },
     actual: { path: actualPath, files: actual.files, ports: actualMap.size },
     blockers,
     warnings,
+    // **本工具查不到的**：明确列出来，不假装覆盖完整（F-03）
+    unverified: [BANK_CHECK_NOTE],
     verdict: blockers.length > 0 ? "FAIL" : warnings.length > 0 ? "WARN" : "PASS"
   };
 
@@ -373,8 +415,14 @@ const main = () => {
       console.log("");
     }
 
+    // 未检查项：每条都打出来，别让人以为全覆盖了
+    console.log(`未检查项 ${String(payload.unverified.length)} 条（这些不构成通过依据）：`);
+    for (const note of payload.unverified) console.log(`  ? UNVERIFIED  ${note}`);
+    console.log("");
+
     if (payload.verdict === "PASS") {
-      console.log("PASS：引脚号、电平标准、驱动、上下拉全部一致，且无重复占用。");
+      console.log("PASS：引脚号、电平标准（含缺失检查）、驱动、上下拉逐项一致，且无重复占用。");
+      console.log("      注意：Bank/VCCO 冲突**未**检查 —— 见上面的未检查项。");
     } else if (payload.verdict === "WARN") {
       console.log("WARN：没有阻塞项，但有上面那些差异需要人工确认。");
     } else {

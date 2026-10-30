@@ -268,14 +268,48 @@ const parseReport = (text) => {
 };
 
 /**
- * 只统计被测模块（排除 testbench）的覆盖率。
+ * 只统计**被测设计文件**的覆盖率（F-06）。
  *
- * TB 自己的语句覆盖总是接近 100%，把它算进来会**虚高**整体数字 ——
- * 而我们关心的是「设计被验证到什么程度」。判据：文件名里有 `tb_` 或 `_tb` 视为测试平台。
- * @param files - 解析出的文件列表。
- * @returns DUT 的文件列表。
+ * ## 原来的 bug（黑名单）
+ *
+ * 旧实现是「文件名里有 `tb_` 或 `_tb` 就排除」——**黑名单**。于是
+ * `scoreboard.sv` / `driver.sv` / `monitor.sv` / `env.sv` 这些 TB 辅助文件都被算进 DUT。
+ * 它们的语句覆盖通常接近 100%（每拍都跑），会把低覆盖的 DUT 总百分比**拉高**。
+ *
+ * ## 现在的做法（正向白名单）
+ *
+ * 只统计**在 `rtl/` 下**的文件。理由：
+ *
+ * - 被测设计的定义就是「综合进 FPGA 的那部分」，那正是 `rtl/`
+ * - TB、scoreboard、driver、monitor 都在 `verif/`（或 `sim/`），天然被排除
+ * - 不需要维护「哪些名字像 TB」的猜想清单
+ *
+ * 拿不到 `rtl/` 相对路径时（报告里的路径形态不认识）**返回 null**，
+ * 由调用方按 `UNVERIFIED` 处理 —— 不猜、不放过。
+ *
+ * @param files - 解析出的文件列表（每项含 `file`）。
+ * @returns `{ dut, unclassified }`：dut 是 RTL 下的文件，unclassified 是判断不了归属的。
  */
-const onlyDesignUnderTest = (files) => files.filter((item) => !/(?:^|[/\\])(?:tb_|.*_tb\.)/u.test(item.file));
+const onlyDesignUnderTest = (files) => {
+  const dut = [];
+  const unclassified = [];
+  for (const item of files) {
+    // 报告里的路径可能是绝对路径、相对路径、或只有文件名 —— 统一按片段判断
+    const normalized = item.file.replace(/\\/gu, "/").toLowerCase();
+    // 明确的测试平台目录
+    if (/(?:^|\/)(?:verif|sim)\//u.test(normalized)) continue;
+    // RTL 目录（`rtl/` 或 `src/rtl/`）
+    if (/(?:^|\/)rtl\//u.test(normalized)) {
+      // 但 `rtl/` 里的 `tb_*` 仍可能是测试平台（少见，但排除掉更稳）
+      if (/(?:^|\/)tb_[^/]*$/u.test(normalized)) continue;
+      dut.push(item);
+      continue;
+    }
+    // 路径里既没有 rtl/ 也没有 verif/：判断不了，交给调用方记为未归类
+    unclassified.push(item);
+  }
+  return { dut, unclassified };
+};
 
 /**
  * 按 bins 加权算总覆盖率（不是简单平均）。
@@ -365,11 +399,23 @@ const main = () => {
   }
 
   const parsed = parseReport(report.text);
-  const dutFiles = onlyDesignUnderTest(parsed.files);
+  const classified = onlyDesignUnderTest(parsed.files);
+  const dutFiles = classified.dut;
 
   if (dutFiles.length === 0) {
     console.error("报告里没有被测模块（只有测试平台？）。检查 ucdb 是否包含 rtl/ 下的文件。");
+    if (classified.unclassified.length > 0) {
+      console.error(`另 ${String(classified.unclassified.length)} 个文件的路径里既没有 rtl/ 也没有 verif/，判断不了归属：`);
+      for (const item of classified.unclassified.slice(0, 5)) console.error(`  ? ${item.file}`);
+    }
+    console.error("提示：覆盖率报告的文件路径要能看出在哪一层 —— 缺 rtl/ 片段时本工具不猜归属。");
     process.exit(2);
+  }
+
+  // 有判断不了归属的文件时，在结果里点名（不影响 DUT 统计，但要让人知道）
+  if (classified.unclassified.length > 0) {
+    console.error(`注意：${String(classified.unclassified.length)} 个文件路径里没有 rtl/verif 片段，已排除在统计外：`);
+    for (const item of classified.unclassified.slice(0, 5)) console.error(`  ? ${item.file}`);
   }
 
   const allRows = dutFiles.flatMap((item) => item.rows);

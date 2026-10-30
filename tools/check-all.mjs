@@ -16,6 +16,7 @@
 //   · 真实客户端集成:目前**没有**自动化检查,永远记"未检",并在摘要里写清人工怎么检
 // 任一层有跳过/未跑/未检,收尾就不准说"全部通过"。
 import { spawnSync } from "./lib/spawn.mjs";
+import { satisfiesHost } from "./lib/version-range.mjs";
 import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,20 +122,62 @@ const EXPLICIT_PROBLEM =
             : "这个目录下没有 package.json";
           return `DSH_APP_DIR 指向的目录用不了:${dir}(${why})—— 它可能不是 DSH 安装目录(桌面端在 asar 里,普通 Node 读不了)`;
         })();
-/** 自动探测:只认兼容声明里列过的版本;候选顺序把桌面端排在 npm 全局之前。 */
-const MATCHED_HOST = CANDIDATES.find((candidate) => COMPATIBLE_VERSIONS.has(candidate.version));
+/**
+ * 自动探测宿主。
+ *
+ * ## 两档判定（2026-10-30 修）
+ *
+ * 原来只用 `COMPATIBLE_VERSIONS.has(version)` —— **精确匹配**那个手写清单。
+ * 清单里没有的版本一律跳过，于是宿主升级到 `0.2.1-rc.5` 后三项检查全被跳过。
+ *
+ * 但 `package.json` 里那句注释已经写明：`dshReleases` **仅供市场展示，不影响加载** ——
+ * 宿主真正的门槛是 `engines.dsh` 的 range。所以自检也不该把它当硬性条件。
+ *
+ * 现在的两档：
+ *
+ * | 情况 | 处理 |
+ * |---|---|
+ * | 版本在清单里 | **实测过** —— 正常跑，结论可当「已验证该版本」 |
+ * | 版本不在清单、但满足 `engines.dsh` | **照跑**，但标注「该版本未实测」 |
+ * | 版本不满足 range | 跳过（真不兼容） |
+ *
+ * 候选顺序仍把桌面端排在 npm 全局之前。
+ */
+const RANGE = String(MANIFEST.engines?.dsh ?? MANIFEST.dsh?.compatibility?.dsh ?? "");
+const satisfiesRange = (version) => {
+  if (version === undefined) return false;
+  if (RANGE === "") return true;
+  try {
+    return satisfiesHost(version, RANGE);
+  } catch {
+    return false;
+  }
+};
+
+/** 在清单里 = 实测过；不在 = 未实测但可能兼容。 */
+const hostTier = (candidate) => {
+  if (COMPATIBLE_VERSIONS.has(candidate.version)) return "measured";
+  if (satisfiesRange(candidate.version)) return "unmeasured";
+  return "incompatible";
+};
+
+const MATCHED_HOST = CANDIDATES.find((candidate) => hostTier(candidate) !== "incompatible");
 const HOST = EXPLICIT_HOST ?? MATCHED_HOST;
 const APP = HOST?.dir ?? CANDIDATES[0]?.dir ?? "C:/Program Files/DSH Desktop/resources/app";
+
+/** 该宿主是不是「实测过的版本」——影响结论措辞。 */
+const HOST_UNMEASURED = HOST !== undefined && hostTier(HOST) === "unmeasured";
 
 /** 宿主检查能不能跑;不能跑时给出原因(不假装通过)。 */
 const HOST_SKIP =
   HOST !== undefined
     ? undefined
     : [
-        `本机没有可解析、且版本命中兼容声明的宿主(声明:${[...COMPATIBLE_VERSIONS].join("、")})`,
+        `本机没有可解析、且满足 engines.dsh(${RANGE || "未声明"})的宿主`,
+        `已实测过的版本:${[...COMPATIBLE_VERSIONS].join("、")}`,
         CANDIDATES.length === 0
           ? "一个候选目录都没找到"
-          : `找到的候选:${CANDIDATES.map((candidate) => `${candidate.dir} → ${candidate.version}`).join(";")}`,
+          : `找到的候选:${CANDIDATES.map((candidate) => `${candidate.dir} → ${candidate.version ?? "读不到版本"}`).join(";")}`,
         "用 DSH_APP_DIR 指向要验证的 DSH 环境(桌面端在 asar 里,普通 Node 读不了)"
       ].join(";");
 /** 显式指定的版本没在声明里:照跑,但提醒结论不能当"已验证版本"用。 */
@@ -246,7 +289,14 @@ function main() {
   ];
 
   if (HOST !== undefined) {
-    console.log(`宿主检查使用:${APP}(版本 ${HOST.version}${EXPLICIT_HOST === HOST ? ",DSH_APP_DIR 指定" : ""})`);
+    const tiers = [
+      EXPLICIT_HOST === HOST ? "DSH_APP_DIR 指定" : "",
+      HOST_UNMEASURED ? `**该版本未实测**（已实测:${[...COMPATIBLE_VERSIONS].join("、")}）` : ""
+    ].filter(Boolean);
+    console.log(`宿主检查使用:${APP}(版本 ${HOST.version}${tiers.length === 0 ? "" : `,${tiers.join(",")}`})`);
+    if (HOST_UNMEASURED) {
+      console.log("     注意:这次跑在未实测的宿主版本上 —— 结论代表「能加载」,不代表「该版本已验收」。");
+    }
   }
   if (HOST_WARN !== undefined) console.log(`WARN  ${HOST_WARN}`);
 

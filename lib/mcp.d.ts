@@ -26,6 +26,13 @@ interface McpClientConfig {
 interface McpMountState {
   fiber: unknown;
   path: string | undefined;
+  /**
+   * 上次 dispose 失败留下的 fiber，下次 unload 先重试它（F-07）。
+   *
+   * 为什么要单独一个字段：`fiber` 是「当前挂着的」，`pendingDispose` 是「已决定卸但没卸掉的」。
+   * 混用一个字段时，失败那次会把引用清掉，后续再也拿不到它去重试。
+   */
+  pendingDispose: unknown;
 }
 /** 宿主 mcp-client 模块的最小形状（`apply` / `inject` / `Config`）。 */
 interface HostMcpClient {

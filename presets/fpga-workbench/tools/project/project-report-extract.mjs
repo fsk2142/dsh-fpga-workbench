@@ -164,28 +164,82 @@ const classify = (text, file) => {
   return undefined;
 };
 
+/**
+ * 在目录里挑一份报告（F-14）。
+ *
+ * ## 原来的 bug
+ *
+ * 先挑文件名含 `routed|impl` 的，挑不到就取 `readdirSync` 的**第一个** ——
+ * 目录枚举顺序既不等于生成时间、也不等于 run 的新旧。同时存在旧 impl 与新版 impl 时，
+ * 可能展示**非目标版本**的资源/DRC 数据，而且完全不说明选的是哪份。
+ *
+ * ## 现在的规则
+ *
+ * 1. 候选要符合文件名模式
+ * 2. 优先 impl/routed（那才是最终结果，synth 是估计）
+ * 3. 同一档里按 **mtime 取最新**
+ * 4. 多个候选时**把选择依据记下来**（返回 `picked` 说明），并列出被放弃的
+ * 5. 只有一份时也记下来
+ *
+ * 不静默选第一份 —— 选错版本比不选更危险。
+ */
+const pickReport = (all, pattern, label) => {
+  const candidates = all.filter((path) => pattern.test(path));
+  if (candidates.length === 0) return undefined;
+
+  // 按 mtime 降序（新的在前）
+  const withTime = candidates.map((path) => {
+    let mtime = 0;
+    try {
+      mtime = statSync(path).mtimeMs;
+    } catch {
+      // 读不到时间就排最后
+    }
+    return { path, mtime, impl: /routed|impl/iu.test(path) };
+  });
+  withTime.sort((a, b) => {
+    // impl/routed 优先；同档按时间
+    if (a.impl !== b.impl) return a.impl ? -1 : 1;
+    return b.mtime - a.mtime;
+  });
+
+  const chosen = withTime[0];
+  return {
+    path: chosen.path,
+    label,
+    // 给人看的决策依据
+    reason:
+      candidates.length === 1
+        ? "唯一候选"
+        : `${String(candidates.length)} 个候选里选 ${chosen.impl ? "impl/routed 优先 + " : ""}mtime 最新` +
+          `（${new Date(chosen.mtime).toISOString().slice(0, 19).replace("T", " ")}）`,
+    skipped: withTime.slice(1).map((item) => item.path)
+  };
+};
+
 const locateReports = (target) => {
   if (!existsSync(target)) return { error: `路径不存在：${target}` };
   const stat = statSync(target);
-  if (stat.isFile()) return { files: [target] };
+  if (stat.isFile()) return { files: [target], picked: [{ path: target, reason: "直接给定文件" }] };
 
   const all = readdirSync(target).map((name) => join(target, name));
-  // 优先 impl（routed / impl），其次 synth
-  const pick = (pattern) => {
-    const hit = all.filter((path) => pattern.test(path));
-    if (hit.length === 0) return undefined;
-    const impl = hit.find((path) => /routed|impl/iu.test(path));
-    return impl ?? hit[0];
-  };
-
   const files = [];
-  const utilization = pick(/utilization.*\.rpt$/iu);
-  const drc = pick(/drc.*\.rpt$/iu);
-  if (utilization !== undefined) files.push(utilization);
-  if (drc !== undefined) files.push(drc);
+  const picked = [];
+
+  const utilization = pickReport(all, /utilization.*\.rpt$/iu, "资源占用");
+  const drc = pickReport(all, /drc.*\.rpt$/iu, "DRC");
+
+  if (utilization !== undefined) {
+    files.push(utilization.path);
+    picked.push({ path: utilization.path, label: utilization.label, reason: utilization.reason, skipped: utilization.skipped });
+  }
+  if (drc !== undefined) {
+    files.push(drc.path);
+    picked.push({ path: drc.path, label: drc.label, reason: drc.reason, skipped: drc.skipped });
+  }
 
   if (files.length === 0) return { error: `${target} 里没有 utilization / drc 报告` };
-  return { files };
+  return { files, picked };
 };
 
 const main = () => {
@@ -198,7 +252,7 @@ const main = () => {
     process.exit(2);
   }
 
-  const payload = { utilization: [], drc: undefined, reports: [] };
+  const payload = { utilization: [], drc: undefined, reports: [], picked: located.picked ?? [] };
 
   for (const file of located.files) {
     const text = readFileSync(file, "utf8");
@@ -229,6 +283,18 @@ const main = () => {
 
   for (const report of payload.reports) {
     console.log(`报告：${basename(report.file)}`);
+  }
+
+  // 选的是哪份、为什么选它 —— 多候选时不说明就可能看的是旧版 run（F-14）
+  if (payload.picked.length > 0) {
+    console.log("");
+    for (const item of payload.picked) {
+      const label = item.label === undefined ? "" : `${item.label}：`;
+      console.log(`选择依据 ${label}${item.reason ?? "未说明"}`);
+      if (Array.isArray(item.skipped) && item.skipped.length > 0) {
+        console.log(`        未采用：${item.skipped.map((path) => basename(path)).join("、")}`);
+      }
+    }
   }
   console.log("");
 

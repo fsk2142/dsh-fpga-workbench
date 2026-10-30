@@ -139,14 +139,18 @@ set fail_count 0
 # 期望的器件型号，必须与 doc/spec.md 的 part 完全一致（如 xc7a100tfgg484-2）
 set EXPECTED_PART "TODO:EXPECTED_PART"
 
-# bit 文件路径与源码目录（用于新鲜度检查：bit 必须比最后改的源码新）
+# bit 文件路径与源码目录（用于新鲜度检查：bit 必须比最后改的输入新）
+#
+# 三个目录都要扫：只比 RTL 会漏掉 XDC 管脚/时钟改动与 IP 重新生成 —— 那些同样让 bit 失效。
 set BIT_FILE [file join $script_dir ".." "bit" "TODO_TOP.bit"]
 set SRC_DIR  [file join $script_dir ".." "src" "rtl"]
+set XDC_DIR  [file join $script_dir ".." "xdc"]
+set IP_DIR   [file join $script_dir ".." "ip"]
 
 # ── 帮助函数 ────────────────────────────────────────────────────────────────
 
 proc lv {level msg} {
-    puts "\[$level\] $msg"
+    puts "\\[$level\\] $msg"
 }
 
 proc check {cond msg} {
@@ -163,7 +167,7 @@ proc stop_if_failed {level} {
     global fail_count
     if {$fail_count > 0} {
         puts ""
-        puts "\\n\[$level\] 有 $fail_count 项失败 —— 不继续后面的级。"
+        puts "\\n\\[$level\\] 有 $fail_count 项失败 —— 不继续后面的级。"
         puts "先修完这一级，否则后面几级的结果没有意义。"
         exit 1
     }
@@ -199,7 +203,12 @@ puts "  设备：$dev"
 lv P0 "上板前四项硬件前置"
 
 # P0-1 在线探测：能枚举到器件（上面已经走到这里，说明 hw_target/devices 都存在）
-check {[llength $devices] > 0} "P0-1 板子在线：枚举到 [llength $devices] 个器件"
+#
+# 注意 check 的参数必须是**已求值的布尔值**。
+# "check {表达式}" 传进去的是字符串字面量，if 里会被当成布尔值而抛
+# "expected boolean value but got ..."（F-01，已用 tclsh 实测复现）。
+# 所以一律写成 "check [expr {...}]"，与本文件后面几段的调用保持一致。
+check [expr {[llength $devices] > 0}] "P0-1 板子在线：枚举到 [llength $devices] 个器件"
 
 # P0-2 型号核对：读到的 PART 必须与 doc/spec.md 的 part 完全一致
 #
@@ -212,7 +221,7 @@ if {[string match "TODO*" $EXPECTED_PART]} {
         puts "  ** FAIL: P0-2 读不到器件 PART：$err"
         incr ::fail_count
     } else {
-        check {$actual_part eq $EXPECTED_PART} \
+        check [expr {$actual_part eq $EXPECTED_PART}] \
             "P0-2 型号核对：实际 $actual_part / 期望 $EXPECTED_PART"
     }
 }
@@ -229,18 +238,32 @@ if {![file exists $BIT_FILE]} {
 } else {
     set bit_mtime [file mtime $BIT_FILE]
     set newest_src 0
-    if {[file isdirectory $SRC_DIR]} {
-        foreach f [glob -nocomplain -directory $SRC_DIR *] {
-            if {![file isdirectory $f]} {
+
+    # 递归扫描所有影响 bitstream 的输入：RTL(含子目录)、XDC、IP。
+    # 只扫根层会漏掉 src/rtl/core/*.sv 与 xdc/*.xdc 的改动（F-05）。
+    proc newest_mtime {dir acc_var} {
+        upvar $acc_var acc
+        if {![file isdirectory $dir]} { return }
+        foreach f [glob -nocomplain -directory $dir *] {
+            if {[file isdirectory $f]} {
+                newest_mtime $f acc
+            } else {
                 set m [file mtime $f]
-                if {$m > $newest_src} { set newest_src $m }
+                if {$m > $acc} { set acc $m }
             }
         }
     }
+    foreach input_dir [list $SRC_DIR $XDC_DIR $IP_DIR] {
+        newest_mtime $input_dir newest_src
+    }
+
     if {$newest_src == 0} {
-        puts "  ** 跳过：P0-4 源码目录为空或不存在（$SRC_DIR）—— 手工确认 bit 是最新的"
+        # **不能跳过**：P0 是硬前置，源码不可读等于无法证明 bit 新鲜（F-04）。
+        puts "  ** FAIL: P0-4 找不到任何源码输入（$SRC_DIR / $XDC_DIR / $IP_DIR 都为空或不存在）"
+        puts "           无法证明 bit 是最新的 —— 手工确认后把对应目录指对，不要默认放过"
+        incr ::fail_count
     } else {
-        check {$bit_mtime >= $newest_src} \
+        check [expr {$bit_mtime >= $newest_src}] \
             "P0-4 bit 新鲜：bit 比源码新（bit=[clock format $bit_mtime -format %H:%M:%S] / src=[clock format $newest_src -format %H:%M:%S]）"
     }
 }

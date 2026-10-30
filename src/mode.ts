@@ -50,6 +50,8 @@ interface ModeContext {
 interface McpState {
   fiber: unknown;
   path: string | undefined;
+  /** 上次 dispose 失败留下的 fiber，下次卸载先重试它（见 `mcp.ts` 的 unload）。 */
+  pendingDispose: unknown;
 }
 
 /** 设置快照：一条 descriptor。 */
@@ -142,7 +144,7 @@ export function apply(ctx: ModeContext): void {
   //
   // 设置是运行时值,`!!js` 在加载期求值读不到它,所以只能在这里读设置再动态挂载
   // (细节见 lib/mcp.js 的文件头)。
-  const mcpState: McpState = { fiber: undefined, path: undefined };
+  const mcpState: McpState = { fiber: undefined, path: undefined, pendingDispose: undefined };
   // `settings/document-updated` 是宿主设置服务在 describe() 发现变更时发出的事件
   // (见 dsh-settings 的 describe 实现)。保存本插件的设置会让它触发一次,于是这里
   // 重新读一遍路径 —— 改了路径不必重启,清空了就卸载。

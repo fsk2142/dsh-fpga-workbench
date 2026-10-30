@@ -47,6 +47,13 @@ interface McpClientConfig {
 interface McpMountState {
   fiber: unknown;
   path: string | undefined;
+  /**
+   * 上次 dispose 失败留下的 fiber，下次 unload 先重试它（F-07）。
+   *
+   * 为什么要单独一个字段：`fiber` 是「当前挂着的」，`pendingDispose` 是「已决定卸但没卸掉的」。
+   * 混用一个字段时，失败那次会把引用清掉，后续再也拿不到它去重试。
+   */
+  pendingDispose: unknown;
 }
 
 /** 宿主 mcp-client 模块的最小形状（`apply` / `inject` / `Config`）。 */
@@ -232,16 +239,25 @@ async function syncMcpClientNow(
     await fiber;
     return previousPath === undefined ? "已连接" : `已切换到 ${wanted}`;
   } catch (error) {
-    // 失败时把已经建出来的 fiber 一并收掉,别留半活状态。
+    // 失败时把已经建出来的 fiber 一并收掉，别留半活状态。
+    //
+    // **但 dispose 失败时不能清掉引用**（F-07 同族）：那样就再也拿不到它去重试，
+    // 与「留下一个活着的 fiber」是同一个后果。留进 pendingDispose，下次 unload 会再试。
+    let disposed = true;
     if (fiber !== undefined && typeof fiber.dispose === "function") {
       try {
         await fiber.dispose();
       } catch {
-        // dispose 自己失败也没别的办法;下面照常清 state
+        // 见上：保留引用，交给 pendingDispose
+        disposed = false;
       }
     }
-    state.fiber = undefined;
-    state.path = undefined;
+    if (disposed) {
+      state.fiber = undefined;
+      state.path = undefined;
+    } else {
+      state.pendingDispose = fiber;
+    }
     const message = error instanceof Error ? error.message : String(error);
     return `启动失败:${message}`;
   }
@@ -312,16 +328,53 @@ function hostMcpClientSpecifiers(ctx: McpContext): string[] {
   return out;
 }
 
-/** 卸载当前挂载的 MCP 客户端,不抛异常。 */
+/**
+ * 卸载当前挂载的 MCP 客户端,不抛异常。
+ *
+ * ## 为什么成功后才清状态（F-07）
+ *
+ * 原实现是**先把 `state.fiber` 清空、再 dispose**。dispose 抛错时那个 fiber 就丢了 ——
+ * 后续「清空路径再重新保存」看到 `state.fiber === undefined`，**永远不会再试一次**。
+ * 注释写的「下次保存会再试一次」与实际行为正好相反。
+ *
+ * 现在：dispose 成功才清 `fiber`；失败时把它留在一个**待重试**字段里，
+ * 下一次 `unload` 会先重试那个残留的，再处理新的。
+ */
 async function unload(state: McpMountState): Promise<void> {
+  // 上一次没卸干净的，先重试
+  const pending = state.pendingDispose as { dispose?: () => Promise<unknown> } | undefined;
+  if (pending !== undefined) {
+    try {
+      await pending.dispose?.();
+      state.pendingDispose = undefined;
+    } catch {
+      // 仍然失败：保留引用，下次继续
+      return;
+    }
+  }
+
   const fiber = state.fiber as { dispose?: () => Promise<unknown> } | undefined;
-  state.fiber = undefined;
-  state.path = undefined;
-  if (fiber === undefined || typeof fiber.dispose !== "function") return;
+  if (fiber === undefined) {
+    state.path = undefined;
+    return;
+  }
+
+  if (typeof fiber.dispose !== "function") {
+    state.fiber = undefined;
+    state.path = undefined;
+    return;
+  }
+
   try {
     await fiber.dispose();
+    // **成功后才清**：失败时保留引用，下次还能重试
+    state.fiber = undefined;
+    state.path = undefined;
+    state.pendingDispose = undefined;
   } catch {
-    // 卸载失败不该影响设置保存;下次保存会再试一次
+    // 保留 fiber 引用并记进 pendingDispose → 下次 unload 会先重试它。
+    // 不抛：卸载失败不该让设置保存失败。
+    state.pendingDispose = fiber;
   }
 }
 

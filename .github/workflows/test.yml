@@ -59,3 +59,16 @@ jobs:
         run: git diff --exit-code -- lib
       - name: test（源码层:判定逻辑 / 模板 / 预设契约）
         run: pnpm test
+      # **Q-05**：Tcl 检查必须**真跑**，不能因为 runner 上没有 tclsh 就 SKIP 还绿。
+      #
+      # `pnpm test` 里那一项是"没解释器就跳过"（本地开发友好）。
+      # 这一条是发布门禁：解释器缺失或断言失败都必须让 job 红。
+      # GitHub 的 Windows runner 自带 Git for Windows，其 MSYS 环境里有 tclsh。
+      - name: Tcl 门禁（无解释器即失败）
+        run: node tools/check-board-tcl.mjs --require
+      # 同理：历史隐私扫描默认不在 `pnpm test` 里（会因历史内容阻塞日常 CI），
+      # 但发布前必须核一次。这里用非阻塞方式记录，命中时只警告不红 ——
+      # 因为"历史里有旧痕迹"是**既成事实**，让它红只会逼人把这项关掉。
+      - name: 历史隐私扫描（报告用，不阻塞）
+        run: node tools/check-privacy-history.mjs
+        continue-on-error: true

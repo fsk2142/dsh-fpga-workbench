@@ -272,7 +272,11 @@ const main = () => {
     for (const hash of suspects) {
       let files = "";
       try {
-        files = git(["grep", "-l", "-I", "-E", "[A-Za-z]:[\\\\/]Users[\\\\/]", hash, "--", "tools", "presets", "scripts"]);
+        // **Q-04**：这里原来硬编码 `tools presets scripts`，漏了 `docs` ——
+        // 而上面声明与 `-S` 候选阶段用的都是 `BLOB_SCOPE`（含 docs）。
+        // 结果：只写在文档里的路径，候选能命中、到这一步却查不到 → 漏报。
+        // 现在统一用 BLOB_SCOPE，声明与执行一致。
+        files = git(["grep", "-l", "-I", "-E", "[A-Za-z]:[\\\\/]Users[\\\\/]", hash, "--", ...BLOB_SCOPE]);
       } catch {
         continue; // grep 没命中会退 1
       }

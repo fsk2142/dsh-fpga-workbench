@@ -291,7 +291,54 @@ const live = (scope) => scope.names.size;
   check(/未启用/u.test(cleared), `清空路径后报未启用（实际 ${cleared}）`);
   check(state.pendingDispose === undefined, "残留已被回收（pendingDispose 清空）");
   check(state.fiber === undefined, "state.fiber 也已清空");
-  check(disposeAttempts >= 2, `dispose 至少被重试过一次（实际 ${String(disposeAttempts)} 次）`);
+  // **Q-02 的核心断言**：同一个对象最多被成功 dispose 一次。
+  // 上一版这里是 `>= 2` —— 那恰好掩盖了"被调用第三次"的 bug。
+  check(disposeAttempts === 2, `dispose 恰好被调用 2 次（1 失败 + 1 成功，实际 ${String(disposeAttempts)} 次）`);
+}
+
+// ── ⑦b **Q-02**：非幂等 dispose 不得被重复调用 ───────────────────────────────
+//
+// 上一版 ⑦ 的 fake 把成功 dispose 写成幂等（重复调用返回成功），
+// 所以"第三次调用"被抓不到。这里造一个**严格非幂等**的资源：
+// 第一次失败、第二次成功、**第三次拒绝**，并断言总共只调用 2 次。
+{
+  const scope = { names: new Set() };
+  const ctx = fakeCtx(scope);
+  const state = { fiber: undefined, path: undefined, pendingDispose: undefined };
+  const deps = { inspectMcpPath: fakeInspect, loadHostMcpClient: fakeLoader(fakeMcpClient(scope)) };
+
+  await syncMcpClient(ctx, "C:/x/a.dll", state, deps);
+
+  let calls = 0;
+  let phase = "first";
+  const target = state.fiber;
+  const originalDispose = target.dispose.bind(target);
+  target.dispose = async () => {
+    calls += 1;
+    if (phase === "first") {
+      phase = "second";
+      throw new Error("transient");
+    }
+    if (phase === "second") {
+      phase = "done";
+      await originalDispose();
+      return;
+    }
+    // 非幂等资源：已经释放过，再调就报错
+    throw new Error("already disposed");
+  };
+
+  // 第一次切路径：dispose 失败
+  const first = await syncMcpClient(ctx, "C:/x/b.dll", state, deps);
+  check(/切换失败|未卸载|仍连接/u.test(first), `第一次切换失败（实际 ${first}）`);
+  check(calls === 1, `dispose 被调用 1 次（实际 ${String(calls)}）`);
+
+  // 第二次清空：pending 会成功，且**不能**再碰同一个对象
+  const second = await syncMcpClient(ctx, "", state, deps);
+  check(/未启用/u.test(second), `第二次清空成功报未启用（实际 ${second}）`);
+  check(calls === 2, `dispose 总共 2 次，没有第三次（实际 ${String(calls)}）`);
+  check(state.fiber === undefined, "fiber 已清空");
+  check(state.pendingDispose === undefined, "pendingDispose 已清空");
 }
 
 // ── ⑧ 静态守卫:并发保护真的用 WeakMap 而不是模块级共享锁 ──────────────────

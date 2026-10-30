@@ -151,6 +151,101 @@ const parseTable = (text, path) => {
   return { rows };
 };
 
+/**
+ * 从一行 XDC 里取 `[get_ports ...]` 的**端口数组**（Q-03）。
+ *
+ * ## 支持的写法
+ *
+ * ```
+ * [get_ports clk]                    → ["clk"]
+ * [get_ports {led[0]}]               → ["led[0]"]      （名字里含 ]）
+ * [get_ports {led[0] led[1]}]        → ["led[0]", "led[1]"]   ← 多端口，**不合并**
+ * ```
+ *
+ * ## 原实现的 bug（已修）
+ *
+ * 旧代码 `(match[2] ?? match[3]).trim().replace(/\s+/gu, "")` 把空白**删掉**，
+ * 于是 `{led[0] led[1]}` 变成 `led[0]led[1]` —— 一个根本不存在的端口名。
+ * 后果是：期望表里的 `led[0]` 匹配不上（误报漏约束），而且那个拼出来的名字
+ * 让 `findUnparsed` 也认为"解析成功"（漏报）。
+ *
+ * 现在返回数组：调用方按**一个端口一个条目**处理；同一 pin 被多个端口占用时
+ * 由"引脚重复占用"那条判据报出来（那才是真实的、需要人确认的约束）。
+ *
+ * @param code - 去掉注释后的一行。
+ * @returns 端口名数组（可能为空）。
+ */
+const xdcPorts = (code) => {
+  const open = /\[get_ports\s+/u.exec(code);
+  if (open === null) return [];
+  const rest = code.slice(open.index + open[0].length);
+
+  let body;
+  if (rest.startsWith("{")) {
+    const end = rest.indexOf("}");
+    if (end < 0) return [];
+    body = rest.slice(1, end);
+  } else {
+    // 无花括号：取到**配对**的 ]（`led[0]` 自带一对，不能见到 ] 就停）
+    let depth = 0;
+    let end = -1;
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === "[") depth += 1;
+      else if (rest[i] === "]") {
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+        depth -= 1;
+      }
+    }
+    if (end < 0) return [];
+    body = rest.slice(0, end);
+  }
+
+  return body
+    .split(/\s+/u)
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+};
+
+/**
+ * 把一行 `set_property` 拆成 `{ 属性名: 值 }`（支持 `-dict`，Q-03）。
+ *
+ * ```
+ * set_property PACKAGE_PIN AB12 [get_ports {clk}]
+ *   → { PACKAGE_PIN: "AB12", __ports: ["clk"] }
+ * set_property -dict { PACKAGE_PIN AB12 IOSTANDARD LVCMOS33 } [get_ports {led}]
+ *   → { PACKAGE_PIN: "AB12", IOSTANDARD: "LVCMOS33", __ports: ["led"] }
+ * ```
+ *
+ * 认不出的形态返回 `undefined`，由调用方记进 unparsed —— 不假装解析成功。
+ *
+ * @param code - 去掉注释后的一行。
+ * @returns 属性表；解析不了时 undefined。
+ */
+const xdcProperties = (code) => {
+  const ports = xdcPorts(code);
+  if (ports.length === 0) return undefined;
+
+  // `-dict { A B C D }` 形态
+  const dictMatch = /^set_property\s+-dict\s+\{([^}]*)\}/u.exec(code);
+  if (dictMatch !== null) {
+    const cells = dictMatch[1].trim().split(/\s+/u).filter(Boolean);
+    if (cells.length % 2 !== 0) return undefined; // 属性名/值不成对 → 认不了
+    const props = { __ports: ports };
+    for (let i = 0; i < cells.length; i += 2) props[cells[i].toUpperCase()] = cells[i + 1];
+    return props;
+  }
+
+  // `set_property <属性> <值> ...` 形态（值里不能有空格，否则认不了）
+  const single = /^set_property\s+(?!-)([A-Za-z_][\w.]*)\s+(\S+)\s/u.exec(code);
+  if (single === null) return undefined;
+  // 变量引用 / 命令替换要等 Tcl 求值才能确定 —— 当字面量就是**假解析**（Q-03）
+  if (/[$[]/u.test(single[2])) return undefined;
+  return { __ports: ports, [single[1].toUpperCase()]: single[2] };
+};
+
 /** 解析 Vivado XDC 里的引脚属性。 */
 const parseXdc = (text) => {
   /** port → { pin, iostandard, drive, pull } */
@@ -160,34 +255,21 @@ const parseXdc = (text) => {
     return map.get(port);
   };
 
-  /**
-   * `[get_ports ...]` 的端口名有**两种写法**，而且 `led[0]` 这种名字本身就含 `]`：
-   *
-   * - 带花括号：`[get_ports {led[0]}]` —— 名字里有 `[]` / 空格时必须这么写
-   * - 不带花括号：`[get_ports clk]`
-   *
-   * 第一版用 `[^\}\]]+` 去取名字，结果 `led[0]` 被截成 `led[0`
-   * （因为它把 `]` 排除掉了，而 `]` 正是总线位选的一部分），
-   * 于是期望表里的 `led[0]` 永远匹配不上，全被报成「漏约束」。
-   * 所以：花括号内用 `[^}]+`（到 `}` 为止），无花括号才用 `[^\]\s]+`。
-   */
-  const PORT = String.raw`\[get_ports\s+(?:\{([^}]+)\}|([^\]\s]+))\]`;
-  const grab = (kind) => {
-    const pattern = new RegExp(String.raw`set_property\s+${kind}\s+(\S+)\s+${PORT}`, "gu");
-    for (const match of text.matchAll(pattern)) {
-      const port = (match[2] ?? match[3] ?? "").trim().replace(/\s+/gu, "");
-      if (port === "") continue;
-      if (kind === "PACKAGE_PIN") ensure(port).pin = match[1].trim().toUpperCase();
-      else if (kind === "IOSTANDARD") ensure(port).iostandard = match[1].trim().toUpperCase();
-      else if (kind === "DRIVE") ensure(port).drive = match[1].trim();
-      else ensure(port).pull = match[1].trim().toUpperCase();
-    }
-  };
+  for (const raw of text.split(/\r?\n/u)) {
+    const code = raw.replace(/#.*$/u, "").trim();
+    if (!code.startsWith("set_property")) continue;
 
-  grab("PACKAGE_PIN");
-  grab("IOSTANDARD");
-  grab("DRIVE");
-  grab("PULLTYPE");
+    const props = xdcProperties(code);
+    if (props === undefined) continue;
+
+    // **一个端口一个条目** —— 多端口不合并（Q-03）
+    for (const port of props.__ports) {
+      if (props.PACKAGE_PIN !== undefined) ensure(port).pin = props.PACKAGE_PIN.trim().toUpperCase();
+      if (props.IOSTANDARD !== undefined) ensure(port).iostandard = props.IOSTANDARD.trim().toUpperCase();
+      if (props.DRIVE !== undefined) ensure(port).drive = props.DRIVE.trim();
+      if (props.PULLTYPE !== undefined) ensure(port).pull = props.PULLTYPE.trim().toUpperCase();
+    }
+  }
 
   return [...map.values()];
 };
@@ -261,23 +343,14 @@ const findUnparsed = (text) => {
     const code = raw.replace(/#.*$/u, "").trim();
     if (code === "") continue;
 
-    // 关心的命令：给引脚/电平定性的那几条
-    const isPinLike =
-      /^set_property\s+(?:-dict\s+)?(?:PACKAGE_PIN|IOSTANDARD|DRIVE|PULLTYPE)/u.test(code) ||
-      /^set_property\b/u.test(code) ||
-      /^create_clock\b/u.test(code) ||
-      /^set_input_delay\b/u.test(code) ||
-      /^set_output_delay\b/u.test(code);
-    if (!isPinLike) continue;
-
-    // 本解析器能处理：`set_property <属性> <值> [get_ports ...]`（attr 不带前导 -）
-    const supported = /^set_property\s+(?!-dict\b)(?!-)[A-Za-z_][\w.]*\s+\S+\s+\[get_ports\s+\{?[^\]}]*\}?\]/u.test(
-      code
-    );
-    // `create_clock` / `set_input_delay` 等不在引脚核对的范围内 —— 它们不进 actualMap 是**设计如此**，
-    // 不算"没解析"。只有 `set_property` 系列才需要报告。
+    // `create_clock` / `set_input_delay` 等不在引脚核对的范围内 ——
+    // 它们不进 actualMap 是**设计如此**，不算"没解析"。只有 `set_property` 系列要报告。
     if (!code.startsWith("set_property")) continue;
-    if (supported) continue;
+
+    // **用同一个解析器判定**（Q-03）：原来这里另写一条正则，
+    // 与 parseXdc 的规则不一致 —— 于是 `-dict` 形态一边"解析失败"、一边"认为支持"。
+    // 现在 supported 与 parseXdc 走同一套逻辑，不可能互相矛盾。
+    if (xdcProperties(code) !== undefined) continue;
 
     out.push({ line: i + 1, text: code.slice(0, 100) });
   }

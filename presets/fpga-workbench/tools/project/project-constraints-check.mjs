@@ -220,6 +220,57 @@ const portNames = (text) => {
     .filter((name) => name !== "" && !name.startsWith("-"));
 };
 
+/**
+ * 把一行 `set_property` 拆成属性表（Q-03）。
+ *
+ * ## 支持两种形态
+ *
+ * ```
+ * set_property PACKAGE_PIN AB12 [get_ports {clk}]
+ *   → { PACKAGE_PIN: "AB12" }
+ *
+ * set_property -dict { PACKAGE_PIN AB12 IOSTANDARD LVCMOS33 } [get_ports {led}]
+ *   → { PACKAGE_PIN: "AB12", IOSTANDARD: "LVCMOS33" }
+ * ```
+ *
+ * ## 为什么必须支持 `-dict`
+ *
+ * 原实现只认 `set_property PACKAGE_PIN` 单值形态。Vivado 里 `-dict { ... }`
+ * 是常见写法（一次设多个属性），它被**整行跳过** ——
+ * 一个只有 -dict 约束的工程会得到 `passed=true`，而实际上一个引脚都没核对过。
+ *
+ * 认不出的形态返回 `undefined`，由调用方记进 `unparsed` 并降级结论，
+ * **不假装解析成功**（那是最坏的：看起来查过了）。
+ *
+ * @param text - 去掉注释后的一行。
+ * @returns 属性表（键大写）；认不出时 undefined。
+ */
+const parseSetProperty = (text) => {
+  const dictMatch = /^set_property\s+-dict\s+\{([^}]*)\}/u.exec(text);
+  if (dictMatch !== null) {
+    const cells = dictMatch[1].trim().split(/\s+/u).filter(Boolean);
+    if (cells.length === 0 || cells.length % 2 !== 0) return undefined;
+    const attrs = {};
+    for (let i = 0; i < cells.length; i += 2) attrs[cells[i].toUpperCase()] = cells[i + 1];
+    return attrs;
+  }
+
+  // `set_property <属性> <值> ...`（值里不能有空格，否则认不了）
+  const single = /^set_property\s+(?!-)([A-Za-z_][\w.]*)\s+(\S+)\s/u.exec(text);
+  if (single === null) return undefined;
+
+  // **变量引用 / 命令替换不是静态可解析的值**（Q-03）。
+  //
+  // `set_property PACKAGE_PIN $pin_var [get_ports clk]` 里的 `$pin_var` 要等
+  // Tcl 求值才知道是哪个引脚 —— 静态解析把它当字面量就是**假解析**：
+  // 会拿一个根本不是引脚号的东西去比对，然后报"一致"或"不一致"，两者都是错的。
+  //
+  // 同理 `[expr ...]` / `[lindex ...]` 这类命令替换。
+  if (/[$[]/u.test(single[2])) return undefined;
+
+  return { [single[1].toUpperCase()]: single[2] };
+};
+
 const main = () => {
   const options = parseArgs(process.argv.slice(2));
   const target = resolve(options.target);
@@ -245,8 +296,16 @@ const main = () => {
 
   const clocks = [];       // { name, period, port, file, line }
   const pinAssignments = []; // { pin, port, file, line }
+  const ioStandards = [];  // { standard, port, file, line }
   const problems = [];
   const notes = [];
+  /**
+   * 解析不了的关键约束（Q-03）。
+   *
+   * 这些行**不影响 problems**，但会让结论从「通过」降级：一个只有 `-dict` 约束
+   * 的工程如果算 PASS，等于说"引脚都核过了"，而实际上一个都没读出来。
+   */
+  const unparsed = [];
 
   for (const file of files) {
     const rel = file.slice(xdcDir.length + 1).replace(/\\/gu, "/");
@@ -283,12 +342,31 @@ const main = () => {
         }
       }
 
-      // set_property PACKAGE_PIN <pin> [get_ports <port>]
-      if (/^set_property\s+PACKAGE_PIN\b/u.test(text)) {
-        const pin = optionValue(text, "PACKAGE_PIN");
-        const ports = portNames(text);
-        if (pin !== "" && ports.length > 0) {
-          pinAssignments.push({ pin, port: ports[0], file: rel, line });
+      // 引脚属性：`set_property PACKAGE_PIN <pin> ...` 与 `set_property -dict { PACKAGE_PIN ... }`
+      //
+      // **Q-03**：原实现只认 `set_property PACKAGE_PIN` 单值形态。
+      // Vivado 里 `-dict` 是常见写法，它被**整行跳过** —— 一个只有 -dict 约束的工程
+      // 会得到 `passed=true`，而实际上一个引脚都没核对过。
+      if (text.startsWith("set_property")) {
+        const attrs = parseSetProperty(text);
+        if (attrs === undefined) {
+          // 认不出 → 明确记进 unparsed，不让它静默通过
+          if (/\b(?:PACKAGE_PIN|IOSTANDARD)\b/u.test(text)) {
+            unparsed.push({ file: rel, line, message: `解析不了的 set_property（未核对）: ${text.slice(0, 80)}` });
+          }
+        } else {
+          const ports = portNames(text);
+          if (attrs.PACKAGE_PIN !== undefined && ports.length > 0) {
+            // **一个端口一个条目**：多端口不合并（Q-03）
+            for (const port of ports) {
+              pinAssignments.push({ pin: attrs.PACKAGE_PIN, port, file: rel, line });
+            }
+          }
+          if (attrs.IOSTANDARD !== undefined && ports.length > 0) {
+            for (const port of ports) {
+              ioStandards.push({ standard: attrs.IOSTANDARD, port, file: rel, line });
+            }
+          }
         }
       }
     }
@@ -384,7 +462,14 @@ const main = () => {
     }
   }
 
+  // **Q-03**：只有「没有 problems」还不够 —— 还要看有没有**没解析出来**的关键约束。
+  //
+  // `problems` 是「查到的问题」。unparsed 是「根本没查到的部分」。
+  // 一个只有 `-dict` 约束的工程如果算 PASS，等于说"引脚都核过了"，而实际一个都没读。
+  const parsed = unparsed.length === 0;
   const passed = problems.length === 0;
+  /** 结论三档：有 problem → FAIL；有未解析 → UNVERIFIED；都没有 → PASS。 */
+  const verdict = problems.length > 0 ? "FAIL" : unparsed.length > 0 ? "UNVERIFIED" : "PASS";
 
   if (options.json) {
     console.log(
@@ -394,9 +479,13 @@ const main = () => {
           files: files.map((file) => file.slice(xdcDir.length + 1).replace(/\\/gu, "/")),
           clocks,
           pinAssignments,
+          ioStandards,
           problems,
+          unparsed,
           notes,
-          passed
+          parsed,
+          passed,
+          verdict
         },
         null,
         2
@@ -417,13 +506,32 @@ const main = () => {
     for (const note of notes) {
       console.log(`  ℹ️  ${note.file}: ${note.message}`);
     }
-    if (problems.length === 0) {
+
+    // **Q-03**：没解析出来的关键约束要点名，不能让人以为都核过了
+    if (unparsed.length > 0) {
+      console.log(`  ⚠️  ${String(unparsed.length)} 行关键约束没解析出来（这部分**没有核对**）：`);
+      for (const item of unparsed) {
+        console.log(`    · ${item.file}:${String(item.line)}  ${item.message}`);
+      }
+      console.log("");
+      console.log("  本工具只认这几种形态：");
+      console.log("    set_property PACKAGE_PIN <pin> [get_ports <端口>]");
+      console.log("    set_property -dict { PACKAGE_PIN <pin> IOSTANDARD <标准> } [get_ports <端口>]");
+      console.log("  变量引用、嵌套 get_ports、foreach 生成的约束属于动态表达式 ——");
+      console.log("  静态解析没把握，请用 Vivado 导出的 report_io 做实际比对。");
+      console.log("");
+    }
+
+    if (problems.length === 0 && unparsed.length === 0) {
       console.log("  ✅ 机械检查通过：没有缺时钟、重复定义或管脚冲突。");
       console.log("");
       console.log("  **但时序意图仍需人工核**，本命令不判：");
       console.log("    · 时钟频率 / 周期对不对（要设计知识）");
       console.log("    · set_false_path / set_clock_groups 该不该有（要协议知识）");
       console.log("    · IO 延迟数值合不合理（要板级时序模型）");
+    } else if (problems.length === 0) {
+      console.log("  ⚠️  UNVERIFIED：机械检查没发现问题，但有一批约束没解析出来 ——");
+      console.log("      **不能当通过**。上面那几行要么改成可识别形态，要么用 report_io 比对。");
     } else {
       console.log(`  ❌ ${String(problems.length)} 个问题：`);
       for (const problem of problems) {
@@ -434,7 +542,9 @@ const main = () => {
     }
   }
 
-  process.exit(passed ? 0 : 1);
+  // 退出码：有问题 1；**有未解析的关键约束也给非 0（3）** —— 那不是通过；
+  // 两者都没有才 0。只看 `passed` 会把 UNVERIFIED 当成功。
+  process.exit(problems.length > 0 ? 1 : unparsed.length > 0 ? 3 : 0);
 };
 
 main();

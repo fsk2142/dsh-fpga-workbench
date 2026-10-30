@@ -208,14 +208,39 @@ proc stop_if_failed {level} {
     }
 }
 
-# 一级结束时调用：本级若已有未验项，就不该继续往下一级走。
+# 一级结束时的**硬闸门**（Q-01）。
+#
+# ## 为什么必须有它
+#
+# stop_if_failed 只看 fail_count。而「没验」（unverified）不进 fail_count ——
+# 于是 L0 的电源实测全是 TODO 时，脚本**照样进 L1 去发 AXI 事务**。
+#
+# 那正是最不该发生的事：前置电源没证据，后面每一级的结果都不可信，
+# 而且没有 AXI Debug core 时 L1 会抛 Tcl 错误、把结论掩盖成「脚本崩了」。
+#
+# ## 逻辑
+#
+# 本级（或之前累积的）任何 unverified → **不进入下一级**，按 UNVERIFIED 收尾。
+# 返回 1 表示可以继续；返回 0 表示必须停（调用点据此 return/结束）。
 proc gate_if_unverified {level} {
-    global unverified_count
+    global unverified_count unverified_levels highest_verified
     if {$unverified_count > 0} {
         puts ""
-        puts "  $level 有未验证项 —— 后续级的结果不可信，提前收尾。"
-        return 0
+        puts "=== 在 \\[$level\\] 之后停下：有 $unverified_count 项没有证据（UNVERIFIED）==="
+        puts "    涉及的级：$unverified_levels"
+        puts "    最高可确认级别：$highest_verified"
+        puts ""
+        puts "    不进入下一级 —— 前置级没有证据时，后面级的结果不可信。"
+        puts "    补齐上面的必测项后重跑；确实不适用时要在本文件里显式声明 NOT_APPLICABLE 并写明理由。"
+        puts "=========================================="
+        # 收尾也要关掉硬件会话，别把 hw_server 攥在手里
+        catch { close_hw_target }
+        catch { disconnect_hw_server }
+        catch { close_hw_manager }
+        exit 3
     }
+    # 本级全验过 → 更新「最高可确认级别」
+    set highest_verified $level
     return 1
 }
 
@@ -350,6 +375,7 @@ puts "    VCCO_xx = ______ V   （期望 ____ ~ ____ V）"
 puts "  → 若上面任一超范围，在这一级就停，不要往下走。"
 
 stop_if_failed L0
+if {![gate_if_unverified L0]} { return }
 
 # ── L1：时钟与 PLL ──────────────────────────────────────────────────────────
 
@@ -363,13 +389,32 @@ set clock_lock_regs {
 }
 
 set axi_master ""
-foreach txn [get_hw_axi_txns -quiet] { delete_hw_axi_txn $txn -quiet }
-create_hw_axi_txn -quiet axi_rd [get_hw_axis hw_axi_1] -address 0x0 -type read -len 1
+
+# **AXI Debug core 守卫（Q-01 第 3 条）**：
+# 原实现无条件 get_hw_axis hw_axi_1 + create_hw_axi_txn。如果设计里没插
+# AXI Debug core（纯 LED / 纯直通工程很常见），这两行会抛 Tcl 错误，
+# 整个脚本崩在中途 —— 报告出来的现象是「脚本报错」，而不是
+# 「L1 需要 AXI 通道，本工程没有，判 NOT_APPLICABLE」。
+#
+# 现在先探一下有没有可用的 AXI：没有就把 L1/L2/L3 里依赖 AXI 的部分标未验证，
+# 结论是有结构的那一条，而不是 Tcl 崩溃栈。
+set hw_axis [get_hw_axis -quiet]
+if {[llength $hw_axis] == 0} {
+    unverified L1 "本设计没有可用的 AXI Debug core（get_hw_axis 为空）—— PLL 锁定读不到"
+} else {
+    foreach txn [get_hw_axi_txns -quiet] { delete_hw_axi_txn $txn -quiet }
+    create_hw_axi_txn -quiet axi_rd [lindex $hw_axis 0] -address 0x0 -type read -len 1
+    set axi_master [lindex $hw_axis 0]
+}
 
 foreach entry $clock_lock_regs {
     lassign $entry name base offset
     if {$base == 0x00000000} {
         unverified L1 "$name: PLL 锁定寄存器地址还是占位符（0x0）—— 这一级没有证据"
+        continue
+    }
+    if {$axi_master eq ""} {
+        unverified L1 "$name: 没有 AXI 通道，读不到 PLL 锁定"
         continue
     }
     set addr [expr {$base + $offset}]
@@ -384,6 +429,7 @@ puts "  TODO: 各时钟的实测频率需要示波器/频率计，或用板载�
 puts "    TODO: 若设计里有频率计数寄存器，在这里读并比对标称值（误差 < 100 ppm）"
 
 stop_if_failed L1
+if {![gate_if_unverified L1]} { return }
 
 # ── L2：复位释放 ────────────────────────────────────────────────────────────
 
@@ -414,6 +460,10 @@ foreach entry $state_regs {
         unverified L2 "$name: 状态寄存器地址还是占位符 —— 这一级没有证据"
         continue
     }
+    if {$axi_master eq ""} {
+        unverified L2 "$name: 没有 AXI 通道，读不到复位后状态"
+        continue
+    }
     set addr [expr {$base + $offset}]
     set_hw_axi_txn_addr axi_rd $addr
     run_hw_axi -quiet axi_rd
@@ -422,6 +472,7 @@ foreach entry $state_regs {
 }
 
 stop_if_failed L2
+if {![gate_if_unverified L2]} { return }
 
 # ── L3：寄存器读写 ──────────────────────────────────────────────────────────
 
@@ -453,6 +504,10 @@ foreach entry $ro_constants {
     lassign $entry name addr expected
     if {$addr == 0x00000000} {
         unverified L3 "$name: 地址还是占位符 —— 这一级没有证据"
+        continue
+    }
+    if {$axi_master eq ""} {
+        unverified L3 "$name: 没有 AXI 通道，读不到只读常量"
         continue
     }
     set_hw_axi_txn_addr axi_rd $addr

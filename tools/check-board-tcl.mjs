@@ -212,7 +212,16 @@ const check = (ok, label, detail) => {
   else fail += 1;
 };
 
-console.log("=== ① 生成的 Tcl 能被 Tcl 解释器解析（不抛语法错）===");
+/**
+ * **Q-08**：测试主体放进 try/finally，保证清理一定执行。
+ *
+ * 原来 `cleanup()` 在最后一行 —— 中途任何断言抛异常（生成器报错、Tcl 超时、
+ * 文件锁）都会跳过后面的清理，在临时目录里留下沙箱。
+ *
+ * `finally` 里只删自己 `mkdtempSync` 出来的那个目录，范围严格限制。
+ */
+try {
+  console.log("=== ① 生成的 Tcl 能被 Tcl 解释器解析（不抛语法错）===");
 {
   const gen = generate("syntax");
   const result = runWithMock(patch(gen.text, "xc7a100t", "top"), {
@@ -295,7 +304,10 @@ console.log("\n=== ⑤ 正向样例：P0 四项全过时必须走到 stop_if_fai
   check(!/有 \d+ 项失败/u.test(result.out), "P0 没有失败项（真的走到了下一级）", result.out);
 }
 
-cleanup();
+} finally {
+  // 无论断言成不成功、有没有抛异常，都清掉本次的沙箱。
+  cleanup();
+}
 
 console.log("");
 console.log(`  ${String(pass)} 通过 / ${String(fail)} 失败`);

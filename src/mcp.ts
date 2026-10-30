@@ -371,6 +371,23 @@ async function unload(state: McpMountState): Promise<{ ok: boolean; reason?: str
     try {
       await pending.dispose?.();
       state.pendingDispose = undefined;
+      state.path = undefined;
+
+      // **Q-02：pending 与 fiber 常常是同一个对象**。
+      //
+      // 失败时会 `state.pendingDispose = fiber` 而**不清 fiber**（一起保留才能重试）。
+      // 于是第二次进这里时：pending.dispose() 成功 → 已经释放了；
+      // 若继续往下走，`state.fiber` 还是同一个 A，会**再 dispose 一次**。
+      //
+      // 非幂等资源上第三次调用会抛 "already disposed"，结果被报成失败、
+      // 还把已销毁的对象又塞回 pending —— 假失败 + 状态污染。
+      //
+      // 身份相同就说明「这一个对象已经处理完了」，直接返回。
+      if (state.fiber === pending) {
+        state.fiber = undefined;
+        return { ok: true };
+      }
+      // 否则说明 fiber 是**另一份**还没处理的对象，继续往下走。
     } catch (error) {
       // 仍然失败：保留引用，且**明确报告失败** —— 上层不该以为已卸载
       return { ok: false, reason: error instanceof Error ? error.message : String(error) };

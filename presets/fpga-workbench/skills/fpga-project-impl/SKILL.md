@@ -102,7 +102,22 @@ prj/<工程>.runs/impl_1/<顶层>.ltx    # 有 ILA/VIO 时
 ```
 bit/<顶层>.bit
 bit/<顶层>.ltx
+bit/<顶层>.manifest.json    ← 来源身份,见下
 ```
+
+**拷完立刻写 manifest**(记下这份 bit 是**由哪份源码**构建的):
+
+```
+node project-bit-manifest.mjs <工程根> --write --top <顶层名>
+```
+
+它记 PART、顶层、源摘要(RTL/XDC/IP 合并 sha256)、bit 的 sha256、时间。
+**为什么必须要**:文件修改时间证明不了来源 —— 把另一版设计的旧 bit 复制过来,
+mtime 就变成今天,时间上完全分不开。有了 manifest 才能回答
+「这份 bit 是不是这份源码构建的」。
+
+上板前用 `project-bit-manifest.mjs <工程根>` 核对:
+源摘要或 bit 摘要任一对不上 → 这份 bit 不能当当前源码的产物。
 
 上板、发布以 `bit/` 为准。拷完在 `doc/impl.md` 写明来源 run 与时间,并更新 `doc/files.md`。
 

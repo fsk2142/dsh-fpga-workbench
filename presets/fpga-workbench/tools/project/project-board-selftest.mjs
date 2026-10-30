@@ -341,15 +341,33 @@ if {![file exists $BIT_FILE]} {
         puts "           无法证明 bit 是最新的 —— 手工确认后把对应目录指对，不要默认放过"
         incr ::fail_count
     } else {
-        # **N-08**：这里只能证明「bit 比源码文件新」，证明不了「bit 由这份源码生成」。
-        # 真正的来源一致性要靠 bit 归档时的 manifest（见 doc/impl.md 的建议条目）。
+        # **Q-07：时间与来源分开判定。**
+        #
+        # 时间新只是**必要条件**。它证明不了「bit 由这份源码构建」——
+        # 把另一版设计的旧 bit 复制过来，mtime 就变成今天，时间上分不开。
+        #
+        # 来源一致性要靠 bit/manifest.json（构建时写、上板前核）。
+        # 这里做的是「有 manifest 就提示去核，没有就明说只有时间证据」——
+        # 真正的摘要比对交给 project-bit-manifest.mjs（Tcl 里算 sha256 不现实）。
         #
         # 时间戳用 file mtime 的原始秒数呈现：clock format 依赖 Tcl 的 init.tcl，
         # 某些精简安装（只带 tclsh 不带库）会报 "invalid command name clock"。
         # 人读的时候对着秒数不方便，但**可读性不该让脚本在关键路径上崩**。
         check [expr {$bit_mtime >= $newest_src}] \
-            "P0-4 bit 修改时间晚于源文件（bit=$bit_mtime / src=$newest_src，Unix 秒）"
-        puts "       注意：这只说明文件时间新，**不证明** bit 由当前源/约束构建 —— 来源一致性需 bit 归档的 manifest 佐证"
+            "P0-4 时间检查：bit 修改时间晚于源文件（bit=$bit_mtime / src=$newest_src，Unix 秒）"
+
+        # 找同目录的 manifest：<顶层>.manifest.json
+        set manifest_file [file rootname $BIT_FILE].manifest.json
+        if {[file exists $manifest_file]} {
+            puts "       manifest 在：$manifest_file"
+            puts "       **还要跑一次来源核对**（时间对不等于来源对）："
+            puts "         node project-bit-manifest.mjs <工程根>"
+            unverified P0-4 "来源一致性未在此校验（时间检查通过 ≠ 来源一致）—— 跑 project-bit-manifest.mjs 才算"
+        } else {
+            unverified P0-4 "没有 bit manifest —— 只能证明时间新，**无法证明 bit 由当前源构建**"
+            puts "       补法：出完 bit 后跑"
+            puts "         node project-bit-manifest.mjs <工程根> --write --top <顶层名>"
+        }
     }
 }
 

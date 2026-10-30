@@ -294,6 +294,12 @@ export const TOOLS = [
     level: "project",
     stage: "综合/实现环节",
     what: "解析 report_utilization 与 report_drc 输出,抠出 LUT/FF/BRAM/DSP/IO 占用与 DRC 违规数(按严重度分组);只给数字不给结论——资源是否超标取决于器件"
+  },
+  {
+    file: "project-bit-manifest.mjs",
+    level: "project",
+    stage: "上板前",
+    what: "bitstream 来源清单:出完 bit 后 --write 记下 PART/顶层/源摘要/bit SHA256,上板前核对「这份 bit 是不是这份源码构建的」;时间新只证明必要条件,来源一致要它才算"
   }
 ];
 

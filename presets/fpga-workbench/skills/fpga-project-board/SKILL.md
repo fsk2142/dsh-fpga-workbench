@@ -44,7 +44,16 @@ description: 把 bit/ 中与当前代码对应的 bitstream 下载到板卡验�
 | **在线探测** | `open_hw_manager` → `connect_hw_server` → `get_hw_targets`,能看到目标 | **停** —— 板子没上电、线没插、驱动没装 |
 | **型号核对** | `get_property PART <device>` 或读 `IDCODE`,与 `doc/spec.md` 的 part 比对 | **停** —— 型号不符说明拿错板子或 bit 是别的器件的 |
 | **JTAG 在线加载** | `program_hw_devices`(只写器件,**不写 Flash**) | 若误用了 Flash 流程,可能覆盖出厂/既有配置 |
-| **bit 新鲜度** | `bit/` 的文件时间 vs `src/rtl/` `xdc/` 最新改动时间 | **停** —— 拿旧 bit 上板,测的是旧设计 |
+| **bit 来源** | 时间检查**加** `project-bit-manifest.mjs` 核对源摘要与 bit sha256 | **停** —— 拿旧 bit 上板,测的是旧设计 |
+
+**时间检查不等于来源一致。** 把另一版设计的旧 bit 复制过来,mtime 就变成今天,
+时间上完全分不开。所以上板前两项都要过:
+
+```
+node project-bit-manifest.mjs <工程根>     # 0=一致 / 1=不一致 / 3=缺 manifest
+```
+
+缺 manifest 记 `UNVERIFIED` —— 那时**只有**时间证据,不能说「bit 与源码匹配」。
 
 **为什么这四项是硬性的**:
 

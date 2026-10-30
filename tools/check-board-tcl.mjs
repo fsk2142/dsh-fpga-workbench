@@ -300,7 +300,7 @@ console.log("\n=== ⑤ 正向样例：P0 四项全过时必须走到 stop_if_fai
   check(/ok: P0-1/u.test(result.out), "P0-1 在线通过", result.out);
   check(/ok: P0-2/u.test(result.out), "P0-2 型号通过", result.out);
   check(/ok: P0-4/u.test(result.out), "P0-4 bit 时间通过", result.out);
-  check(/不证明.*bit 由当前源/u.test(result.out), "P0-4 如实说明它证明不了来源一致性（N-08）", result.out);
+  check(/不证明.*bit 由当前源构建|无法证明 bit 由当前源构建/u.test(result.out), "P0-4 如实说明它证明不了来源一致性（Q-07）", result.out);
   check(!/有 \d+ 项失败/u.test(result.out), "P0 没有失败项（真的走到了下一级）", result.out);
 }
 

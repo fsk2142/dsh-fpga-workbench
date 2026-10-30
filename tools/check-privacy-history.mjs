@@ -106,8 +106,11 @@ const CONVERSATION_MARKERS = [
  * 检查工具的**文档与示例本身**必须写出会被检测的形态，否则没法说明规则。
  * 但那些示例用的是 `<name>` / `xxx` / `John` 这类占位符 —— 它们不是真账号。
  *
- * 原正则 `/\/home\/[a-z0-9_-]+/` 会把示例里的 `/home/x` 当成真实路径报出来（误报）。
- * 现在统一用 `PLACEHOLDER` 排除。
+ * 原正则只认「斜杠 + home + 斜杠 + 一段小写字母数字」，会把示例里的占位名字
+ * 当成真实路径报出来（误报）。现在统一用 `PLACEHOLDER` 排除。
+ *
+ * 注意本文件注释**不写完整的路径示例**：会被 `check-privacy.mjs` 当成真泄漏。
+ * 要说明形态，用占位名字或正则原文写。
  */
 const PLACEHOLDER = /^(?:<.*>|x{1,3}|name|username|user|john|jane|example|me|you|someone|\$\{?[\w]*\}?|\*+|\.+|…)$/iu;
 

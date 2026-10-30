@@ -152,15 +152,22 @@ const check = (ok, label, detail) => {
  */
 process.on("uncaughtException", (error) => {
   const summary = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  console.log(`\nFAIL  意外崩溃（未捕获异常）`);
-  console.log(`        ${summary}`);
-  console.log(`        已完成断言：${String(failures.length === 0 ? "全部通过（崩溃发生在断言之后）" : `${String(failures.length)} 条失败`)}`);
+  // **走 stderr**：pnpm test 只保留 stderr 与末尾几行 stdout，
+  // 走 stdout 的话这条诊断会被截掉 —— 实测过（第20轮提的 N12 兜底，
+  // 提交前那次失败里就没看到这条信息，只能靠日志逐行翻）。
+  const lines = [
+    "",
+    "FAIL  意外崩溃（未捕获异常）",
+    `        ${summary}`,
+    `        已完成断言：${failures.length === 0 ? "全部通过（崩溃发生在断言之后）" : `${String(failures.length)} 条失败`}`
+  ];
   if (typeof error?.stack === "string") {
     const frames = error.stack.split("\n").slice(1, 4).map((line) => line.trim());
-    console.log(`        调用栈：${frames.join(" ← ")}`);
+    lines.push(`        调用栈：${frames.join(" ← ")}`);
   }
-  console.log(`        沙箱：${SANDBOX}`);
-  console.log(`        这类多是 Windows 瞬时文件锁（EPERM/EBUSY），重跑通常即过；反复出现要查 AV/索引器。`);
+  lines.push(`        沙箱：${SANDBOX}`);
+  lines.push("        这类多是 Windows 瞬时文件锁（EPERM/EBUSY），重跑通常即过；反复出现要查 AV/索引器。");
+  console.error(lines.join("\n"));
   process.exitCode = 1;
 });
 

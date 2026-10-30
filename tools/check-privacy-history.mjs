@@ -13,9 +13,28 @@
  * | 类别 | 查法 |
  * |---|---|
  * | 提交信息里的**对话痕迹** | `用户要求` / `用户定案` / `用户报障` / `我当时` 等措辞 |
- * | 提交信息里的**个人路径** | 本机绝对路径片段（如 `C:\Users\<名>`） |
+ * | 提交信息里的**个人路径** | 本机绝对路径片段（占位名字不算） |
  * | 提交信息的**邮箱** | 作者/提交者邮箱若不是 noreply 也不是已知项目邮箱，点出来 |
- * | 历史 blob 里的**本机路径** | `git log -S` 搜关键片段（只报提交与路径，不回显内容） |
+ * | 历史 blob 里的**本机路径** | 先 `git log -S` 缩小候选，再逐个提交实际读文件内容 |
+ *
+ * ## 扫描范围（别把它当「全历史全文件」）
+ *
+ * 覆盖的是**本地仓库可达的提交**：
+ *
+ * - 提交信息：全部可达提交（`--limit N` 只截这第一段）
+ * - 历史 blob：**只查 `tools/` `presets/` `scripts/` `docs/` 四个目录**
+ *   —— 路径与个人信息只可能出在这几处；`README` / `src` 等未覆盖
+ * - 只用 `git log -S` 做候选缩小，所以**只出现在旧 blob、且后来被删掉**的内容
+ *   仍可能漏掉（那类要 `git rev-list --objects --all` 全量读，成本高，见下）
+ *
+ * **它查不到远端残留**：GitHub 上改写前的旧 SHA 仍可能可访问。
+ * 那部分见 `docs/HISTORY-RESIDUE.md`，只能用平台 API 逐个核。
+ *
+ * ## 为什么不做全量 blob 扫描
+ *
+ * `git rev-list --objects --all` + 读全部 blob 在大仓库上要几分钟到几十分钟，
+ * 而收益只在「清理过的旧内容」这一种场景。所以默认不做；
+ * 真要做的场合（发布严格审计）单独跑，别塞进日常自检。
  *
  * ## 隐私保护
  *
@@ -112,6 +131,14 @@ const CONVERSATION_MARKERS = [
  * 注意本文件注释**不写完整的路径示例**：会被 `check-privacy.mjs` 当成真泄漏。
  * 要说明形态，用占位名字或正则原文写。
  */
+/**
+ * 历史 blob 扫描的目录范围（N-07：写明边界，别让人以为"全库全文件"）。
+ *
+ * 只查这四处：路径与个人信息只可能出在这里。
+ * `README` / `src` 等**未覆盖** —— 文件头已明确声明，不是遗漏。
+ */
+const BLOB_SCOPE = ["tools", "presets", "scripts", "docs"];
+
 const PLACEHOLDER = /^(?:<.*>|x{1,3}|name|username|user|john|jane|example|me|you|someone|\$\{?[\w]*\}?|\*+|\.+|…)$/iu;
 
 /** 是不是占位符（不是真账号）。 */
@@ -216,10 +243,18 @@ const main = () => {
     // 一份「含真实用户目录」的提交清单。`git grep` 不支持历史，所以按提交查。
     const suspects = new Set();
     // 找出所有涉及过的、可能带路径的文件（一次查完，不按提交逐个扫）
+    //
+    // `--limit` 在这一段**也生效**（N-07）：原实现只截提交信息扫描，用户传
+    // `--limit 50` 会以为「只查了 50 条」，实际 blob 仍扫了全部历史 —— 现在一致。
+    const blobArgs = ["log", "--all", "--pretty=format:%H", "-S"];
     for (const fixString of ["Users/", "Users\\"]) {
       let log = "";
       try {
-        log = git(["log", "--all", "--pretty=format:%H", "-S", fixString, "--", "tools", "presets", "scripts"]);
+        const args = [...blobArgs];
+        args.push(fixString);
+        if (options.limit > 0) args.push(`-n${String(options.limit)}`);
+        args.push("--", ...BLOB_SCOPE);
+        log = git(args);
       } catch {
         continue;
       }
@@ -272,13 +307,17 @@ const main = () => {
   }
 
   if (options.json) {
-    console.log(JSON.stringify({ commits: commits.length, findings }, null, 2));
+    console.log(JSON.stringify({ commits: commits.length, scope: { blobDirs: BLOB_SCOPE, limit: options.limit }, findings }, null, 2));
   } else {
-    console.log(`扫描 ${String(commits.length)} 条提交`);
+    const limitNote = options.limit > 0 ? `（--limit ${String(options.limit)}）` : "";
+    console.log(`扫描 ${String(commits.length)} 条提交${limitNote}`);
+    // **写明范围边界**（N-07）：不要把「本地 PASS」读成「远端也干净」
+    console.log(`blob 扫描范围：${BLOB_SCOPE.join(" / ")} 这几处；README / src 等未覆盖`);
+    console.log("远端残留（改写前的旧 SHA）不在此检查范围内，见 docs/HISTORY-RESIDUE.md");
     console.log("");
     if (findings.length === 0) {
-      console.log("PASS：提交信息与历史 blob 里没发现对话痕迹、本机路径或可疑邮箱。");
-      console.log("      （范围：当前 git 仓库的全部可达提交）");
+      console.log("PASS：提交信息与已扫描的 blob 范围里没发现对话痕迹、本机路径或可疑邮箱。");
+      console.log("      **这不代表远端历史已清除** —— 旧 SHA 可能仍能在平台上访问。");
     } else {
       // 按类别归并，避免刷屏
       const byKind = new Map();

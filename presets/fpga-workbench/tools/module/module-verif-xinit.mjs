@@ -102,10 +102,42 @@ const INITIAL_ASSIGN = /initial\s+begin\s+(?:[^;\n]*;\s*)*?(\w+)\s*=\s*([^;]+);/
 
 /**
  * 判断一个初值是否「显式未知」。
+ *
+ * ## 支持的字面量形态
+ *
+ * ```
+ * 'x   x   'z   z             // 无宽无基
+ * 1'bx  1'bz  4'bxxxx        // 二进制全 X/Z
+ * 'hx   8'hx  16'hxxxx       // 十六进制全 X/Z(h 一位 = 4 bit,所以 'hx 就是全 4 位未知)
+ * 4'hz  8'hxz                // 全 Z / 混合
+ * ```
+ *
+ * ## 为什么要单独认 h 进制(2026-10-29 实测的漏判)
+ *
+ * 原来只认 `[01]*` 的二进制形态,于是 `16'hxxxx` / `8'hXX` / `4'hz` 这类**完全合法**的
+ * 显式 X 化被判成「有初值」,后果是第 1 段误报「没有声明处初值」(假阴性)——
+ * 用户按规范做的 X 化反而让检查器看不见。
+ *
+ * ## 关键实现细节(踩过的两个坑)
+ *
+ * 1. **字符类里必须包含 `x`/`z`** —— 它们不是十六进制数字,`[0-9a-f_]` 配不上 `xxxx`
+ * 2. **不能先把 `'` 剥掉** —— `16'hxxxx` 的 `'` 是进制分隔符,剥了就配不上
+ *
  * @param value - 声明等号右边的内容。
  */
-const isExplicitUnknown = (value) =>
-  /^['`]?[xz]/iu.test(value.trim()) || /^['`]?[01]*[xz][01]*$/iu.test(value.trim());
+const isExplicitUnknown = (value) => {
+  const raw = value.trim();
+  // 无宽无基:`'x` / `x` / `'z` / `z`(整串就一个字符)
+  if (/^['`]?[xz]$/iu.test(raw)) return true;
+  // 带进制:(可选十进制宽度)'(b|o|h|d) 后跟全 x/z 的值
+  //   字符类必须含 x/z —— 它们不是十六进制数字
+  const withBase = /^(?:\d+)?'\s*[bodh]\s*([0-9a-fxz_]+)$/iu.exec(raw);
+  if (withBase === null) return false;
+  const digits = withBase[1];
+  if (!/x|z/iu.test(digits)) return false;
+  // 全 X/Z(可带下划线分隔)才算「显式未知」;`4'b10xz` 这种半已知的不算
+  return /^[xz_]+$/iu.test(digits);
+};
 
 /**
  * 判断一个初值是否明显是常数引用（`= WIDTH`、`= DEPTH-1`）。

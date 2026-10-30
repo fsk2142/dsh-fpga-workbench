@@ -3,15 +3,15 @@
 // 什么时候用它:profile 的 pnpm 操作被供应链策略挡住时(例如锁文件里有别的包太新,
 // 而 `dsh plugin add` 因此整体失败)。这里只做 pnpm 对 `file:` 依赖本来会做的那件事:
 // 把包内容拷进 node_modules/<包名>。因为依赖声明与锁文件记录的是**路径**
-// (`file:C:/Work/dsh-fpga-workbench`),内容更新不会让它们失效。
+// (`file:C:/<克隆位置>/dsh-fpga-workbench`),内容更新不会让它们失效。
 //
 // 它**不碰**:profile 的 package.json、pnpm-lock.yaml、pnpm-workspace.yaml、settings.yaml,
 // 也不联网、不装任何新依赖。**也不删除任何文件**(用户定案):已装副本里多出来的旧文件只列出来。
 //
 // 用法(在你自己的终端里跑):
-//   node C:\Work\dsh-fpga-workbench\tools\sync-installed.mjs            同步并校验
-//   node C:\Work\dsh-fpga-workbench\tools\sync-installed.mjs --check    只看差异,不动
-//   node C:\Work\dsh-fpga-workbench\tools\sync-installed.mjs --prune    也列出已装多出的旧文件
+//   node <插件目录>\tools\sync-installed.mjs            同步并校验
+//   node <插件目录>\tools\sync-installed.mjs --check    只看差异,不动
+//   node <插件目录>\tools\sync-installed.mjs --prune    也列出已装多出的旧文件
 //     ↑ `--prune` 原本是"顺带删掉",现已改为**只列不删**(用户定案:插件运行时绝不永久删除)。
 //       开关保留,免得既有流程按老写法调用时报"未知参数";两种写法的行为现在一样。
 //

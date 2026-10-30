@@ -4,8 +4,8 @@
 // "Already up to date" 而**不重新拷贝** —— 现象是「代码改了、界面没变」,且毫无报错。
 //
 // 用法(必须在**你自己的终端**里跑,不要由别的进程代跑):
-//   node C:\Work\dsh-fpga-workbench\tools\install.mjs          刷新并校验
-//   node C:\Work\dsh-fpga-workbench\tools\install.mjs --check  只校验,不动任何东西
+//   node <插件目录>\tools\install.mjs           刷新并校验
+//   node <插件目录>\tools\install.mjs --check   只校验,不动任何东西
 //
 // 安全设计(踩过坑之后定的):
 //   1. 先校验。一致就什么都不做 —— 避免无谓的改动。
@@ -42,7 +42,7 @@ const INSTALLED = PROFILE_DIR === "" ? "" : join(PROFILE_DIR, "node_modules", PA
 const checkOnly = process.argv.includes("--check");
 
 /**
- * 本插件目录的 **file URL**（`file:///C:/Work/...`）。
+ * 本插件目录的 **file URL**（`file:///C:/<克隆位置>/...`）。
  *
  * 用 `.href` 而不是 `.pathname`（2026-10-22 审查 N2）：
  *   · `.href` → `file:///C:/Work/x`（标准形态，双斜杠 + URL 编码）

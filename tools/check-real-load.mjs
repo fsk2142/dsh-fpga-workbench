@@ -3,10 +3,11 @@
 // 上一版的问题：假 ctx 里 `inject(deps, cb)` 直接同步调 cb，而真实宿主是
 // **服务就绪后**才调 —— 于是 webServer 那块从未真正执行过，测不到它会不会抛。
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const MINE = "C:/Work/dsh-plug-in/dsh-fpga-workbench";
+// 从本文件位置推导仓库根，不硬编码绝对路径（克隆到别处也能跑）。
+const MINE = dirname(dirname(fileURLToPath(import.meta.url)));
 const entry = join(MINE, "lib/index.js");
 if (!existsSync(entry)) {
   console.error(`  ❌ 找不到 ${entry}`);

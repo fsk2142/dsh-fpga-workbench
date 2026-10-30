@@ -136,7 +136,8 @@ CDC 违例不能批量 waiver。每条跨时钟域路径都要能回答:
 
 ## 本环节要跑的命令
 
-报告已有就直接读;要自己跑时在 impl 后的工程里(有 `mcp__vivado__*` 就走 MCP,用法见 `fpga-project-synth` 技能里的 MCP 与批处理一节):
+报告已有就直接读;要自己跑时在 impl 后的工程里(有 `mcp__vivado__*` 就走 MCP ——
+**仅限 Vivado 操作**,用法见 `fpga-project-synth` 的 MCP 与批处理一节):
 
 ```tcl
 report_timing_summary -file <报告路径>

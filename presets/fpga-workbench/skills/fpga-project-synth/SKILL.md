@@ -34,8 +34,10 @@ wait_on_run synth_1
 
 ### 走 MCP 还是走 shell
 
-**有 `mcp__vivado__*` 时优先走 MCP**：常驻会话:工程只 `open_project` 一次,后续命令秒级;
-shell 的 `vivado -mode batch` 每条命令都要重开 Vivado(30–60 秒启动)。
+**只对 Vivado 操作。** 有 `mcp__vivado__*` 时优先走 MCP:常驻会话,工程只 `open_project` 一次,
+后续命令秒级;shell 的 `vivado -mode batch` 每条命令都要重开 Vivado(30–60 秒启动)。
+
+**其它工具不走 MCP** —— 编译器、仿真器、脚本一律照常走命令行。
 
 ```
 vivado_start(working_dir, session_type)

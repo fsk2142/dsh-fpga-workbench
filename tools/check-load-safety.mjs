@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 // 仓库根 = **本文件位置的上一级**，绝不写死本机绝对路径。
 //
-// 这条规则不是洁癖：写死 `C:/Work/dsh-plug-in/...` 会让本机克隆里跑这个检查器时
+// 这条规则不是洁癖：写死本机绝对路径(`C:/<某目录>/...`)会让别处克隆跑这个检查器时
 // **读的是主仓的文件**（克隆里改坏了照样绿，静默测错树），而 CI / 他机上路径不存在
 // 直接 ENOENT 崩掉整个 check-all。check-privacy.mjs 建立的初衷就是防这类硬编码
 // （前科：tools/lib/version-range.mjs 曾写死 `C:/Users/<真名>/...`），

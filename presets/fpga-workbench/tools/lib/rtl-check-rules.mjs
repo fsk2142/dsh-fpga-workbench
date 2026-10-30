@@ -83,16 +83,6 @@ export function classifyNeq(operands, pairs) {
   return named ? "data" : "confirm";
 }
 
-export const NINE_SECTIONS = [
-  "Local Parameters", "Types", "Registers", "Combinational Logic", "Sequential Logic",
-  "Functions Module", "Task Module", "Module Instantiation", "Assertions"
-];
-
-export const HEADER_FIELDS = [
-  "file name", "module name", "created date", "updated date",
-  "version", "author", "copyright", "open source", "proprietary"
-];
-
 /**
  * 跑一个文件上的全部规则。
  *

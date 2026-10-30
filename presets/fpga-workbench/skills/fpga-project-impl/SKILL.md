@@ -147,3 +147,7 @@ bit/<顶层>.ltx
 | 布线拥塞 / 结构问题 | `fpga-project-rtl` |
 | 约束过紧/管脚 | `fpga-project-constraints` |
 | 综合就挂了 | `fpga-project-synth` |
+
+**是环境问题还是设计问题**(run 子进程挂死、`%APPDATA%` 写不了、Verilator 找不到 waiver 文件、
+Tcl 路径转义、机器级设置写在哪):见
+[环境与工具排障](references/environment-troubleshooting.md)。

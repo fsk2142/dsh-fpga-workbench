@@ -20,9 +20,83 @@
 // spawnSync(stdio:"ignore") 验(不开管道,能拿到 status)。要点 run.do 的 `[ME]` 输出时,
 // 把 stdout 重定向到**文件句柄**再读文件(那不是管道)。
 import { spawnSync } from "./lib/spawn.mjs";
-import { chmodSync, closeSync, existsSync, copyFileSync, mkdirSync, openSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync as rawMkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync as rawWriteFileSync
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+/**
+ * 沙箱写文件的**瞬时锁重试**（N12，2026-10-29 实测）。
+ *
+ * ## 为什么要它
+ *
+ * Windows 的 AV / 索引器会短暂锁住新建文件，`writeFileSync` 于是抛 `EPERM (-4048)`。
+ * 本文件有 300+ 处写入，任一处撞上都会让**整个自检崩溃** ——
+ * 而且崩溃与断言失败长得不一样：**没有 FAIL 行**，只剩一个 exit code 1，
+ * 事后完全不知道是哪一步挂的（第19轮审查把这条记为 N12，与"断言失败"的 N6 区分）。
+ *
+ * ## 怎么做
+ *
+ * 只对这一层做包装，不改 300 处调用点。只重试**明确的瞬时错误**（EPERM/EBUSY/EACCES），
+ * 其它错误照原样抛 —— 不能把「真的没权限」也当瞬时问题掩盖掉。
+ *
+ * 重试间隔递增（10/30/60/100ms），总共最多 4 次；仍失败就带上路径抛出去，
+ * 由顶层 try/catch 转成可读的 FAIL 行。
+ */
+const TRANSIENT_FS_CODES = new Set(["EPERM", "EBUSY", "EACCES", "EMFILE", "ENFILE"]);
+const RETRY_DELAYS_MS = [10, 30, 60, 100];
+
+/** 同步等待（本文件没有异步上下文，重试只能是忙等；单次最多 200ms 总延迟）。 */
+const sleepSync = (ms) => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    // 忙等：这里只需要几十毫秒，用 Atomics 之类反而更绕
+  }
+};
+
+/**
+ * 带瞬时错误重试地跑一个 fs 调用。
+ * @param {() => void} action - 要执行的操作。
+ * @param {string} target - 出错时打进错误信息的路径。
+ */
+const withTransientRetry = (action, target) => {
+  let lastError;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      action();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!TRANSIENT_FS_CODES.has(error.code) || attempt === RETRY_DELAYS_MS.length) {
+        // 非瞬时错误、或已用尽重试：补上路径再抛（原始错误常只有 code 没有路径）
+        if (typeof error.message === "string" && !error.message.includes(target)) {
+          error.message = `${error.message} (${target})`;
+        }
+        throw error;
+      }
+      sleepSync(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
+};
+
+/** 顶层用的 writeFileSync：瞬时锁自动重试。 */
+const writeFileSync = (file, data, options) =>
+  withTransientRetry(() => rawWriteFileSync(file, data, options), String(file));
+
+/** 顶层用的 mkdirSync：AV 也会锁目录创建。 */
+const mkdirSync = (dir, options) =>
+  withTransientRetry(() => rawMkdirSync(dir, options), String(dir));
 
 // checkFile 现在住在共享纯规则模块里(DSH-N06);checker 只留目录发现与角色等入口侧。
 import { checkFile } from "../presets/fpga-workbench/tools/lib/rtl-check-rules.mjs";
@@ -56,6 +130,39 @@ const check = (ok, label, detail) => {
   console.log(`${ok ? "ok  " : "FAIL"}  ${label}${detail === undefined ? "" : `\n        ${detail}`}`);
   if (!ok) failures.push(label);
 };
+
+/**
+ * 顶层崩溃兜底（N12，2026-10-29）。
+ *
+ * ## 为什么需要
+ *
+ * 本文件是**顺序脚本**，没有 main 可包 —— 任一步抛异常（实测：沙箱写文件撞上 Windows
+ * AV 的瞬时锁，`EPERM (-4048)`）都会让进程直接崩掉。而崩溃与断言失败**长得不一样**：
+ *
+ * | 形态 | 输出 | 事后能查到什么 |
+ * |---|---|---|
+ * | 断言失败（N6） | 有 `FAIL <label>` 行 | 是哪一条断言、哪个工具 |
+ * | **崩溃（N12）** | 只有 exit code 1 | **什么都没有** |
+ *
+ * 所以这里接住未捕获异常，转成一条能定位的 FAIL 行：带错误摘要、出错路径、以及
+ * 「跑到哪一步了」（已完成的断言数）。这样重跑时至少知道往哪看。
+ *
+ * 注意：这是**兜底**，不是替代修复。正常路径仍应让断言把问题说清楚；
+ * 走到这里说明遇到了没预料到的环境问题。
+ */
+process.on("uncaughtException", (error) => {
+  const summary = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  console.log(`\nFAIL  意外崩溃（未捕获异常）`);
+  console.log(`        ${summary}`);
+  console.log(`        已完成断言：${String(failures.length === 0 ? "全部通过（崩溃发生在断言之后）" : `${String(failures.length)} 条失败`)}`);
+  if (typeof error?.stack === "string") {
+    const frames = error.stack.split("\n").slice(1, 4).map((line) => line.trim());
+    console.log(`        调用栈：${frames.join(" ← ")}`);
+  }
+  console.log(`        沙箱：${SANDBOX}`);
+  console.log(`        这类多是 Windows 瞬时文件锁（EPERM/EBUSY），重跑通常即过；反复出现要查 AV/索引器。`);
+  process.exitCode = 1;
+});
 
 
 // ── 造样本 ──────────────────────────────────────────────────────────────────
@@ -3261,7 +3368,7 @@ check(
 );
 // ── F-03:check-patch-file.mjs 不许写死仓库绝对路径 ───────────────────────────
 //
-// 写死 `C:/Work/dsh-fpga-workbench/cordis.patch.yml` 的后果是"克隆到别处就断"。改成按
+// 写死绝对路径(如 `C:/<克隆位置>/cordis.patch.yml`)的后果是"克隆到别处就断"。改成按
 // `import.meta.url` 相对定位 —— 这里同时钉住两件事:不再有绝对路径、用的是 import.meta.url。
 const patchCheckSource = readFileSync(join(ROOT, "tools", "check-patch-file.mjs"), "utf8");
 check(
@@ -3568,6 +3675,42 @@ if (vsimPath === undefined) {
     });
     const exemptResult = runTool(moduleTool("module-verif-xinit.mjs"), [exempt], exempt);
     check(exemptResult.status === 3, `只有时钟类初值 → 退 3(实际 ${String(exemptResult.status)})`, exemptResult.output.slice(-200));
+
+    // **h 进制的全 X/Z 也是显式未知**（第21轮审查发现的漏判，2026-10-29 修）
+    //
+    // 原来只认 `[01]*` 的二进制形态，`16'hxxxx` / `8'hXX` / `4'hz` 这类合法写法被当成
+    // 「有初值」—— 用户按规范做的 X 化反而让检查器看不见（假阴性）。
+    // 修的时候踩过两个坑，这里一起钉住：
+    //   ① 字符类必须含 x/z（它们不是十六进制数字）
+    //   ② 不能先把 `'` 剥掉（那是进制分隔符）
+    const radixExempt = scratch("xinit-radix-x", {
+      "verif/tb_dut.sv": [
+        "module tb_dut;",
+        "  logic [15:0] a = 16'hxxxx;",
+        "  logic [7:0]  b = 8'hXX;",
+        "  logic [3:0]  c = 4'hz;",
+        "  logic [11:0] e = 12'hx;",
+        "endmodule",
+        ""
+      ].join("\n")
+    });
+    const radixResult = runTool(moduleTool("module-verif-xinit.mjs"), [radixExempt], radixExempt);
+    check(
+      radixResult.status === 0,
+      `h 进制的全 X/Z 认作显式未知 → 退 0(实际 ${String(radixResult.status)})`,
+      radixResult.output.slice(-300)
+    );
+
+    // 反向：半已知的（4'b10xz）不是纯 X 化，仍算「有初值」
+    const halfKnown = scratch("xinit-half-known", {
+      "verif/tb_dut.sv": "module tb_dut;\n  logic [3:0] q = 4'b10xz;\nendmodule\n"
+    });
+    const halfResult = runTool(moduleTool("module-verif-xinit.mjs"), [halfKnown], halfKnown);
+    check(
+      halfResult.status === 1,
+      `半已知的 4'b10xz 不算纯 X 化 → 退 1(实际 ${String(halfResult.status)})`,
+      halfResult.output.slice(-200)
+    );
 
     // 存储器未 X 化 —— 这是 X 的第一大来源，仿真器的全局初值选项覆盖不到
     const memOpen = scratch("xinit-mem-open", {

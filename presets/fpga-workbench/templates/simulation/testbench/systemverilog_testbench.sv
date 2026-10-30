@@ -70,19 +70,35 @@ module tb_<module_snake>;
   //----------------------------------------------------------------------------//
   // Stimulus + checks. On mismatch: $error(...); err_cnt = err_cnt + 1;
   //----------------------------------------------------------------------------//
+  //
+  // **填完把 check_cnt 也加一**（或者直接 `check_cnt++`）。
+  //
+  // 为什么需要这个计数器：`err_cnt == 0` 在"一条检查都没做"时同样成立 ——
+  // 空 TB 会打印 "ALL TESTS PASSED"，那是最危险的假绿（实测：生成的骨架 TB
+  // 未填 stimulus 时，vsim 立刻报 ALL TESTS PASSED，Time: 0 ps）。
+  //
+  // 所以判据是「做过检查 且 没有失败」，而不是「没有失败」。
+  int check_cnt = 0;
+
   initial begin
     $display("[TB] test start");
     // TODO: stimulus + checks
+    //   每个检查点：比对 → 不符时 $error(...); err_cnt++;  无论对错都 check_cnt++;
     $display("[TB] test done");
 
     // ---- final verdict ----
     // Keep both strings exactly as printed below: the run scripts grep for them,
     // and the FAIL verdict only becomes a non-zero exit code through the
     // run-level gate in verif/run.do, not through vsim itself (conventions #2).
-    if (err_cnt == 0)
-      $display("ALL TESTS PASSED (err_cnt=0)");
-    else
+    if (check_cnt == 0) begin
+      // **一条检查都没做 → 不算通过**。这是未完成的 TB，不是通过的 TB。
+      // 消息用 ASCII：Windows 控制台代码页会把中文变成 `?`（实测），日志就没法看了。
+      $fatal(1, "TB INCOMPLETE: no check points (check_cnt=0). Fill in stimulus + checks first.");
+    end else if (err_cnt == 0) begin
+      $display("ALL TESTS PASSED (err_cnt=0, check_cnt=%0d)", check_cnt);
+    end else begin
       $fatal(1, "TB FAILED: err_cnt=%0d", err_cnt);
+    end
     $finish;
   end
 

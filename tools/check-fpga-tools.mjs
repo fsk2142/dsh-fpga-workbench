@@ -728,9 +728,19 @@ check(rendered.remaining.includes("DATE") && rendered.remaining.includes("Author
 // 自带 TB 模板的判定契约:两条判据字符串必须在,且模板里不能再写"err_cnt>0 会非零退出"——
 // ModelSim 批处理下 $fatal 不改退出码(2020.4 实测),照旧说法写会让人以为看退出码就能抓到失败。
 const bundledTb = readFileSync(categorizedTemplates.testbench, "utf8");
+// **按语义断言，不按完整字面量**：模板后来加了 `check_cnt`（空 TB 不许说通过），
+// 成功标记变成 `ALL TESTS PASSED (err_cnt=0, check_cnt=%0d)` ——
+// 硬比对旧字面量只会让「改模板」变成「改测试」。
+// 这里要守的是：**两个标记字符串都在**，run.do 靠它们判成败。
 check(
-  bundledTb.includes("ALL TESTS PASSED (err_cnt=0)") && bundledTb.includes("TB FAILED: err_cnt="),
+  /ALL TESTS PASSED/u.test(bundledTb) && /TB FAILED/u.test(bundledTb),
   "自带 TB 模板里两条判据字符串都在(成功标记 + 失败标记),脚本靠它们判成败"
+);
+// 空 TB 不许报通过（2026-10-30 实测：骨架 TB 未填 stimulus 时 vsim 立刻
+// 报 ALL TESTS PASSED、Time: 0 ps —— 时钟都没跑）。
+check(
+  /check_cnt/u.test(bundledTb) && /TB INCOMPLETE/u.test(bundledTb),
+  "自带 TB 模板用 check_cnt 挡住「空 TB 报通过」，并给出 TB INCOMPLETE 标记"
 );
 check(
   /does NOT make vsim exit non-zero/u.test(bundledTb) && !/must exit non-zero/u.test(bundledTb),

@@ -98,12 +98,44 @@ const CONVERSATION_MARKERS = [
   "按用户口径"
 ];
 
-/** 本机绝对路径的形态（只认「盘符 + Users」这种高置信度）。 */
+/**
+ * 本机绝对路径的形态（只认高置信度）。
+ *
+ * ## 为什么要排除占位符（2026-10-30 实测）
+ *
+ * 检查工具的**文档与示例本身**必须写出会被检测的形态，否则没法说明规则。
+ * 但那些示例用的是 `<name>` / `xxx` / `John` 这类占位符 —— 它们不是真账号。
+ *
+ * 原正则 `/\/home\/[a-z0-9_-]+/` 会把示例里的 `/home/x` 当成真实路径报出来（误报）。
+ * 现在统一用 `PLACEHOLDER` 排除。
+ */
+const PLACEHOLDER = /^(?:<.*>|x{1,3}|name|username|user|john|jane|example|me|you|someone|\$\{?[\w]*\}?|\*+|\.+|…)$/iu;
+
+/** 是不是占位符（不是真账号）。 */
+const isPlaceholder = (segment) => segment === undefined || PLACEHOLDER.test(segment);
+
 const LOCAL_PATH_PATTERNS = [
-  /[A-Za-z]:[\\/]Users[\\/][A-Za-z0-9_.-]+/u,
-  /[A-Za-z]:[\\/]Documents and Settings[\\/][A-Za-z0-9_.-]+/u,
-  /\/home\/[a-z0-9_-]+/u
+  { re: /[A-Za-z]:[\\/]Users[\\/]([^\\/\s'"`<>|]+)/gu, group: 1 },
+  { re: /[A-Za-z]:[\\/]Documents and Settings[\\/]([^\\/\s'"`<>|]+)/gu, group: 1 },
+  { re: /\/home\/([a-z0-9_-]+)/gu, group: 1 }
 ];
+
+/**
+ * 提交文本里有没有**真实的**本机路径（占位符不算）。
+ * @param text - 提交信息。
+ * @returns 命中的路径形态；没有则返回 undefined。
+ */
+const findLocalPath = (text) => {
+  for (const { re, group } of LOCAL_PATH_PATTERNS) {
+    re.lastIndex = 0;
+    let match = re.exec(text);
+    while (match !== null) {
+      if (!isPlaceholder(match[group])) return match[0];
+      match = re.exec(text);
+    }
+  }
+  return undefined;
+};
 
 /** 已知可接受的邮箱（noreply 之类）。 */
 const ACCEPTABLE_EMAIL = /(?:users\.noreply\.github\.com|noreply@|example\.(?:com|org))/iu;
@@ -141,17 +173,14 @@ const main = () => {
       });
     }
 
-    // 个人路径
-    for (const pattern of LOCAL_PATH_PATTERNS) {
-      if (pattern.test(message)) {
-        findings.push({
-          kind: "提交信息含本机路径",
-          hash: commit.hash.slice(0, 7),
-          count: 1,
-          markers: ["(路径已隐去)"]
-        });
-        break;
-      }
+    // 个人路径（占位符不算 —— 见 findLocalPath 的说明）
+    if (findLocalPath(message) !== undefined) {
+      findings.push({
+        kind: "提交信息含本机路径",
+        hash: commit.hash.slice(0, 7),
+        count: 1,
+        markers: ["(路径已隐去)"]
+      });
     }
 
     // 邮箱

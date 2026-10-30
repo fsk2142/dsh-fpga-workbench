@@ -209,7 +209,7 @@ export const TOOLS = [
     file: "module-rtl-check.mjs",
     level: "module",
     stage: "RTL 环节",
-    what: "机械规范检查(文件头 / 九个小节块 / 端口类型 / 复位极性 / Tab / 行尾 / 断言 / 测试平台自检)"
+    what: "机械规范检查(端口类型 / 复位极性 / 时序块写法 / 位宽 / Tab / 行尾 / 断言 / 测试平台自检)"
   },
   {
     file: "module-verif-new.mjs",
@@ -1912,7 +1912,7 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
   );
   lines.push(
     [
-      "本模式自带的命令(Node 直接跑,不用装东西)。**命令名带级别前缀(module- / project-),按环节分;不要跨级别或跨环节混用**:",
+      "本模式自带的命令(Node 直接跑,不用装东西)。命令名带级别前缀(module- / project-),按环节分,不要跨级别混用:",
       /**
        * **命令根只声明一次**（2026-10-23 优化）。
        *
@@ -1926,12 +1926,22 @@ export function describeEnv(values: Record<string, unknown>, probe?: (path: stri
       `命令根:${toolPath({ level: "shared", file: "" }).replace(/[\\/][^\\/]*$/u, "")}`,
       "· `module-` = 模块级(在 `module/` 下);`project-` = 工程级(在 `project/` 下);",
       "  两级共用的(如 setup-scaffold)不加级别前缀,直接在命令根下。",
+      /**
+       * **紧凑格式**（2026-10-30，O-02）。
+       *
+       * 原来每条是 `- [<级别> / <环节>] <说明>:node "<命令根>\<相对路径>" <根目录>` ——
+       * 18 条里这段固定结构重复 18 次，光结构就占 1400+ 字符，
+       * 而这整块是**每轮请求都进上下文**的。
+       *
+       * 现在压成 `- <环节>:<相对路径> —— <说明>`：
+       * - 级别从路径本身看得出来（`module\` / `project\`），不再重复写
+       * - `<命令根>` 与 `<根目录>` 是固定拼法，上面已说明一次，不再每条重复
+       * - 信息没少：模型仍能拼出完整命令（命令根 + 相对路径 + 根目录参数）
+       */
       ...TOOLS.map((tool) => {
-        const level = tool.level === "shared" ? "两级共用" : tool.level === "module" ? "模块级" : "工程级";
-        // 相对命令根的路径：模块级在 module\ 下、工程级在 project\ 下、共用的直接在根下。
         const dir = LEVEL_DIRS[tool.level as ToolLevel] ?? "";
         const relative = dir === "" ? tool.file : `${dir}\\${tool.file}`;
-        return `- [${level} / ${tool.stage}] ${tool.what}:node "<命令根>\\${relative}" <根目录>`;
+        return `- ${tool.stage}:${relative} —— ${tool.what}`;
       })
     ].join("\n")
   );

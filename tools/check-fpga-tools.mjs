@@ -117,9 +117,15 @@ const TOOLS = join(ROOT, "presets", "fpga-workbench", "tools");
 const MODULE_TOOLS = join(TOOLS, "module");
 const PROJECT_TOOLS = join(TOOLS, "project");
 const TEMPLATES = join(ROOT, "presets", "fpga-workbench", "templates");
-const SANDBOX = join(ROOT, ".tmp", `fpga-tools-check-${String(process.pid)}`);
-// 沙箱名带进程号。**开头/结尾都不再删沙箱**(用户定案:绝不永久删除)—— 只把上次留下的列出来。
+// 沙箱名带进程号 **+ 时间戳**。**开头/结尾都不再删沙箱**(用户定案:绝不永久删除)—— 只把上次留下的列出来。
+//
+// **为什么必须加时间戳**（2026-10-30 实测的真因）：原来只用 pid。Windows 会**复用 pid**，
+// 于是新一轮可能落进上一轮残留的同一个目录 —— 里面已经有 `board-gate-board-selftest/`，
+// 而上板自检生成器现在（N-01）默认不覆盖已存在的目标、退 3。
+// 断言「生成成功 → 退 0」就会时红时绿，而根因跟被测行为完全无关。
+//
 // 代价是 `.tmp/` 会一直增长,清单打出来供人工处置;别为了"干净"在这里加回删除调用。
+const SANDBOX = join(ROOT, ".tmp", `fpga-tools-check-${String(process.pid)}-${String(Date.now())}`);
 const staleSandboxes = listTempLeftovers(join(ROOT, ".tmp"), ["fpga-tools-check"], TEMP_GRACE_MS);
 if (staleSandboxes.length > 0) {
   console.log(`(.tmp/ 里有 ${staleSandboxes.length} 项上次留下的自检沙箱,按用户定案不删除、只报告)`);
@@ -2485,7 +2491,27 @@ const roRoot = join(SANDBOX, `preflight-ro-${stamp}`);
 mkdirSync(roRoot, { recursive: true });
 const roAnchor = join(roRoot, ".fpga-workbench.json");
 writeFileSync(roAnchor, `${JSON.stringify({ kind: "module", spec: "spec/spec.md" }, null, 2)}\n`);
-chmodSync(roAnchor, 0o444);
+
+/**
+ * **把文件设成只读** —— 必须按平台来（2026-10-30 抓到偶发失败的真因）。
+ *
+ * `chmodSync(path, 0o444)` 在 Windows 上**不起作用**：NTFS 不看 POSIX 权限位，
+ * 文件仍然可写。于是「只读目标在写前预检就被发现」这条断言时红时绿 ——
+ * 取决于那一次写入碰巧成功还是撞上 AV 的瞬时锁（EPERM）。
+ *
+ * Windows 的只读是**文件属性**（`FILE_ATTRIBUTE_READONLY`），用
+ * `attrib +R` 设置。非 Windows 仍走 chmod。
+ */
+const makeReadOnly = (path) => {
+  if (process.platform === "win32") {
+    // `spawnSync` 是仓库自己的包装（不开管道、能拿到 status），不用额外 import。
+    spawnSync("attrib", ["+R", path], { stdio: "ignore" });
+    return;
+  }
+  chmodSync(path, 0o444);
+};
+
+makeReadOnly(roAnchor);
 const roFail = runStderr("setup-scaffold.mjs", [roRoot, "--force"]);
 check(roFail.code === 1, `只读锚点 + --force → 退出码 1(实际 ${String(roFail.code)})`);
 check(
@@ -2494,6 +2520,24 @@ check(
   roFail.output.slice(-300)
 );
 check(!existsSync(join(roRoot, "verif")), "预检不过时一个环节目录都没建(真正提前失败)");
+
+/**
+ * **把只读属性复原**（2026-10-30）。
+ *
+ * `attrib +R` 设上的只读位会一直留着 —— 而沙箱按用户定案「不删除」，
+ * 下一轮跑到同一个残留文件时 `writeFileSync` 会撞 EPERM，
+ * 表现为「这次过、下次红」的抖动。
+ *
+ * 这里在断言之后立刻复原。沙箱本身仍保留（不删），只是不再是只读。
+ */
+const makeWritable = (path) => {
+  if (process.platform === "win32") {
+    spawnSync("attrib", ["-R", path], { stdio: "ignore" });
+    return;
+  }
+  chmodSync(path, 0o644);
+};
+makeWritable(roAnchor);
 
 // ── 环节目录的位置被**同名文件**占着时,不许当"目录已存在"跳过 ────────────────────
 //
@@ -3892,7 +3936,7 @@ if (vsimPath === undefined) {
     }
 
     /** 编译并跑一个 top，返回合并输出。 */
-    const runSva = (top) => {
+    const runSvaOnce = (top) => {
       const logPath = join(svaDir, `${top}.log`);
       const fd = openSync(logPath, "w");
       const compile = spawnSync(
@@ -3910,6 +3954,33 @@ if (vsimPath === undefined) {
       }).status;
       closeSync(runFd);
       return { status, out: readFileSync(runLog, "utf8") };
+    };
+
+    /**
+     * **vopt 抖动时重试一次**（2026-10-30 实测到现场）。
+     *
+     * 现场证据：`合法设计断言不报(实际 12)`，日志里是
+     * `# Optimization failed` + `# Error loading design` ——
+     * 而紧接着的两条断言（合法设计无断言触发 / 非法设计被拦下）**都通过了**。
+     *
+     * 也就是说设计本身没问题，是 `vopt` 这一次没能优化出来
+     * （Windows 上工作库被占用、AV 扫描、并发跑多个 vsim 都会触发）。
+     * 这与「SVA 逻辑写错」是两回事，不该报成同一种失败。
+     *
+     * **只对 vopt 失败这一种形态重试**（输出里出现 `Optimization failed` /
+     * `Error loading design`），不对任意非 0 重试 —— 断言真的拦错了，
+     * 第二次照样会错。
+     */
+    const runSva = (top) => {
+      const first = runSvaOnce(top);
+      if (first.status === 0) return first;
+      if (!/Optimization failed|Error loading design/u.test(first.out)) return first;
+
+      const retry = runSvaOnce(top);
+      if (retry.status === 0) {
+        console.log(`        (${top}: vopt 首次失败（Optimization failed），重试后通过 —— 判定为工具抖动)`);
+      }
+      return retry;
     };
 
     const legal = runSva("tb_ok");

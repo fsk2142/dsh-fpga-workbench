@@ -191,8 +191,14 @@ async function syncMcpClientNow(
 
   // 要卸载:用户清空了路径,或者路径已经不可用。
   if (!inspection.ok) {
-    if (state.fiber !== undefined) {
-      await unload(state);
+    // **N-04**：即便 `fiber` 已空，只要 `pendingDispose` 还在，也要试着清掉它。
+    // 原实现只在 `fiber !== undefined` 时才 unload —— 残留就永远没人处理了。
+    if (state.fiber !== undefined || state.pendingDispose !== undefined) {
+      const result = await unload(state);
+      if (!result.ok) {
+        // 卸载失败：不能报「已停用」，要如实说「还挂着」
+        return `停用失败（可能仍连接）:${result.reason ?? "dispose 报错"}`;
+      }
       return inspection.reason === "未设置" ? "未启用" : `已停用(${inspection.reason})`;
     }
     return inspection.reason === "未设置" ? "未启用" : `不可用:${inspection.reason}`;
@@ -202,7 +208,15 @@ async function syncMcpClientNow(
   if (state.fiber !== undefined && state.path === wanted) return "已连接";
 
   const previousPath = state.path;
-  if (state.fiber !== undefined) await unload(state);
+
+  // **N-04**：卸载没成功就**不许挂新的** —— 否则会出现两个 MCP 客户端抢同一个
+  // serverName（第二个多半因为重名直接抛错，状态还更乱）。
+  if (state.fiber !== undefined || state.pendingDispose !== undefined) {
+    const result = await unload(state);
+    if (!result.ok) {
+      return `切换失败：旧会话未能卸载（${result.reason ?? "dispose 报错"}），已保留原连接状态`;
+    }
+  }
 
   // 拿 mcp-client 插件。它在**宿主**里,不在本插件的依赖里(它是 peer 性质的服务)。
   // 按包名直接 import 会失败:插件的代码住在 profile 的 node_modules 下,那里没有
@@ -339,30 +353,40 @@ function hostMcpClientSpecifiers(ctx: McpContext): string[] {
  *
  * 现在：dispose 成功才清 `fiber`；失败时把它留在一个**待重试**字段里，
  * 下一次 `unload` 会先重试那个残留的，再处理新的。
+ *
+ * ## N-04：返回值与「有残留就必须处理」
+ *
+ * 上一版仍有一个洞：`fiber` 被清空（例如切换失败）而 `pendingDispose` 还在时，
+ * 调用方看到 `state.fiber === undefined` 就直接返回，**残留再也无人处理**。
+ *
+ * 所以这里：
+ *   · 返回 `{ ok }` 让调用方知道卸载到底成不成；
+ *   · 只要 `pendingDispose` 非空就**一定会尝试处理**（与 `fiber` 是否为空无关）；
+ *   · 卸载失败时保留 `state.fiber`（不伪装成「已禁用」），让上层能显示真实状态。
  */
-async function unload(state: McpMountState): Promise<void> {
-  // 上一次没卸干净的，先重试
+async function unload(state: McpMountState): Promise<{ ok: boolean; reason?: string }> {
+  // ① 先处理上次没卸干净的 —— **不看 fiber 是否为空**，这是 N-04 的关键
   const pending = state.pendingDispose as { dispose?: () => Promise<unknown> } | undefined;
   if (pending !== undefined) {
     try {
       await pending.dispose?.();
       state.pendingDispose = undefined;
-    } catch {
-      // 仍然失败：保留引用，下次继续
-      return;
+    } catch (error) {
+      // 仍然失败：保留引用，且**明确报告失败** —— 上层不该以为已卸载
+      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
     }
   }
 
   const fiber = state.fiber as { dispose?: () => Promise<unknown> } | undefined;
   if (fiber === undefined) {
     state.path = undefined;
-    return;
+    return { ok: true };
   }
 
   if (typeof fiber.dispose !== "function") {
     state.fiber = undefined;
     state.path = undefined;
-    return;
+    return { ok: true };
   }
 
   try {
@@ -371,10 +395,12 @@ async function unload(state: McpMountState): Promise<void> {
     state.fiber = undefined;
     state.path = undefined;
     state.pendingDispose = undefined;
-  } catch {
-    // 保留 fiber 引用并记进 pendingDispose → 下次 unload 会先重试它。
-    // 不抛：卸载失败不该让设置保存失败。
+    return { ok: true };
+  } catch (error) {
+    // 保留 fiber 引用（让上层能看到「仍然挂着」）并记进 pendingDispose 供下次重试。
+    // 不抛：卸载失败不该让设置保存失败；但**返回 ok:false**，调用方据此决定要不要挂新的。
     state.pendingDispose = fiber;
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }
 

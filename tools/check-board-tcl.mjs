@@ -36,9 +36,9 @@
  * 退出码：0 = 全通过或跳过；1 = 有断言失败。
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -47,12 +47,27 @@ const GEN = join(ROOT, "presets/fpga-workbench/tools/project/project-board-selft
 /**
  * 找一个可用的 tclsh。
  *
- * 顺序：`DSH_TCLSH` 环境变量 → Vivado 常见安装位置。
- * 都不行就返回 undefined（调用方跳过，不报失败）。
+ * 顺序：`DSH_TCLSH` 环境变量 → PATH 里的 `tclsh` → Vivado 常见安装位置。
+ * 都不行按模式处理：默认跳过（本地开发友好），`--require` 时算失败（CI 门禁用）。
  */
 const findTclsh = () => {
   const explicit = process.env.DSH_TCLSH;
   if (explicit !== undefined && explicit !== "" && existsSync(explicit)) return explicit;
+
+  // **PATH 优先**（N-05）：系统装了 tclsh 却仍然 SKIP 是上一版的实际问题。
+  // Windows 的可执行后缀与 Unix 的无后缀都试。
+  const pathDirs = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+  const names = process.platform === "win32" ? ["tclsh.exe", "tclsh86t.exe", "tclsh90.exe", "tclsh"] : ["tclsh", "tclsh8.6", "tclsh9.0"];
+  for (const dir of pathDirs) {
+    for (const name of names) {
+      const full = join(dir, name);
+      try {
+        if (existsSync(full)) return full;
+      } catch {
+        // 目录读不了就跳过
+      }
+    }
+  }
 
   const vivadoRoots = [
     "C:/AMDDesignTools/2025.2/Vivado/bin/unwrapped",
@@ -79,15 +94,50 @@ const findTclsh = () => {
   return undefined;
 };
 
+/**
+ * `--require`：解释器缺失时**算失败**而不跳过（CI 门禁用，见 N-05）。
+ *
+ * 为什么默认是跳过：本地开发者可能确实没装 Tcl，为这个把 `pnpm test` 弄红
+ * 会让人绕过检查。但**发布门禁**必须真跑 —— 那一侧加 `--require`，
+ * 并且把 SKIP 排除在「已检通过项」之外（`check-all` 里体现）。
+ */
+const REQUIRE = process.argv.includes("--require");
+
 const TCLSH = findTclsh();
 if (TCLSH === undefined) {
-  console.log("SKIP：找不到 tclsh（可用 DSH_TCLSH 指定）。");
+  if (REQUIRE) {
+    console.error("FAIL：--require 模式下找不到 tclsh —— 上板 Tcl 没有被真正执行。");
+    console.error("      用 DSH_TCLSH 指定解释器，或先安装 Tcl。");
+    process.exit(1);
+  }
+  console.log("SKIP：找不到 tclsh（可用 DSH_TCLSH 指定，或用 --require 让缺失变成失败）。");
   console.log("      这不代表上板 Tcl 没问题 —— 只是本机没有 Tcl 解释器可跑。");
   process.exit(0);
 }
 
 console.log(`  tclsh：${TCLSH}`);
-const BASE = join(tmpdir(), `board-tcl-verify-${String(Date.now())}`);
+
+/**
+ * 沙箱根目录（N-11：用 mkdtempSync 建唯一目录，结束时清理）。
+ *
+ * `mkdtempSync` 保证唯一且带随机后缀 —— 并发跑两次不会互相踩。
+ * 保留原因：`KEEP_TEST_ARTIFACTS=1` 时不清，方便排障看生成的 Tcl。
+ */
+const BASE = mkdtempSync(join(tmpdir(), "board-tcl-verify-"));
+
+/** 清理：只删自己建的那个 mkdtemp 目录（范围严格限制）。 */
+const cleanup = () => {
+  if (process.env.KEEP_TEST_ARTIFACTS === "1") {
+    console.log(`  保留沙箱（KEEP_TEST_ARTIFACTS=1）：${BASE}`);
+    return;
+  }
+  try {
+    rmSync(BASE, { recursive: true, force: true });
+  } catch {
+    // 清不掉不影响结论；路径会打印出来让人手工处置
+    console.log(`  沙箱未清理（可能被占用）：${BASE}`);
+  }
+};
 
 /** 生成一份 Tcl 并返回路径与内容。 */
 const generate = (name) => {
@@ -112,7 +162,7 @@ const patch = (text, part, top) =>
  *   ① 头部注释 + `set` 配置 → ② `proc lv/check/stop_if_failed` → ③ 连接硬件 → P0
  * mock 桩要插在 ① 之后、② 之前，否则 Vivado 命令会先被调用。
  */
-const runWithMock = (tclText, mock) => {
+const runWithMock = (tclText, mock, workRoot) => {
   const marker = "stop_if_failed P0";
   const index = tclText.indexOf(marker);
   const p0Part = index < 0 ? tclText : tclText.slice(0, index + marker.length);
@@ -131,12 +181,18 @@ const runWithMock = (tclText, mock) => {
     "proc open_hw_target {} {}",
     `proc get_hw_devices {} { return ${mock.devices} }`,
     "proc current_hw_device {args} {}",
-    `proc get_property {prop dev} { return ${mock.part} }`,
+    // 真实调用是 `get_property PART $dev` / `get_property XXX $dev -quiet`，用 args 接
+    `proc get_property {args} { return ${mock.part} }`,
     ""
   ].join("\n");
 
   const full = `${before}\n${stub}\n${after}\nputs "DONE fail_count=$fail_count"\n`;
-  const file = join(BASE, `run-${String(Math.random()).slice(2, 8)}.tcl`);
+
+  // **必须写到 prj/ 下**：生成脚本用 `[info script]` 推 `script_dir`，
+  // 再拼 `..` 找 `bit/`、`src/rtl/`。放别处会让 `..` 指错一层。
+  const dir = workRoot === undefined ? BASE : join(workRoot, "prj");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `run-${String(Math.random()).slice(2, 8)}.tcl`);
   writeFileSync(file, full, "utf8");
 
   try {
@@ -204,7 +260,43 @@ console.log("\n=== ④ F-04 回归：源码目录为空不能跳过 ===");
   check(/FAIL: P0-4/u.test(result.out), "源码不可读 → P0-4 报 FAIL", result.out);
 }
 
+console.log("\n=== ⑤ 正向样例：P0 四项全过时必须走到 stop_if_failed 之后 ===");
+{
+  // **N-11**：前面的用例大多在测「失败能否显示」，缺一条「成功长什么样」。
+  // 这条要造出 P0 全过的条件：bit 存在、源码比 bit 旧、型号一致。
+  const gen = generate("p0-pass");
+  const root = gen.root;
+
+  // 造 bit 与源码：bit 更新
+  mkdirSync(join(root, "bit"), { recursive: true });
+  mkdirSync(join(root, "src", "rtl", "core"), { recursive: true });
+  const bitFile = join(root, "bit", "top.bit");
+  writeFileSync(bitFile, "fake-bit", "utf8");
+  // 源码写得更早（改 mtime 到 1 小时前）
+  const srcFile = join(root, "src", "rtl", "core", "dut.sv");
+  writeFileSync(srcFile, "module dut; endmodule\n", "utf8");
+  const oneHourAgo = new Date(Date.now() - 3_600_000);
+  try {
+    utimesSync(srcFile, oneHourAgo, oneHourAgo);
+  } catch {
+    // 改不了时间就依赖「先写源码、后写 bit」的顺序
+  }
+
+  const result = runWithMock(
+    patch(gen.text, "xc7a100t", "top"),
+    { devices: "{xc7a100t_0}", part: "xc7a100t" },
+    root
+  );
+
+  check(/ok: P0-1/u.test(result.out), "P0-1 在线通过", result.out);
+  check(/ok: P0-2/u.test(result.out), "P0-2 型号通过", result.out);
+  check(/ok: P0-4/u.test(result.out), "P0-4 bit 时间通过", result.out);
+  check(/不证明.*bit 由当前源/u.test(result.out), "P0-4 如实说明它证明不了来源一致性（N-08）", result.out);
+  check(!/有 \d+ 项失败/u.test(result.out), "P0 没有失败项（真的走到了下一级）", result.out);
+}
+
+cleanup();
+
 console.log("");
 console.log(`  ${String(pass)} 通过 / ${String(fail)} 失败`);
-console.log(`  沙箱：${BASE}`);
 if (fail > 0) process.exitCode = 1;

@@ -55,22 +55,25 @@
  *
  * 生成的文件里所有需要项目填的地方都标了 `TODO:`，并在运行前会检查是否还留着 TODO。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const usage = (code = 2) => {
   const write = code === 0 ? console.log : console.error;
-  write("用法：node project-board-selftest.mjs <工程根> [--out <文件>] [--json]");
+  write("用法：node project-board-selftest.mjs <工程根> [--out <文件>] [--force] [--json]");
   write("");
   write("  生成 L0–L3 的 Vivado Tcl 自检脚本（本机无 pyjnius，故走 Vivado Tcl 路线）。");
   write("  生成后需填入本项目的寄存器地址（文件里标 TODO），再由 vivado 执行。");
   write("");
-  write("退出码：0 生成成功 / 2 输入错误。");
+  write("  --force   目标已存在时也覆盖（默认不覆盖：那是填过参数的模板）");
+  write("            覆盖前会留同目录 .bak-<时间戳> 快照，可恢复");
+  write("");
+  write("退出码：0 生成成功 / 2 输入错误 / 3 目标已存在且未加 --force（未改动任何文件）。");
   process.exit(code);
 };
 
 const parseArgs = (argv) => {
-  const options = { root: "", out: "", json: false };
+  const options = { root: "", out: "", json: false, force: false };
   const rest = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -80,6 +83,11 @@ const parseArgs = (argv) => {
     }
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    // **N-01**：默认不覆盖已存在的目标（那是用户填过的模板）。
+    if (arg === "--force") {
+      options.force = true;
       continue;
     }
     if (arg === "-h" || arg === "--help") usage(0);
@@ -134,6 +142,15 @@ const renderTcl = (projectName) => `# ──────────────
 set script_dir [file dirname [file normalize [info script]]]
 set fail_count 0
 
+# ── N-02：没证据的项单独计数，不能混进「通过」 ──
+#
+# 模板里凡是「地址还是占位符」「骨架未包含」这类分支，都不是验证通过，
+# 而是**没验**。原来它们只打 WARN 就 continue，fail_count 保持 0，
+# 收尾就宣布「L0–L3 全部通过」—— 那是最危险的假绿。
+set unverified_count 0
+set unverified_levels ""
+set highest_verified "无（P0 之后的级都还没验证）"
+
 # ── 上板前四项硬件前置用到的配置（TODO: 全部换成真实值）──────────────────
 
 # 期望的器件型号，必须与 doc/spec.md 的 part 完全一致（如 xc7a100tfgg484-2）
@@ -163,6 +180,24 @@ proc check {cond msg} {
     }
 }
 
+# **N-02**：记一项「没验」。
+#
+# 与 check 的区别：check 判的是「验了但不通过」，这个判的是「压根没验」。
+# 两者都不能算通过，但原因不同、修法不同，所以分开计。
+proc unverified {level msg} {
+    global unverified_count unverified_levels highest_verified
+    puts "  ?? UNVERIFIED: \\[$level\\] $msg"
+    incr ::unverified_count
+    if {![string match "*$level*" $unverified_levels]} {
+        append unverified_levels "$level "
+    }
+    # 前面所有级都验过时才更新「最高可确认级别」
+    # 这里只记录**本次进入过且没被标记未验证**的最高级，简化处理：不覆盖已记的
+    if {$highest_verified eq "无（P0 之后的级都还没验证）"} {
+        set highest_verified "P0（上板前四项硬件前置）"
+    }
+}
+
 proc stop_if_failed {level} {
     global fail_count
     if {$fail_count > 0} {
@@ -171,6 +206,17 @@ proc stop_if_failed {level} {
         puts "先修完这一级，否则后面几级的结果没有意义。"
         exit 1
     }
+}
+
+# 一级结束时调用：本级若已有未验项，就不该继续往下一级走。
+proc gate_if_unverified {level} {
+    global unverified_count
+    if {$unverified_count > 0} {
+        puts ""
+        puts "  $level 有未验证项 —— 后续级的结果不可信，提前收尾。"
+        return 0
+    }
+    return 1
 }
 
 # ── 连接硬件 ────────────────────────────────────────────────────────────────
@@ -237,24 +283,31 @@ if {![file exists $BIT_FILE]} {
     incr ::fail_count
 } else {
     set bit_mtime [file mtime $BIT_FILE]
-    set newest_src 0
 
     # 递归扫描所有影响 bitstream 的输入：RTL(含子目录)、XDC、IP。
     # 只扫根层会漏掉 src/rtl/core/*.sv 与 xdc/*.xdc 的改动（F-05）。
-    proc newest_mtime {dir acc_var} {
-        upvar $acc_var acc
-        if {![file isdirectory $dir]} { return }
+    #
+    # **返回值而不是 upvar**：早先用 upvar 把累加器别名进来、递归时又把别名传下去，
+    # 会变成「别名指向自己」而抛错（实测：脚本在 P0-3 之后就无声中断）。
+    # 这种"自己传给自己的别名"在 Tcl 里不成立，改成每次返回当前最大值。
+    proc newest_mtime {dir} {
+        if {![file isdirectory $dir]} { return 0 }
+        set acc 0
         foreach f [glob -nocomplain -directory $dir *] {
             if {[file isdirectory $f]} {
-                newest_mtime $f acc
+                set sub [newest_mtime $f]
+                if {$sub > $acc} { set acc $sub }
             } else {
-                set m [file mtime $f]
+                if {[catch {file mtime $f} m]} { continue }
                 if {$m > $acc} { set acc $m }
             }
         }
+        return $acc
     }
+    set newest_src 0
     foreach input_dir [list $SRC_DIR $XDC_DIR $IP_DIR] {
-        newest_mtime $input_dir newest_src
+        set m [newest_mtime $input_dir]
+        if {$m > $newest_src} { set newest_src $m }
     }
 
     if {$newest_src == 0} {
@@ -263,8 +316,15 @@ if {![file exists $BIT_FILE]} {
         puts "           无法证明 bit 是最新的 —— 手工确认后把对应目录指对，不要默认放过"
         incr ::fail_count
     } else {
+        # **N-08**：这里只能证明「bit 比源码文件新」，证明不了「bit 由这份源码生成」。
+        # 真正的来源一致性要靠 bit 归档时的 manifest（见 doc/impl.md 的建议条目）。
+        #
+        # 时间戳用 file mtime 的原始秒数呈现：clock format 依赖 Tcl 的 init.tcl，
+        # 某些精简安装（只带 tclsh 不带库）会报 "invalid command name clock"。
+        # 人读的时候对着秒数不方便，但**可读性不该让脚本在关键路径上崩**。
         check [expr {$bit_mtime >= $newest_src}] \
-            "P0-4 bit 新鲜：bit 比源码新（bit=[clock format $bit_mtime -format %H:%M:%S] / src=[clock format $newest_src -format %H:%M:%S]）"
+            "P0-4 bit 修改时间晚于源文件（bit=$bit_mtime / src=$newest_src，Unix 秒）"
+        puts "       注意：这只说明文件时间新，**不证明** bit 由当前源/约束构建 —— 来源一致性需 bit 归档的 manifest 佐证"
     }
 }
 
@@ -282,7 +342,8 @@ if {$done_val eq ""} {
     check $done_val "DONE 已拉高（配置完成）"
 }
 
-puts "  TODO: 手工测量以下电源轨并填入期望值范围，脚本无法用万用表"
+unverified L0 "电源轨实际电压需万用表实测 —— 脚本读不到，这一级没有证据"
+    puts "  TODO: 手工测量以下电源轨并填入期望值范围，脚本无法用万用表"
 puts "    VCCINT  = ______ V   （期望 ____ ~ ____ V）"
 puts "    VCCAUX  = ______ V   （期望 ____ ~ ____ V）"
 puts "    VCCO_xx = ______ V   （期望 ____ ~ ____ V）"
@@ -308,7 +369,7 @@ create_hw_axi_txn -quiet axi_rd [get_hw_axis hw_axi_1] -address 0x0 -type read -
 foreach entry $clock_lock_regs {
     lassign $entry name base offset
     if {$base == 0x00000000} {
-        lv WARN "  $name: 地址还是占位符（0x0），跳过"
+        unverified L1 "$name: PLL 锁定寄存器地址还是占位符（0x0）—— 这一级没有证据"
         continue
     }
     set addr [expr {$base + $offset}]
@@ -340,9 +401,9 @@ set soft_rst_addr 0x00000000
 if {$soft_rst_addr != 0x00000000} {
     set_hw_axi_txn_addr axi_rd $soft_rst_addr
     # TODO: 这里应改成 write 事务；骨架用 read 演示流程
-    lv WARN "  软复位寄存器地址已填，但写事务需按本项目 AXI 结构实现"
+    unverified L2 "软复位寄存器地址已填，但写事务需按本项目 AXI 结构实现 —— 复位释放未验证"
 } else {
-    lv WARN "  未填软复位寄存器地址 —— 假定由硬件复位完成"
+    unverified L2 "未填软复位寄存器地址 —— 复位释放未验证（不能假定）"
 }
 
 after 10
@@ -350,7 +411,7 @@ after 10
 foreach entry $state_regs {
     lassign $entry name base offset expected
     if {$base == 0x00000000} {
-        lv WARN "  $name: 地址还是占位符，跳过"
+        unverified L2 "$name: 状态寄存器地址还是占位符 —— 这一级没有证据"
         continue
     }
     set addr [expr {$base + $offset}]
@@ -382,16 +443,16 @@ set ro_constants {
 foreach entry $test_vectors {
     lassign $entry name addr pattern
     if {$addr == 0x00000000} {
-        lv WARN "  $name: 地址还是占位符，跳过"
+        unverified L3 "$name: 地址还是占位符 —— 这一级没有证据"
         continue
     }
-    lv WARN "  $name 写读回环需按本项目 AXI 写事务实现（骨架未包含）"
+    unverified L3 "$name 写读回环需按本项目 AXI 写事务实现（骨架未包含）"
 }
 
 foreach entry $ro_constants {
     lassign $entry name addr expected
     if {$addr == 0x00000000} {
-        lv WARN "  $name: 地址还是占位符，跳过"
+        unverified L3 "$name: 地址还是占位符 —— 这一级没有证据"
         continue
     }
     set_hw_axi_txn_addr axi_rd $addr
@@ -410,7 +471,36 @@ close_hw_manager
 
 puts ""
 puts "=========================================="
-puts " L0–L3 全部通过，可以进入 L4 单通道数据验证"
+
+# **N-02：不能只看 fail_count 就宣布「全部通过」。**
+#
+# 模板里 L0 的电源实测、L1 的 PLL 锁定寄存器、L2 的状态寄存器、L3 的读写向量
+# 全都是 TODO 占位。它们走的是 WARN / continue 分支 —— 不进 fail_count，
+# 于是原实现会打出「L0–L3 全部通过」，而实际上这些级什么都没验。
+#
+# 现在的判定分三档：
+#   · unverified_count > 0  →  UNVERIFIED：列出哪些级没证据，并说明最高到哪一级
+#   · fail_count > 0        →  FAIL（早就在 stop_if_failed 里退出了，这里是兜底）
+#   · 两者都为 0            →  PASS：每一级都有真实证据
+if {$unverified_count > 0} {
+    puts " UNVERIFIED：有 $unverified_count 项必测项没有证据"
+    puts " 已跳过的级：$unverified_levels"
+    puts " 最高可确认级别：$highest_verified"
+    puts ""
+    puts " 这些不是「通过」—— 是模板占位还没填。"
+    puts " 填入本项目的寄存器地址/测试向量后重跑；或用 LIBRE 工程显式声明某级不适用。"
+    puts "=========================================="
+    exit 3
+}
+
+if {$fail_count > 0} {
+    puts " FAIL：$fail_count 项检查不通过（理论上前面已退出，这里是兜底）"
+    puts "=========================================="
+    exit 1
+}
+
+puts " PASS：L0–L3 每一级都有实测证据且通过，可以进入 L4 单通道数据验证"
+puts " 注意：本脚本**不检查** Bank/VCCO 电压冲突 —— 那需要器件 pinout，另行核对。"
 puts "=========================================="
 `;
 
@@ -436,10 +526,58 @@ const main = () => {
     }
   }
 
+  // **N-03：名称净化**。工程名来自用户可编辑的 `.fpga-workbench.json`，
+  // 原实现直接插进模板的注释行 —— 含换行时第二行就变成了可执行的 Tcl 命令
+  // （实测 `{"name":"demo\nputs REVIEW_MARKER"}` 生成出独立的 `puts REVIEW_MARKER`）。
+  //
+  // 这里只保留**一行可打印文字**：去掉控制字符与换行/回车/Unicode 行分隔符，
+  // 再截断到合理长度。名称只是给人看的标识，不需要保留任何特殊字符。
+  const rawName = projectName;
+  const safeName = String(rawName)
+    // 所有 Unicode 行/段分隔符与控制字符 → 单个空格
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029\u0085]+/gu, " ")
+    // 折叠空白
+    .replace(/\s{2,}/gu, " ")
+    .trim()
+    .slice(0, 120);
+  const nameSanitized = safeName !== String(rawName).trim();
+  projectName = safeName === "" ? "project" : safeName;
+
   const outPath = options.out !== "" ? resolve(options.out) : join(root, "prj", "board_selftest.tcl");
   const tcl = renderTcl(projectName);
 
   mkdirSync(dirname(outPath), { recursive: true });
+
+  // **N-01：不覆盖已有人工修改**。
+  //
+  // 生成的是**模板**，用户随后要手工填 `EXPECTED_PART`、寄存器地址、测试向量。
+  // 原实现无条件 `writeFileSync` —— 第二次生成就把这些全重置回 TODO（实测复现）。
+  //
+  // 现在：目标已存在时**默认不写**，退 3 并说明怎么覆盖；`--force` 才写，
+  // 且写前留同目录 `.bak-<时间戳>` 快照（与仓库其它生成器一致：可恢复、不永久删除）。
+  const exists = existsSync(outPath);
+  if (exists && !options.force) {
+    const message = [
+      `目标已存在，未覆盖：${outPath}`,
+      "这份 Tcl 是模板，填过 EXPECTED_PART / 寄存器地址 / 测试向量后不该被重置。",
+      "要重新生成：显式加 --force（会先留一份 .bak-<时间戳> 快照）。"
+    ].join("\n");
+    if (options.json) {
+      console.log(JSON.stringify({ out: outPath, written: false, reason: "exists", hint: "--force" }, null, 2));
+    } else {
+      console.log(message);
+    }
+    process.exit(3);
+  }
+
+  /** 覆盖前留快照（可恢复，不删）。 */
+  let backupPath;
+  if (exists) {
+    const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
+    backupPath = `${outPath}.bak-${stamp}`;
+    copyFileSync(outPath, backupPath);
+  }
+
   writeFileSync(outPath, tcl, "utf8");
 
   const todoCount = (tcl.match(/TODO:/gu) ?? []).length;

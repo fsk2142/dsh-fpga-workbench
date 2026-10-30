@@ -244,7 +244,57 @@ const live = (scope) => scope.names.size;
   check(ctx.__created.length === 0, "路径不存在时不去创建 fiber");
 }
 
-// ── ⑦ 静态守卫:并发保护真的用 WeakMap 而不是模块级共享锁 ──────────────────
+// ── ⑦ **N-04**：dispose 失败 + 切换也失败后，残留必须还能被回收 ────────────────
+//
+// 上一版的洞：切换失败会把 `state.fiber` 清空，但 `pendingDispose` 还留着；
+// 之后清空路径时，入口只有 `state.fiber !== undefined` 才调 unload，
+// 于是残留再也无人处理 —— 表现为「UI 说已停用，serverName 实际还被占着」。
+{
+  const scope = { names: new Set() };
+  const ctx = fakeCtx(scope);
+
+  // **让第一次卸载失败一次**：直接替换第一个 fiber 的 dispose。
+  // 为什么这样造：`fakeCtx.plugin` 自己创建 fiber（真实 cordis 也是这样，
+  // `apply` 由 fiber 驱动），所以不能靠自定义 client 的 apply 去注入。
+  let disposeAttempts = 0;
+  let failNext = true;
+
+  const state = { fiber: undefined, path: undefined, pendingDispose: undefined };
+  const deps = { inspectMcpPath: fakeInspect, loadHostMcpClient: fakeLoader(fakeMcpClient(scope)) };
+
+  // 第一次挂载：成功
+  const first = await syncMcpClient(ctx, "C:/x/a.dll", state, deps);
+  check(first === "已连接", `首次挂载成功（实际 ${first}）`);
+  check(state.fiber !== undefined, "state.fiber 已记下");
+
+  // 给已挂的 fiber 换成一个「第一次会失败」的 dispose
+  const original = state.fiber;
+  const originalDispose = original.dispose.bind(original);
+  original.dispose = async () => {
+    disposeAttempts += 1;
+    if (failNext) {
+      failNext = false;
+      throw new Error("dispose 临时失败");
+    }
+    await originalDispose();
+  };
+
+  // 切到另一个路径：unload 会失败 → 不许挂新的
+  const createdBefore = ctx.__created.length;
+  const second = await syncMcpClient(ctx, "C:/x/b.dll", state, deps);
+  check(ctx.__created.length === createdBefore, "卸载失败时不挂新 fiber（不出现两个客户端抢 serverName）");
+  check(/切换失败|未卸载|仍连接/u.test(second), `报的是切换失败而不是成功（实际 ${second}）`);
+  check(state.pendingDispose !== undefined, "失败后 pendingDispose 保留了残留引用");
+
+  // 关键：清空路径时**仍然会重试**残留（这次 dispose 成功）
+  const cleared = await syncMcpClient(ctx, "", state, deps);
+  check(/未启用/u.test(cleared), `清空路径后报未启用（实际 ${cleared}）`);
+  check(state.pendingDispose === undefined, "残留已被回收（pendingDispose 清空）");
+  check(state.fiber === undefined, "state.fiber 也已清空");
+  check(disposeAttempts >= 2, `dispose 至少被重试过一次（实际 ${String(disposeAttempts)} 次）`);
+}
+
+// ── ⑧ 静态守卫:并发保护真的用 WeakMap 而不是模块级共享锁 ──────────────────
 
 {
   const source = (await import("node:fs")).readFileSync(join(ROOT, "lib", "mcp.js"), "utf8");

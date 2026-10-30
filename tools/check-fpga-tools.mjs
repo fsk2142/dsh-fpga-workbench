@@ -3773,7 +3773,11 @@ if (vsimPath === undefined) {
 
     const same = makeProj("pin-same", "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]\nset_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]\n");
     const okResult = runTool(projectTool("project-pin-audit.mjs"), [same, "--expect", join(same, "board", "pins.csv")], same);
-    check(okResult.status === 0, `完全一致 → 退 0(实际 ${String(okResult.status)})`, okResult.output.slice(-250));
+    // **N-09**：引脚层一致不再等于整体 PASS —— Bank/VCCO 没查，整体最高 PARTIAL。
+    // 所以「完全一致」的退出码是 3（引脚层通过、整体未完整），不是 0。
+    check(okResult.status === 3, `引脚层一致但整体 PARTIAL → 退 3(实际 ${String(okResult.status)})`, okResult.output.slice(-250));
+    check(/整体 PARTIAL/u.test(okResult.output), "明确写出「整体 PARTIAL」而不是 PASS", okResult.output.slice(-250));
+    check(/Bank\/VCCO/u.test(okResult.output), "说明 Bank/VCCO 未检查", okResult.output.slice(-250));
 
     const ioBad = makeProj("pin-io", "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]\nset_property IOSTANDARD LVCMOS18 [get_ports {led[0]}]\n");
     const ioResult = runTool(projectTool("project-pin-audit.mjs"), [ioBad, "--expect", join(ioBad, "board", "pins.csv")], ioBad);

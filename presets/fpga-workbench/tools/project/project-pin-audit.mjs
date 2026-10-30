@@ -244,6 +244,46 @@ const readExpectation = (path) => {
   return { error: `不支持的扩展名 ${ext}（支持 .csv / .tsv / .txt / .xdc）` };
 };
 
+/**
+ * 找「看着像关键约束、但本解析器吃不下」的行（N-10）。
+ *
+ * 判据保守：只认那几类**一定会给引脚/电平定性**的命令。
+ * 注释、纯 `set_property` 之外的行、以及本工具明确支持的单值形态都不算。
+ *
+ * @param text - XDC 文本。
+ * @returns `{ line, text }[]`。
+ */
+const findUnparsed = (text) => {
+  const out = [];
+  const lines = text.split(/\r?\n/u);
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i];
+    const code = raw.replace(/#.*$/u, "").trim();
+    if (code === "") continue;
+
+    // 关心的命令：给引脚/电平定性的那几条
+    const isPinLike =
+      /^set_property\s+(?:-dict\s+)?(?:PACKAGE_PIN|IOSTANDARD|DRIVE|PULLTYPE)/u.test(code) ||
+      /^set_property\b/u.test(code) ||
+      /^create_clock\b/u.test(code) ||
+      /^set_input_delay\b/u.test(code) ||
+      /^set_output_delay\b/u.test(code);
+    if (!isPinLike) continue;
+
+    // 本解析器能处理：`set_property <属性> <值> [get_ports ...]`（attr 不带前导 -）
+    const supported = /^set_property\s+(?!-dict\b)(?!-)[A-Za-z_][\w.]*\s+\S+\s+\[get_ports\s+\{?[^\]}]*\}?\]/u.test(
+      code
+    );
+    // `create_clock` / `set_input_delay` 等不在引脚核对的范围内 —— 它们不进 actualMap 是**设计如此**，
+    // 不算"没解析"。只有 `set_property` 系列才需要报告。
+    if (!code.startsWith("set_property")) continue;
+    if (supported) continue;
+
+    out.push({ line: i + 1, text: code.slice(0, 100) });
+  }
+  return out;
+};
+
 const readActual = (path) => {
   if (!existsSync(path)) return { error: `路径不存在：${path}` };
 
@@ -257,12 +297,20 @@ const readActual = (path) => {
   if (files.length === 0) return { error: `${path} 里没有 .xdc 文件` };
 
   const rows = [];
+  const unparsed = [];
   for (const file of files) {
     const text = readFileSync(file, "utf8");
-    const parsed = extname(file).toLowerCase() === ".xdc" ? parseXdc(text) : parseReportIo(text);
-    rows.push(...parsed);
+    if (extname(file).toLowerCase() === ".xdc") {
+      rows.push(...parseXdc(text));
+      // **N-10**：把吃不下的行记下来交给上层，不能当"没有差异"
+      for (const item of findUnparsed(text)) {
+        unparsed.push({ file: String(file).replace(/\\/gu, "/").split("/").pop() ?? String(file), ...item });
+      }
+    } else {
+      rows.push(...parseReportIo(text));
+    }
   }
-  return { rows, files };
+  return { rows, files, unparsed };
 };
 
 const main = () => {
@@ -387,14 +435,50 @@ const main = () => {
     }
   }
 
+  // ⑤ **N-10：解析不了的约束行要点出来**，不能当"没有差异"。
+  //
+  // XDC 里合法但本工具不认识的写法（`set_property -dict {...}`、变量引用等）
+  // 会让那个端口根本不进 `actualMap`。后果有两种，都很坏：
+  //   · 期望表里有它 → 报「漏约束」（阻塞，至少会停）
+  //   · 期望表里没有它 → **完全静默**，检查显示 PASS 而那个引脚其实没核过
+  //
+  // 所以把"看着像关键约束、但一行都没解析出端口"的行收进报告。
+  const unverifiedNotes = [BANK_CHECK_NOTE];
+  if (Array.isArray(actual.unparsed) && actual.unparsed.length > 0) {
+    unverifiedNotes.push(
+      `${String(actual.unparsed.length)} 行 XDC 未能解析（本工具只认 set_property <属性> <值> [get_ports <名字>] 形式；` +
+        `\`-dict {...}\`、变量引用、嵌套命令都没支持）。这些行涉及的引脚**没有被核对**：\n` +
+        actual.unparsed
+          .slice(0, 5)
+          .map((item) => `    ${item.file}:${String(item.line)}  ${item.text}`)
+          .join("\n")
+    );
+  }
+
+  // **N-09：引脚层与整体层分开判定**。
+  //
+  // 原来只有一个 `verdict`：引脚全一致就是 PASS、退 0。但 Bank/VCCO 根本没查 ——
+  // 上层只看退出码时，会把「引脚层通过」当成「上板放行」。这两件事不是一回事。
+  //
+  // 现在：
+  //   · `verdict`   —— **只代表引脚层**（引脚号/电平/驱动/上下拉/重复占用）
+  //   · `overall`   —— 整体：还有未检查项时**最高只到 PARTIAL**，绝不给 PASS
+  const pinVerdict = blockers.length > 0 ? "FAIL" : warnings.length > 0 ? "WARN" : "PASS";
+  const overall =
+    blockers.length > 0 ? "FAIL" : unverifiedNotes.length > 0 || warnings.length > 0 ? "PARTIAL" : "PASS";
+
   const payload = {
     expectation: { path: options.expect, kind: expectation.kind, ports: expectMap.size },
     actual: { path: actualPath, files: actual.files, ports: actualMap.size },
     blockers,
     warnings,
-    // **本工具查不到的**：明确列出来，不假装覆盖完整（F-03）
-    unverified: [BANK_CHECK_NOTE],
-    verdict: blockers.length > 0 ? "FAIL" : warnings.length > 0 ? "WARN" : "PASS"
+    // 本工具**查不到**的：明确列出来，不假装覆盖完整（F-03）
+    unverified: unverifiedNotes,
+    /** 已检查的维度（机器可读，便于上层区分「查过没问题」与「没查」）。 */
+    checked: ["引脚号", "电平标准（含缺失）", "驱动强度", "上下拉", "重复占用", "同端口标准冲突"],
+    pinVerdict,
+    overall,
+    manualEvidenceRequired: unverifiedNotes.length > 0
   };
 
   if (options.json) {
@@ -420,17 +504,34 @@ const main = () => {
     for (const note of payload.unverified) console.log(`  ? UNVERIFIED  ${note}`);
     console.log("");
 
-    if (payload.verdict === "PASS") {
-      console.log("PASS：引脚号、电平标准（含缺失检查）、驱动、上下拉逐项一致，且无重复占用。");
-      console.log("      注意：Bank/VCCO 冲突**未**检查 —— 见上面的未检查项。");
-    } else if (payload.verdict === "WARN") {
-      console.log("WARN：没有阻塞项，但有上面那些差异需要人工确认。");
+    // **N-09**：引脚层与整体层分开说，别让「引脚一致」被读成「上板放行」
+    if (payload.pinVerdict === "PASS") {
+      console.log("引脚层 PASS：引脚号、电平标准（含缺失检查）、驱动、上下拉逐项一致，且无重复占用。");
+    } else if (payload.pinVerdict === "WARN") {
+      console.log("引脚层 WARN：没有阻塞项，但有上面那些差异需要人工确认。");
     } else {
-      console.log("FAIL：有阻塞项。上板前必须清零 —— 电平或引脚错误可能损伤硬件。");
+      console.log("引脚层 FAIL：有阻塞项。上板前必须清零 —— 电平或引脚错误可能损伤硬件。");
+    }
+
+    console.log("");
+    if (payload.overall === "PASS") {
+      console.log("整体 PASS：所有检查项都覆盖到了。");
+    } else if (payload.overall === "PARTIAL") {
+      console.log("整体 PARTIAL：**这不是上板放行**。");
+      console.log(`  · 已检查：${payload.checked.join("、")}`);
+      console.log(`  · 未检查：${String(payload.unverified.length)} 项（见上）`);
+      console.log("  · Bank/VCCO 冲突必须另外拿器件 pinout 核对后，才能说引脚这块清楚了");
+    } else {
+      console.log("整体 FAIL：有阻塞项。");
     }
   }
 
-  process.exit(blockers.length > 0 ? 1 : warnings.length > 0 ? 3 : 0);
+  // 退出码：
+  //   0 = 引脚层与整体都 PASS（目前只有"没有未检查项"才可能，实际很少）
+  //   1 = 有阻塞项
+  //   3 = 引脚层无阻塞，但整体 PARTIAL（有未检查项 / 有警告）
+  // 上层若要「只有 PASS 才继续」，判 `overall === "PASS"` 而不是看退出码。
+  process.exit(blockers.length > 0 ? 1 : overall === "PASS" ? 0 : 3);
 };
 
 main();

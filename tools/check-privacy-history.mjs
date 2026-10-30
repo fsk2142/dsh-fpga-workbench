@@ -196,22 +196,74 @@ const main = () => {
 
   // ── ② 历史 blob 里的本机路径 ──
   //
-  // `git log -S<片段>` 找「哪次提交改过含该片段的文件」。片段取 `Users` 太宽，
-  // 所以拆成两个更具体的：`C:/Users` 与 `C:\Users`（各自在路径里出现才算）。
-  for (const fixString of ["C:/Users", "C:\\Users"]) {
-    let log = "";
-    try {
-      log = git(["log", "--all", "--pretty=format:%H", "-S", fixString]);
-    } catch {
-      continue;
+  // ## 为什么不用 `git log -S`
+  //
+  // `-S<片段>` 匹配的是「**这次提交让该片段的出现次数变了**」—— 引入它和**删除**它
+  // 都会命中。于是「某人删掉了硬编码路径」这个**正确的修复**反而被报成问题，
+  // 而且永远报（只要历史上出现过一次）。
+  //
+  // ## 现在的做法
+  //
+  // 直接遍历每个提交里**受影响文件的当前内容**，看还有没有真实路径。
+  // 已经清理干净的历史不会再报。
+  //
+  // 为控制开销，只查**曾经改过** `tools/` 或 `presets/` 下文件的提交 —— 路径只可能在那。
+  // 用 `git grep` 在整棵树上查（它按 blob 缓存，比逐个 `git show` 快）。
+  {
+    // 一份「含真实用户目录」的提交清单。`git grep` 不支持历史，所以按提交查。
+    const suspects = new Set();
+    // 找出所有涉及过的、可能带路径的文件（一次查完，不按提交逐个扫）
+    for (const fixString of ["Users/", "Users\\"]) {
+      let log = "";
+      try {
+        log = git(["log", "--all", "--pretty=format:%H", "-S", fixString, "--", "tools", "presets", "scripts"]);
+      } catch {
+        continue;
+      }
+      for (const line of log.split("\n")) {
+        const hash = line.trim();
+        if (hash !== "") suspects.add(hash);
+      }
     }
-    const hashes = log.split("\n").map((line) => line.trim()).filter(Boolean);
-    if (hashes.length > 0) {
+
+    // 对每个候选提交，检查它当时那棵树里还有没有**真实**路径
+    //
+    // `git grep` 只能按模式过滤，认不出占位符（`<用户名>` / `xxx` / `John`），
+    // 所以 grep 只用来**缩小范围**，真正的判定走 findLocalPath（与提交信息同一套规则）。
+    const stillLeaking = [];
+    for (const hash of suspects) {
+      let files = "";
+      try {
+        files = git(["grep", "-l", "-I", "-E", "[A-Za-z]:[\\\\/]Users[\\\\/]", hash, "--", "tools", "presets", "scripts"]);
+      } catch {
+        continue; // grep 没命中会退 1
+      }
+      const paths = files
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => line.slice(line.indexOf(":") + 1)); // 去掉 `<hash>:` 前缀
+
+      for (const path of paths) {
+        let content = "";
+        try {
+          content = git(["show", `${hash}:${path}`]);
+        } catch {
+          continue;
+        }
+        if (findLocalPath(content) !== undefined) {
+          stillLeaking.push({ hash, path });
+          break;
+        }
+      }
+    }
+
+    if (stillLeaking.length > 0) {
       findings.push({
         kind: "历史 blob 含本机用户目录路径",
-        hash: hashes[0].slice(0, 7),
-        count: hashes.length,
-        markers: [`${String(hashes.length)} 条提交曾引入/删除该片段`]
+        hash: stillLeaking[0].hash.slice(0, 7),
+        count: stillLeaking.length,
+        markers: [`${String(stillLeaking.length)} 个提交的树里仍有真实路径（占位符不算）`]
       });
     }
   }

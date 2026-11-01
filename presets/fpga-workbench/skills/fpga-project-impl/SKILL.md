@@ -117,15 +117,17 @@ node project-bit-manifest.mjs <工程根> --begin --top <顶层名>
 node project-bit-manifest.mjs <工程根> --end --top <顶层名>
 ```
 
-这样得到的 `provenance` 是 **`verified`** —— `--end` 会核对构建期间的输入摘要,
-**变了就拒绝**,不写 manifest。那才是「这份 bit 由这份源码构建」的证据。
+这样得到的 `provenance` 是 **`input-snapshot-matched`** —— `--end` 会核对构建期间的
+输入摘要,**变了就拒绝**,不写 manifest。
 
-`--write` 也能生成 manifest,但只记「写这一刻」的哈希,标 **`hand-recorded`**:
+**但它只证明「构建前后输入一致」,不证明构建真的发生过**:
+`--begin` 之后不跑 Vivado、直接 `--end` 也会得到这个状态。别把它当成"来源已验证"。
 
 | provenance | 含义 | 上板前能不能说「来源已验证」 |
 |---|---|---|
-| `verified` | 两阶段,构建期间输入未变 | ✅ |
-| `hand-recorded` | 手工补录,**无构建过程佐证** | ❌ |
+| `input-snapshot-matched` | 两阶段,构建前后输入一致 | ⚠️ **不能** —— 没证明构建发生 |
+| `hand-recorded` | 手工补录 | ❌ 不能 |
+| `verified` | 声称有受控构建佐证 | 旧版工具才产这个状态 |
 
 **为什么 `hand-recorded` 不算证据**:先改源码、再补一次 `--write`,
 文件照样一致 —— 哈希能证明文件没变,不能单独证明因果关系。

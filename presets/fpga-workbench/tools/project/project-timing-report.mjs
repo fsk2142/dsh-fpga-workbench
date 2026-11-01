@@ -106,7 +106,16 @@ const locateReport = (target) => {
     } catch {
       // 读不到时间就排最后
     }
-    return { path, mtime, routed: /routed/iu.test(path) };
+    /**
+     * **N10：只用 basename 判断阶段，不能看完整路径。**
+     *
+     * 原来看整个 `path` —— 于是父目录名叫 `routed-parent` 时，里面**所有**报告
+     * （包括 synth 的）都被当成 "routed"，选出来的"routed 优先"理由也是假的。
+     *
+     * 阶段是文件名的属性，不是目录名的。
+     */
+    const base = path.split(/[\\/]/u).pop() ?? path;
+    return { path, mtime, routed: /routed/iu.test(base) };
   });
   withMeta.sort((a, b) => {
     if (a.routed !== b.routed) return a.routed ? -1 : 1;
@@ -179,9 +188,27 @@ const parseDesignSummary = (text) => {
      * - 明确的 `NA` → null（真的不适用）
      * - **其它** → 记进 `badCells`，由调用方按输入错误处理
      */
+    /**
+     * **N11：缺列的合法数字行不能被吞成"缺省值"。**
+     *
+     * 原来循环上限是 `Math.min(headers.length, cells.length)` —— 表头 4 列、
+     * 数字行只有 2 个单元格时，只解析前 2 列就返回成功。
+     * 结果是 `summary` 里没有 WHS/THS，`hasConstraints=true`、退 0，
+     * 而**没有任何地方说"这两列缺失"**。
+     *
+     * 现在：列数不一致就记进 `badCells`（带列名说哪个缺），按输入错误处理。
+     */
     const values = {};
-    for (let column = 0; column < Math.min(headers.length, cells.length); column += 1) {
+    for (let column = 0; column < headers.length; column += 1) {
       const key = headers[column].replace(/\(ns\)/u, "").trim();
+
+      // 这一列在数字行里没有对应单元格 → 结构问题，不是"值不适用"
+      if (column >= cells.length) {
+        badCells.push({ column: key, raw: "<缺列>", line: i + 1 });
+        values[key] = undefined;
+        continue;
+      }
+
       const raw = cells[column];
       if (/^NA$/iu.test(raw)) {
         values[key] = null;
@@ -272,9 +299,21 @@ const main = () => {
    * 继续往下算只会给出**看起来正常、实际无意义**的数字。
    */
   if (Array.isArray(summary.badCells) && summary.badCells.length > 0) {
-    console.error(`Design Timing Summary 里有 ${String(summary.badCells.length)} 个单元格不是数字也不是 NA：`);
-    for (const cell of summary.badCells.slice(0, 8)) {
-      console.error(`  第 ${String(cell.line)} 行  列「${cell.column}」= ${JSON.stringify(cell.raw)}`);
+    // **N11**：区分「值非法」与「整列缺失」—— 修法不同，说清楚
+    const missing = summary.badCells.filter((cell) => cell.raw === "<缺列>");
+    const invalid = summary.badCells.filter((cell) => cell.raw !== "<缺列>");
+
+    if (missing.length > 0) {
+      console.error(`Design Timing Summary 有 ${String(missing.length)} 列在数字行里没有对应单元格：`);
+      for (const cell of missing.slice(0, 8)) {
+        console.error(`  第 ${String(cell.line)} 行  缺列「${cell.column}」`);
+      }
+    }
+    if (invalid.length > 0) {
+      console.error(`另有 ${String(invalid.length)} 个单元格不是数字也不是 NA：`);
+      for (const cell of invalid.slice(0, 8)) {
+        console.error(`  第 ${String(cell.line)} 行  列「${cell.column}」= ${JSON.stringify(cell.raw)}`);
+      }
     }
     console.error("");
     console.error("这通常说明：报告被截断 / 列错位 / 不是这一版 Vivado 的格式。");

@@ -519,8 +519,32 @@ const main = () => {
       });
       continue;
     }
-    if (want.pin !== "" && got.pin !== "" && want.pin !== got.pin) {
-      blockers.push({ kind: "引脚不一致", port: want.port, detail: `期望 ${want.pin}，实际 ${got.pin}` });
+    /**
+     * **N02：期望有引脚、实际缺失 → 必须阻断。**
+     *
+     * 修 R04（跨文件属性合并）时 `actualMap` 从「只收有 pin 的 row」改成
+     * 「合并所有属性」—— 于是「只有 IOSTANDARD、没有 PACKAGE_PIN」的端口
+     * 也进了 map。而这里的条件仍要求 `got.pin !== ""` 才比，
+     * 结果就是「对象存在、但关键属性缺失」被**静默漏掉**：
+     *
+     * | 版本 | 同一夹具的结果 |
+     * |---|---|
+     * | 修 R04 之前 | `pinVerdict=FAIL`、1 条漏约束、退 1 |
+     * | 修 R04 之后 | **`pinVerdict=PASS`、0 条阻塞、退 3** |
+     *
+     * 这是回归。现在三态分开（与本文件对 iostandard 的处理一致）：
+     * 期望有值 / 实际有值 / **缺失**。缺失 ≠ 一致。
+     */
+    if (want.pin !== "") {
+      if (got.pin === "") {
+        blockers.push({
+          kind: "缺少引脚约束",
+          port: want.port,
+          detail: `期望 ${want.pin}，实际没有 PACKAGE_PIN —— 这个端口没被分配到任何引脚`
+        });
+      } else if (want.pin !== got.pin) {
+        blockers.push({ kind: "引脚不一致", port: want.port, detail: `期望 ${want.pin}，实际 ${got.pin}` });
+      }
     }
 
     // **F-02：期望有电平标准、实际缺失 → 必须阻断，不能当作"没有差异"**
@@ -584,11 +608,20 @@ const main = () => {
   }
 
   // ③ 引脚重复占用
+  //
+  // **N08：按唯一端口集合统计。**
+  //
+  // 原来直接遍历 `actual.rows` —— 同一个端口在两份 XDC 里各写一次
+  // `PACKAGE_PIN AB12`（完全合法，甚至常见于分层约束），就会被当成
+  // 「led + led 使用同一引脚」报阻塞。
+  //
+  // 现在先去重到端口集合：**同一个端口的重复赋值不是"抢 pin"**，
+  // 那种情况由上面 ②（属性冲突）负责。只有**两个不同端口**用同一 pin 才是真冲突。
   const pinOwners = new Map();
-  for (const row of actual.rows) {
-    if (row.pin === "") continue;
-    if (!pinOwners.has(row.pin)) pinOwners.set(row.pin, []);
-    pinOwners.get(row.pin).push(row.port);
+  for (const [key, merged] of actualMap) {
+    if (merged.pin === "") continue;
+    if (!pinOwners.has(merged.pin)) pinOwners.set(merged.pin, []);
+    pinOwners.get(merged.pin).push(merged.port);
   }
   for (const [pin, ports] of pinOwners) {
     if (ports.length > 1) {
@@ -655,7 +688,20 @@ const main = () => {
   // 现在：
   //   · `verdict`   —— **只代表引脚层**（引脚号/电平/驱动/上下拉/重复占用）
   //   · `overall`   —— 整体：还有未检查项时**最高只到 PARTIAL**，绝不给 PASS
-  const pinVerdict = blockers.length > 0 ? "FAIL" : warnings.length > 0 ? "WARN" : "PASS";
+  //
+  // **N09：期望侧有解析不了的行时，引脚层也不能给 PASS。**
+  //
+  // 那些端口根本没进比对集合 —— 说「引脚号等逐项一致」超出了证据范围。
+  // 原来只有 `overall` 降级，`pinVerdict` 照样 PASS，读 JSON 的人会被误导。
+  const expectationIncomplete = Array.isArray(expectation.unparsed) && expectation.unparsed.length > 0;
+  const pinVerdict =
+    blockers.length > 0
+      ? "FAIL"
+      : expectationIncomplete
+        ? "UNVERIFIED"
+        : warnings.length > 0
+          ? "WARN"
+          : "PASS";
   const overall =
     blockers.length > 0 ? "FAIL" : unverifiedNotes.length > 0 || warnings.length > 0 ? "PARTIAL" : "PASS";
 
@@ -699,6 +745,11 @@ const main = () => {
     // **N-09**：引脚层与整体层分开说，别让「引脚一致」被读成「上板放行」
     if (payload.pinVerdict === "PASS") {
       console.log("引脚层 PASS：引脚号、电平标准（含缺失检查）、驱动、上下拉逐项一致，且无重复占用。");
+    } else if (payload.pinVerdict === "UNVERIFIED") {
+      // **N09**：期望侧有解析不了的行 → 那些端口没参与比对，不能说「逐项一致」
+      console.log("引脚层 UNVERIFIED：期望表里有解析不了的约束，**部分端口没参与比对**。");
+      console.log("  → 已比对的那部分没有差异，但不能据此说「引脚逐项一致」。");
+      console.log("  → 要让它们参与核对：改成可识别写法，或用 Vivado 导出的 report_io。");
     } else if (payload.pinVerdict === "WARN") {
       console.log("引脚层 WARN：没有阻塞项，但有上面那些差异需要人工确认。");
     } else {

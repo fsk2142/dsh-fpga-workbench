@@ -474,8 +474,13 @@ const main = () => {
     }
     console.log("");
 
-    // **R11**：先把"能不能判"说清楚，再说数字。
-    if (gate === undefined) {
+    // **R11 / N05**：先把"能不能判"说清楚，再说数字。
+    //
+    // `judgeCoverage` 返回的 `gate` 是 **null**（不是 undefined）——
+    // 第一版这里判 `=== undefined`，于是 gate=null 时走进了 else 分支，
+    // 访问 `gate.percent` 直接抛 TypeError（不带 --json 就崩）。
+    // 用 `== null` 同时覆盖 null 与 undefined，避免这种"两种空值"撞车。
+    if (gate == null) {
       console.log("  ⚠️  UNVERIFIED：报告里没有门槛类别（语句 / 分支 / 状态机状态）。");
       console.log("     只有 Toggles / Expressions / Conditions 这类参考类别 ——");
       console.log("     它们本来就「与功能覆盖关系弱」，不能拿来判达标。");
@@ -495,7 +500,8 @@ const main = () => {
       }
     }
 
-    if (!passed) {
+    // **N05**：`gate` 可能是 null —— 这里也要挡住，否则文本模式会崩。
+    if (!passed && gate != null) {
       console.log("");
       console.log(`未覆盖 ${String(gate.misses)} 项。按 fpga-module-verif 的要求，逐条标原因：`);
       console.log("  · 不可达 —— 有设计依据说明该分支永不成立");
@@ -528,13 +534,41 @@ const main = () => {
  * @param unclassifiedCount - 无法归类的文件数（数据完整性）。
  * @returns `{ gate, dataCompleteness, coveragePercent, passed, verdict }`。
  */
+/**
+ * **判定核心。**
+ *
+ * ## verdict 的三档（N05 修正了第二档）
+ *
+ * | verdict | 条件 | 含义 |
+ * |---|---|---|
+ * | `UNVERIFIED` | 门槛类别缺失 **或** 数据不完整 | **证据不足**，谈不上达没达标 |
+ * | `PASS` | 数据完整 且 覆盖 ≥ 门槛 | 达标 |
+ * | `FAIL` | 数据完整 且 覆盖 < 门槛 | 确实没过 |
+ *
+ * **为什么数据不完整要算 UNVERIFIED 而不是 FAIL**：
+ * 报告指出上一版 `dataCompleteness=partial` 时 `passed=false` 却给 `verdict=FAIL`，
+ * 与退出码注释「数据不完整退 3」冲突。部分文件没归类时，
+ * 我们**不知道真实覆盖率是多少** —— 那既不是达标也不是没达标。
+ */
 export function judgeCoverage(allRows, threshold, unclassifiedCount = 0) {
   const gateRows = allRows.filter((row) => !ADVISORY.has(row.category));
   const gate = gateRows.length > 0 ? weighted(gateRows) : undefined;
   const dataCompleteness = unclassifiedCount === 0 ? "complete" : "partial";
-  const passed = gate !== undefined && dataCompleteness === "complete" && gate.percent >= threshold;
-  const verdict = gate === undefined ? "UNVERIFIED" : passed ? "PASS" : "FAIL";
-  return { gate: gate ?? null, dataCompleteness, coveragePercent: gate?.percent ?? null, passed, verdict };
+
+  // 证据不足的两种情况：门槛类别缺失、或有文件没归类
+  const evidenceIncomplete = gate === undefined || dataCompleteness === "partial";
+  const reachedThreshold = gate !== undefined && gate.percent >= threshold;
+  const passed = !evidenceIncomplete && reachedThreshold;
+
+  const verdict = evidenceIncomplete ? "UNVERIFIED" : reachedThreshold ? "PASS" : "FAIL";
+
+  return {
+    gate: gate ?? null,
+    dataCompleteness,
+    coveragePercent: gate?.percent ?? null,
+    passed,
+    verdict
+  };
 }
 
 // 作为脚本直接跑时才执行 main（被 import 时不跑）。

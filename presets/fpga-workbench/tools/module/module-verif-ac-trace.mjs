@@ -80,7 +80,33 @@ const REPORT_CANDIDATES = ["verif/verif.md", "doc/verif.md", "verif.md"];
  *
  * 光凭句子里出现「不适用」三个字不算。
  */
-const WAIVED = /(?:\[(?:不适用|不涉及|NOT[ _-]?APPLICABLE|N\/A)\]|[（(](?:不适用|不涉及|NOT[ _-]?APPLICABLE|N\/A)[)）]|\bNA\b|not[ -]applicable|out[ -]of[ -]scope)/iu;
+/**
+ * 豁免标记：**只认显式的括号/方括号标注，不做任何自然语言推断**。
+ *
+ * ## N04：为什么必须这么严
+ *
+ * 前一轮我把 `DNA` 那个误匹配修了（加左边界），但还留着两个旁路：
+ *
+ * - 裸 `\bNA\b`
+ * - 英文 `not applicable` / `out of scope`
+ *
+ * 于是一句 **「输入标记 NA 必须报错」** 仍然被豁免 —— 这里的 `NA` 是**输入数据**，
+ * 不是"不适用"的意思。全豁免保护也没用，因为还有另一条 AC 被记录。
+ *
+ * ## 现在只接受两种形态
+ *
+ * ```
+ * AC-1: …… [不适用]  /  [N/A]  /  [NOT_APPLICABLE]
+ * AC-1（不适用）: ……
+ * ```
+ *
+ * 都要**括号或方括号包起来**，那是"标注"的形态。
+ * 描述文本里出现 `NA`、`不适用`、`not applicable` 这些字样**一律不算**。
+ *
+ * 代价：写豁免要更啰嗦一点。但那是对的 ——
+ * 让需求从门槛里消失是**重大决定**，不该靠一个词碰巧出现。
+ */
+const WAIVED = /\[(?:不适用|不涉及|NOT[ _-]?APPLICABLE|N\/A)\]|[（(](?:不适用|不涉及|NOT[ _-]?APPLICABLE|N\/A)[)）]/iu;
 
 const usage = () => {
   console.error("用法：node module-verif-ac-trace.mjs <模块根> [--spec <路径>] [--report <路径>] [--json]");

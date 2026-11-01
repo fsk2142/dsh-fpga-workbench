@@ -195,7 +195,10 @@ const pickReport = (all, pattern, label) => {
     } catch {
       // 读不到时间就排最后
     }
-    return { path, mtime, impl: /routed|impl/iu.test(path) };
+    // **N10 同族**：只用 basename 判断阶段 —— 父目录名叫 `impl-old` 时，
+    // 看完整路径会把里面所有报告都当成 impl 产物。
+    const base = path.split(/[\\/]/u).pop() ?? path;
+    return { path, mtime, impl: /routed|impl/iu.test(base) };
   });
   withTime.sort((a, b) => {
     // impl/routed 优先；同档按时间

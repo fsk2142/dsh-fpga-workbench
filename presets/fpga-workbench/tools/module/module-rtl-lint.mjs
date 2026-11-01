@@ -180,17 +180,44 @@ const runVerilator = (bash, sources, strictModules, verilatorPath) => {
    * - `status === null` → 进程没正常结束
    *
    * 这几种都不是"代码没问题"，而是**检查没有发生**。
+   *
+   * ## N03：还要区分「执行过」与「**成功**退出」
+   *
+   * 第一版到这里就完了 —— `ran=true` 只表示"进程跑完了"，不表示"跑成功"。
+   * 于是 `status=1`（Verilator 自己报错退出）且输出里没有 `%Error` 行时，
+   * `passed` 仍然 true。
+   *
+   * 所以拆成两个量：
+   *
+   * | 量 | 含义 | 用途 |
+   * |---|---|---|
+   * | `ran` | 进程**执行过**（不是 ENOENT/超时/127） | 决定"诊断能不能解读" |
+   * | `exitedOk` | 进程**成功退出**（`status === 0`） | 决定"能不能判通过" |
+   *
+   * `status=1` 时 `ran=true`（诊断可信）但 `exitedOk=false`（不能判通过）——
+   * 那正是「跑了但失败」这一类。
    */
-  const ran = result.error === undefined && result.signal === null && typeof result.status === "number" && result.status !== 127;
+  const ran =
+    result.error === undefined && result.signal === null && typeof result.status === "number" && result.status !== 127;
+  const exitedOk = ran && result.status === 0;
 
   return {
     status: result.status,
     stdout,
     /** 进程是否真正执行完成（false 时下面的 errors/warnings 一律不可信）。 */
     ran,
-    /** 没跑成时的原因，写进结果给调用方。 */
-    ranProblem: ran
-      ? undefined
+    /** 进程是否**成功退出**（`status === 0`）。`ran && !exitedOk` = 跑了但失败。 */
+    exitedOk,
+    /**
+     * 没跑成、或跑了但失败时的原因，写进结果给调用方。
+     *
+     * **N03**：`ran && !exitedOk`（跑了但非零退出）也要有说明 ——
+     * 那种情况不是"没有执行"，而是"执行了但失败"，两者修法不同。
+     */
+    problem: ran
+      ? exitedOk
+        ? undefined
+        : `Verilator 执行了但失败退出（status ${String(result.status)}）—— 输出里没有可解析的诊断行`
       : result.error !== undefined
         ? `${String(result.error.code ?? "ERROR")}: ${String(result.error.message ?? "").slice(0, 160)}`
         : result.signal !== null
@@ -317,14 +344,17 @@ const main = () => {
   const others = warnings.filter((warning) => !IMPORTANT.has(warning.kind));
 
   /**
-   * **R15：没跑起来 ≠ 通过。**
+   * **R15 + N03：没跑起来 ≠ 通过；跑了但失败也 ≠ 通过。**
    *
    * 进程没真正执行时（找不到可执行、超时被杀、shell 退 127）诊断输出必然是空的，
    * 而"无 error、无 warning"就成了**假绿** —— 检查根本没发生。
    *
-   * 所以 `passed` 必须同时要求 `result.ran`。
+   * N03 补上另一半：`status=1` 这类「跑了但失败」也必然没有 `%Error` 行
+   * （Verilator 自己报错退出，不会按它的诊断格式打印），同样会假绿。
+   *
+   * 所以 `passed` 要**成功退出**（`exitedOk`）+ 无诊断，两个条件都满足。
    */
-  const passed = result.ran && errors.length === 0 && important.length === 0;
+  const passed = result.exitedOk && errors.length === 0 && important.length === 0;
 
   if (options.json) {
     console.log(
@@ -335,7 +365,7 @@ const main = () => {
           strictModules: options.strictModules,
           /** 进程是否真的执行完成 —— false 时下面的诊断列表一律不可信。 */
           ran: result.ran,
-          ranProblem: result.ranProblem,
+          problem: result.problem,
           errors: errors.map((item) => ({ ...item, file: prettyPath(item.file, root) })),
           importantWarnings: important.map((item) => ({ ...item, file: prettyPath(item.file, root) })),
           otherWarnings: others.map((item) => ({ ...item, file: prettyPath(item.file, root) })),
@@ -353,12 +383,22 @@ const main = () => {
     }
     console.log("");
 
-    // **先报"没跑成"**：那种情况下后面的诊断列表没有意义，不该往下解读。
+    // **先报"没跑成"或"跑了但失败"** —— 那两种情况下诊断列表没有意义。
     if (!result.ran) {
-      console.log(`  ❌ BLOCKED：Verilator **没有真正执行** —— ${String(result.ranProblem)}`);
+      console.log(`  ❌ BLOCKED：Verilator **没有真正执行** —— ${String(result.problem)}`);
       console.log("");
       console.log("  这不是「代码没问题」，是「检查没有发生」。");
       console.log("  修好工具链后再跑；把这次结果当通过会让 lint 形同虚设。");
+    } else if (!result.exitedOk) {
+      // **N03**：执行了但非零退出 —— 与"没执行"不同，与"干净"更不同。
+      console.log(`  ❌ FAILED：${String(result.problem)}`);
+      console.log("");
+      console.log("  Verilator 跑了但没成功退出。常见原因：");
+      console.log("    · 源文件有语法错（它的报错不一定是 `%Error:` 格式）");
+      console.log("    · 参数/选项不被这个版本支持");
+      console.log("    · 缺 include 目录或宏定义");
+      console.log("");
+      console.log("  **看不到标准诊断不等于代码没问题** —— 看原始输出的最后几行。");
     } else if (errors.length === 0 && warnings.length === 0) {
       console.log("  ✅ 无 error、无 warning。");
     }

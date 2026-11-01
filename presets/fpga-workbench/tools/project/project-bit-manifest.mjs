@@ -378,7 +378,25 @@ const main = () => {
     }
 
     /**
-     * **R03 的核心：构建期间输入不能变。**
+     * **N01：`--end` 必须与 `--begin` 的身份绑定。**
+     *
+     * 原来 `--end` 只看输入摘要，不看 top/part —— 于是
+     * `--begin --top alpha --part partA` 之后，`--end --top beta --part partB`
+     * 照样写出 verified。旧 intent 被无限重用冒充新构建。
+     */
+    const intentTop = String(intent.top ?? "");
+    if (intentTop !== "" && top !== intentTop) {
+      console.error(`--end 的顶层名与 --begin 不一致：--begin 记 ${intentTop}，你给 ${top}。`);
+      console.error("这两个必须是同一次构建 —— 否则关联到的是别的工程产物。");
+      process.exit(2);
+    }
+    if (options.part !== "" && String(intent.part ?? "") !== "" && options.part !== String(intent.part)) {
+      console.error(`--end 的器件型号与 --begin 不一致：--begin 记 ${String(intent.part)}，你给 ${options.part}。`);
+      process.exit(2);
+    }
+
+    /**
+     * **N01：构建期间输入不能变。**
      *
      * 如果变了，说明这份 bit 对应的不是当前源码 —— 那正是
      * 「先改源码、后补清单」会掩盖的情况。这里直接拒绝。
@@ -404,9 +422,24 @@ const main = () => {
       schema: MANIFEST_SCHEMA,
       top,
       part: options.part !== "" ? options.part : String(intent.part ?? ""),
-      /** **R03**：走 begin/end 两阶段才有的标记。 */
-      provenance: "verified",
-      provenanceNote: `由 --begin(${String(intent.begunAt)}) 与 --end 两阶段记录；构建期间输入摘要未变`,
+      /**
+       * **N01：降级 —— 两阶段只能证明「输入快照前后相同」，不能证明构建发生过。**
+       *
+       * 报告实测：`--begin` 之后**不跑 Vivado**、直接 `--end`，照样写出 verified。
+       * 两次人工执行之间可以什么都没做；输入摘要相同也排除不了「期间改了又改回来」。
+       *
+       * 所以状态名要如实：`input-snapshot-matched` ——
+       * 它说的是"构建前后的输入一致"，不是"这份 bit 由这份源码构建"。
+       *
+       * **不再是 `verified`。** `verified` 要求受控构建调用记录
+       * run / top / part / 工具返回状态 / 产物身份 —— 那是下一步的事，
+       * 在没有它之前不许用那个词。
+       */
+      provenance: "input-snapshot-matched",
+      provenanceNote:
+        `由 --begin(${String(intent.begunAt)}) 与 --end 两阶段记录：构建前后输入摘要一致。` +
+        "**这不证明构建真的发生过** —— 期间可以什么都没做。" +
+        "要证明来源，需要受控构建调用记录 run/工具返回状态/产物身份。",
       bit: { file: `${top}.bit`, sha256: bitInfo?.sha256 ?? "", bytes: bitInfo?.bytes ?? 0 },
       inputs: {
         sha256: digest.sha256,
@@ -436,10 +469,11 @@ const main = () => {
     writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
     if (options.json) {
-      console.log(JSON.stringify({ written: true, provenance: "verified", manifest: out }, null, 2));
+      console.log(JSON.stringify({ written: true, provenance: "input-snapshot-matched", manifest: out }, null, 2));
     } else {
       console.log(`已写入：${out}`);
-      console.log(`  来源：**verified**（--begin 与 --end 两阶段，构建期间输入未变）`);
+      console.log("  来源：**input-snapshot-matched**（两阶段，构建前后输入一致）");
+      console.log("       注意：这不证明构建真的发生过 —— 期间可以什么都没做。");
       console.log(`  bit sha256：${manifest.bit.sha256.slice(0, 16)}…`);
       console.log(`  输入摘要：${digest.sha256.slice(0, 16)}…（${String(digest.files)} 个文件）`);
     }
@@ -715,20 +749,37 @@ const main = () => {
     console.log(`  顶层：${manifest.top ?? "(未记)"}   器件：${manifest.part === "" ? "(未记)" : (manifest.part ?? "(未记)")}`);
     console.log(`  写于：${manifest.build?.at ?? "(未记)"}${manifest.build?.tool === "" ? "" : `  工具：${manifest.build?.tool}`}`);
     console.log(`  来源：${
-      provenance === "verified"
-        ? "**verified**（--begin/--end 两阶段，构建期间输入未变）"
-        : provenance === "hand-recorded"
-          ? "**hand-recorded**（手工补录，无构建过程佐证）"
-          : "**unknown**（旧版 manifest 没记这个字段）"
+      provenance === "input-snapshot-matched"
+        ? "**input-snapshot-matched**（两阶段，构建前后输入一致）"
+        : provenance === "verified"
+          ? "**verified**（声称有构建过程佐证 —— 本版本工具不再产出这种状态）"
+          : provenance === "hand-recorded"
+            ? "**hand-recorded**（手工补录，无构建过程佐证）"
+            : "**unknown**（旧版 manifest 没记这个字段）"
     }`);
     console.log("");
 
     if (verdict === "PASS") {
       console.log("文件一致：bit 内容与源摘要都和 manifest 记的一致。");
 
-      // **这正是 R03 要修的地方** —— 不能说「这才叫构建出来的」。
-      if (provenance === "verified") {
-        console.log("来源已验证：这份 bit 由 `--end` 那次构建产生，构建期间输入摘要未变。");
+      /**
+       * **N01：`input-snapshot-matched` 也不能说「来源已验证」。**
+       *
+       * 它只证明「构建前后输入摘要相同」—— 而两次人工执行之间
+       * **可以什么都没做**（不跑 Vivado 直接 `--end` 也会得到这个状态）。
+       */
+      if (provenance === "input-snapshot-matched") {
+        console.log("");
+        console.log("⚠️  但**来源仍未验证** —— 这只说明「构建前后的输入摘要一致」。");
+        console.log("    它证明不了构建真的发生过：");
+        console.log("      · `--begin` 之后不跑 Vivado、直接 `--end` 也会得到这个状态");
+        console.log("      · 期间改了又改回来，摘要同样相同");
+        console.log("");
+        console.log("    要真证明来源，需要**受控构建调用**记录 run / 工具返回状态 / 产物身份。");
+        console.log("    在那之前，别把这份记录写成「bit 由当前源码构建」。");
+      } else if (provenance === "verified") {
+        console.log("来源已验证（外部记录）：manifest 声称走过受控构建。");
+        console.log("  **本版本工具不再产出这种状态** —— 请核对是哪一版工具写的。");
       } else if (provenance === "hand-recorded") {
         console.log("");
         console.log("⚠️  但**来源未验证** —— 这是手工补录的记录。");

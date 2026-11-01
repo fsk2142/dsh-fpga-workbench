@@ -133,6 +133,27 @@ if {[catch {
   puts "\[run_bitstream\] WARN: 读不到 NEEDS_REFRESH ($err) —— 新鲜性未知"
 }
 
+#
+# **N06：读不到刷新属性时不能当作"新鲜"继续归档。**
+#
+# 上一版这里只打 WARN 就往下走 —— 于是属性缺失/不可读的情况下
+# 照样复制旧 bit、照样输出 BITSTREAM_OUTPUT_GENERATED、照样退 0。
+# 那等于把「不知道新不新鲜」当成了「新鲜」。
+#
+# 现在明确分三态：
+#   fresh      好
+#   stale      拒绝（上面 fail）
+#   unknown    **不写有效归档**，退 3，并输出机器可读的 REFRESH_UNKNOWN
+#
+# 要人工覆盖时不该复用正常成功路径 —— 那种覆盖本身就不该被下游当成功。
+if {!$refresh_known} {
+  puts "\[run_bitstream\] REFRESH_UNKNOWN: 读不到 NEEDS_REFRESH —— 无法确认这份 bit 仍然有效"
+  puts "\[run_bitstream\] 不写归档。要强制出 bit，请先修好 run 状态或显式处理这个 run。"
+  # 收尾：不把"什么都没验成"当成功
+  catch { close_project }
+  exit 3
+}
+
 if {$refresh_known} {
   #
   # **语义**：NEEDS_REFRESH=1 表示「需要刷新」= 陈旧。

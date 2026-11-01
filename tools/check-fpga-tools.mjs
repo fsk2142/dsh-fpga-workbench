@@ -3890,6 +3890,87 @@ if (vsimPath === undefined) {
     const missResult = runTool(projectTool("project-pin-audit.mjs"), [miss, "--expect", join(miss, "board", "pins.csv")], miss);
     check(missResult.status === 1 && /漏约束/u.test(missResult.output), `期望有实际无 → 阻塞(实际 ${String(missResult.status)})`, missResult.output.slice(-250));
     check(/led\[0\]/u.test(missResult.output), "总线端口名 led[0] 被正确解析（含 ] 不截断）");
+
+    /**
+     * **N02（回归）：缺 PACKAGE_PIN 必须阻断。**
+     *
+     * 修 R04（跨文件属性合并）时 `actualMap` 从「只收有 pin 的 row」改成
+     * 「合并所有属性」，于是「只有 IOSTANDARD」的端口也进了 map，
+     * 而比对条件仍要求 `got.pin !== ""` —— 结果「对象存在但关键属性缺失」
+     * 被静默漏掉，引脚层反而 PASS。
+     *
+     * 这条断言是**前后对照抓到的回归**，放在这里防止再犯。
+     */
+    const pinMissing = makeProj("pin-missing", "set_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]\n");
+    const pinMissingResult = runTool(
+      projectTool("project-pin-audit.mjs"),
+      [pinMissing, "--expect", join(pinMissing, "board", "pins.csv")],
+      pinMissing
+    );
+    check(
+      pinMissingResult.status === 1,
+      `缺 PACKAGE_PIN → 阻塞退 1(实际 ${String(pinMissingResult.status)})`,
+      pinMissingResult.output.slice(-250)
+    );
+    check(/缺少引脚约束/u.test(pinMissingResult.output), "报出「缺少引脚约束」而不是当一致", pinMissingResult.output.slice(-250));
+    check(!/引脚层 PASS/u.test(pinMissingResult.output), "**不**说引脚层 PASS", pinMissingResult.output.slice(-250));
+
+    /**
+     * **N08：同一个端口在两份 XDC 里各写一次 PACKAGE_PIN，不是「抢 pin」。**
+     *
+     * 那种情况完全合法（分层约束常见），由属性冲突规则管。
+     * 只有**两个不同端口**用同一 pin 才是真冲突。
+     */
+    const dup = scratch("pin-dup-same-port", {
+      "board/pins.csv": pinCsv,
+      "xdc/01-pins.xdc": "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]\n",
+      "xdc/02-more.xdc": "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]\nset_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]\n"
+    });
+    const dupResult = runTool(projectTool("project-pin-audit.mjs"), [dup, "--expect", join(dup, "board", "pins.csv")], dup);
+    check(
+      !/引脚重复占用/u.test(dupResult.output),
+      "同一端口重复赋同值 → **不**报「引脚重复占用」",
+      dupResult.output.slice(-250)
+    );
+
+    // 但两个不同端口抢同一 pin 必须报
+    const clash = scratch("pin-clash", {
+      "board/pins.csv": "pin,port,iostandard\nAB12,led[0],LVCMOS33\nAB12,button,LVCMOS33\n",
+      "xdc/pins.xdc":
+        "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]\nset_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]\n" +
+        "set_property PACKAGE_PIN AB12 [get_ports {button}]\nset_property IOSTANDARD LVCMOS33 [get_ports {button}]\n"
+    });
+    const clashResult = runTool(projectTool("project-pin-audit.mjs"), [clash, "--expect", join(clash, "board", "pins.csv")], clash);
+    check(/引脚重复占用/u.test(clashResult.output), "两个端口抢同一 pin → 报重复占用", clashResult.output.slice(-250));
+
+    /**
+     * **N09：期望表里有解析不了的行 → 引脚层不能给 PASS。**
+     *
+     * 那些端口根本没进比对集合，说「逐项一致」超出了证据范围。
+     */
+    const expectBad = scratch("pin-expect-unparsed", {
+      "xdc/pins.xdc": "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]\nset_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]\n",
+      "board/expect.xdc": [
+        "set_property PACKAGE_PIN AB12 [get_ports {led[0]}]",
+        "set_property IOSTANDARD LVCMOS33 [get_ports {led[0]}]",
+        "set_property PACKAGE_PIN $pin_var [get_ports {button}]"
+      ].join("\n")
+    });
+    const expectBadResult = runTool(
+      projectTool("project-pin-audit.mjs"),
+      [expectBad, "--expect", join(expectBad, "board", "expect.xdc")],
+      expectBad
+    );
+    check(
+      /引脚层 UNVERIFIED/u.test(expectBadResult.output),
+      "期望有不解析行 → 引脚层 UNVERIFIED（不是 PASS）",
+      expectBadResult.output.slice(-300)
+    );
+    check(
+      !/引脚号、电平标准（含缺失检查）、驱动、上下拉逐项一致/u.test(expectBadResult.output),
+      "**不**宣称「逐项一致」",
+      expectBadResult.output.slice(-300)
+    );
   }
 
   // ③ L0–L3 上板自检脚本生成器
@@ -4191,6 +4272,48 @@ if (vsimPath === undefined) {
     check(
       dirResult.status === 0 && /routed/u.test(dirResult.output),
       "给目录时优先选 routed 报告"
+    );
+
+    /**
+     * **N11：数字行缺列必须退 2，不能吞成"缺省值"。**
+     *
+     * 原来循环上限是 `Math.min(headers.length, cells.length)` ——
+     * 表头 4 列、数字行 2 个单元格时只解析前 2 列就返回成功。
+     */
+    const shortDir = join(SANDBOX, "timing-short-cols");
+    mkdirSync(shortDir, { recursive: true });
+    const shortFile = join(shortDir, "top_routed_timing_summary.rpt");
+    writeFileSync(
+      shortFile,
+      [
+        "Design Timing Summary",
+        "--------------",
+        "    WNS(ns)      TNS(ns)      WHS(ns)      THS(ns)",
+        "    -------      -------      -------      -------",
+        "     1.000        0.000",
+        ""
+      ].join("\n")
+    );
+    const shortResult = runTiming(shortFile);
+    // 判定看退出码：`runTool` 只接 stdout，而这个工具把错误写到 stderr。
+    // 「退 2」本身就是「判定为输入错误」的证据 —— 细节文案另有直接验证。
+    check(shortResult.status === 2, `数字行缺列 → 退 2(实际 ${String(shortResult.status)})`, shortResult.output.slice(-250));
+
+    /**
+     * **N10：只有 basename 参与 routed 判断，父目录名不算。**
+     *
+     * 父目录叫 `routed-parent` 时，里面 synth 的报告不该被当成 routed。
+     */
+    const trickyDir = join(SANDBOX, "routed-parent", "timing-tricky");
+    mkdirSync(trickyDir, { recursive: true });
+    const synthOnly = join(trickyDir, "top_synth_timing_summary.rpt");
+    writeFileSync(synthOnly, "Design Timing Summary\n--------------\n    WNS(ns)      TNS(ns)\n    -------      -------\n     1.000        0.000\n");
+    const trickyResult = runTiming(trickyDir, ["--json"]);
+    // 唯一候选会被选中（这没问题），但"选择依据"不能说 routed 优先
+    check(
+      !/routed 优先/u.test(trickyResult.output),
+      "父目录名不参与 routed 判断（不谎称 routed 优先）",
+      trickyResult.output.slice(-250)
     );
   }
 }

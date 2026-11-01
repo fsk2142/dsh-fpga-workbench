@@ -110,19 +110,48 @@ set routed_dcp [file join $RUN_DIR "${TOP}_routed.dcp"]
 set bit_done 0
 if {[string match "*write_bitstream Complete!*" $status]} { set bit_done 1 }
 
+# ---- **R01：刷新状态必须在两个分支之前核** -------------------------------- #
+#
+# 原来 NEEDS_REFRESH 的检查整段写在 `if {!$bit_done}` 里面 —— 于是：
+#
+#   STATUS = "write_bitstream Complete!"  且  NEEDS_REFRESH = 1
+#
+# 时走的是"已完成"分支，**既不查 routed checkpoint，也不查刷新状态**，
+# 直接把 run 目录里那份**旧 bit** 当成本次产物归档。
+#
+# 「已经生成过 bit」和「这份 bit 仍然有效」是两件事。源码/约束在实现之后
+# 改过（NEEDS_REFRESH=1），那份 bit 就不代表当前设计。
+#
+# 读不到属性时**当"新鲜性未知"处理**：报 WARN 并继续（不默认放行也不误杀），
+# 结论由下游按「未验证」对待 —— 见最后一段输出里的 REFRESH_UNKNOWN 标记。
+set refresh       1
+set refresh_known 0
+if {[catch {
+  set refresh [get_property NEEDS_REFRESH [get_runs $RUN]]
+  set refresh_known 1
+} err]} {
+  puts "\[run_bitstream\] WARN: 读不到 NEEDS_REFRESH ($err) —— 新鲜性未知"
+}
+
+if {$refresh_known} {
+  #
+  # **语义**：NEEDS_REFRESH=1 表示「需要刷新」= 陈旧。
+  # 这里直接用 refresh 本身当 is_stale，不要再取反 ——
+  # 取反会把「过期」判成「新鲜」，正是这条 bug 的反向版本。
+  #
+  if {[catch { set is_stale [expr {$refresh ? 1 : 0}] }]} { set is_stale 1 }
+  if {$is_stale} {
+    fail "run '$RUN' NEEDS_REFRESH=$refresh: the sources/constraints changed after implementation. Re-run the implementation stage (see fpga-project-impl); do NOT archive the stale bitstream."
+  }
+  puts "\[run_bitstream\] refresh check: NEEDS_REFRESH=$refresh（新鲜，允许归档）"
+}
+
 if {!$bit_done} {
   if {![file isfile $routed_dcp]} {
     fail "no routed checkpoint in the run dir ($routed_dcp; run status='$status') -- run the implementation stage first"
   }
-  # NEEDS_REFRESH=true 意味着源码/约束在实现之后又变了 —— 那种情况继续出 bit 就等于拿旧布局布线
-  # 交差,或者让 Vivado 偷偷重跑一遍实现(几十分钟的意外)。两条都不接受:退回实现环节。
-  set refresh 1
-  catch { set refresh [get_property NEEDS_REFRESH [get_runs $RUN]] }
-  set fresh 0
-  if {[catch { set fresh [expr {!$refresh}] }]} { set fresh 0 }
-  if {!$fresh} {
-    fail "run '$RUN' NEEDS_REFRESH=$refresh: the sources/constraints changed after implementation. Re-run the implementation stage, then come back (refusing to place/route again just to get a bitstream)."
-  }
+  # 刷新状态已经在上面统一核过了（R01）—— 这里不再重复读一次。
+  # 重复读的后果是两处判断可能不一致：上面放行、下面拒绝（或相反）。
   puts "\[run_bitstream\] routed: [string map {\\ /} $routed_dcp] (run status='$status') -> running the remaining write_bitstream step"
 
   # ---- 只跑**剩下的那一步**:write_bitstream(不重新 place/route) ----------- #

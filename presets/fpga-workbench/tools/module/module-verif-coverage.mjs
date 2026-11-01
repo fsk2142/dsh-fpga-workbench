@@ -423,8 +423,19 @@ const main = () => {
 
   // 门槛只看「强相关」类别（语句 / 分支 / 状态机状态）
   const gateRows = allRows.filter((row) => !ADVISORY.has(row.category));
-  const gate = weighted(gateRows.length > 0 ? gateRows : allRows);
-  const passed = gate.percent >= options.threshold;
+
+  /**
+   * **R11：判定交给 `judgeCoverage`（同一份逻辑，自检也用它）。**
+   *
+   * 它处理两件事：
+   * - 门槛类别缺失时**不退回**参考类别（否则拿 Toggles/Conditions 判达标）
+   * - 有文件无法归类时 `dataCompleteness=partial`，不给 PASS
+   *
+   * 这里只做展示，不做第二次判断 —— 两处各判一半必然出现不一致。
+   */
+  const unclassifiedCount = classified.unclassified.length;
+  const judged = judgeCoverage(allRows, options.threshold, unclassifiedCount);
+  const { gate, dataCompleteness, passed, verdict } = judged;
 
   if (options.json) {
     console.log(
@@ -434,7 +445,12 @@ const main = () => {
           ucdb: ucdbPath,
           threshold: options.threshold,
           passed,
-          gate,
+          /** **R11**：三样分开 —— 数字、数据完整性、结论。 */
+          verdict,
+          coveragePercent: gate?.percent ?? null,
+          dataCompleteness,
+          unclassified: classified.unclassified.map((item) => item.file),
+          gate: gate ?? null,
           overall,
           files: dutFiles,
           advisory: allRows.filter((row) => ADVISORY.has(row.category))
@@ -457,8 +473,27 @@ const main = () => {
       );
     }
     console.log("");
-    console.log(`  计入门槛的覆盖：${gate.percent.toFixed(2)}%（${String(gate.hits)}/${String(gate.bins)}）`);
-    console.log(`  门槛：${String(options.threshold)}%   →  ${passed ? "达标" : "未达标"}`);
+
+    // **R11**：先把"能不能判"说清楚，再说数字。
+    if (gate === undefined) {
+      console.log("  ⚠️  UNVERIFIED：报告里没有门槛类别（语句 / 分支 / 状态机状态）。");
+      console.log("     只有 Toggles / Expressions / Conditions 这类参考类别 ——");
+      console.log("     它们本来就「与功能覆盖关系弱」，不能拿来判达标。");
+      console.log(`     门槛：${String(options.threshold)}%   →  **无法判定**`);
+    } else {
+      console.log(`  计入门槛的覆盖：${gate.percent.toFixed(2)}%（${String(gate.hits)}/${String(gate.bins)}）`);
+      console.log(`  门槛：${String(options.threshold)}%   →  ${gate.percent >= options.threshold ? "达标" : "未达标"}`);
+    }
+
+    if (dataCompleteness === "partial") {
+      console.log("");
+      console.log(`  ⚠️  数据不完整：${String(unclassifiedCount)} 个文件无法归类（路径里既没有 rtl/ 也没有 verif/）。`);
+      console.log("     上面的百分比只是**已识别子集**的数字，不代表整体覆盖。");
+      console.log("     结论：UNVERIFIED —— 先把这些文件归位，或确认它们该不该算进 DUT。");
+      for (const item of classified.unclassified.slice(0, 5)) {
+        console.log(`       ? ${item.file}`);
+      }
+    }
 
     if (!passed) {
       console.log("");
@@ -472,7 +507,37 @@ const main = () => {
     }
   }
 
-  process.exit(passed ? 0 : 1);
+  // 退出码：0 达标 / 1 未达标 / 3 **无法判定**（门槛类别缺失或数据不完整）。
+  // 3 与 1 分开：前者是"证据不足"，后者是"确实没过" —— 修法不同。
+  process.exit(verdict === "PASS" ? 0 : verdict === "UNVERIFIED" ? 3 : 1);
 };
 
-main();
+/**
+ * **导出判定核心，供自检直接调用（R11）。**
+ *
+ * 为什么需要导出：真跑这条链要 ModelSim 生成真 ucdb、还要 `vsim -coverage` 读它，
+ * 自检里造不出那种文件（实测：把文本报告喂给 `--ucdb` 会报
+ * `vsim-6808 ... is not a ucdb file`）。
+ *
+ * 而 R11 要验的**不是** ucdb 解析，是「拿到一组覆盖率行之后的判定」：
+ * 参考类别缺失时会不会退回、数据不完整时会不会放过。那部分纯逻辑，
+ * 直接测最可靠。
+ *
+ * @param allRows - 覆盖率行（每项含 `category` / `bins` / `hits` / `percent`）。
+ * @param threshold - 门槛百分比。
+ * @param unclassifiedCount - 无法归类的文件数（数据完整性）。
+ * @returns `{ gate, dataCompleteness, coveragePercent, passed, verdict }`。
+ */
+export function judgeCoverage(allRows, threshold, unclassifiedCount = 0) {
+  const gateRows = allRows.filter((row) => !ADVISORY.has(row.category));
+  const gate = gateRows.length > 0 ? weighted(gateRows) : undefined;
+  const dataCompleteness = unclassifiedCount === 0 ? "complete" : "partial";
+  const passed = gate !== undefined && dataCompleteness === "complete" && gate.percent >= threshold;
+  const verdict = gate === undefined ? "UNVERIFIED" : passed ? "PASS" : "FAIL";
+  return { gate: gate ?? null, dataCompleteness, coveragePercent: gate?.percent ?? null, passed, verdict };
+}
+
+// 作为脚本直接跑时才执行 main（被 import 时不跑）。
+if (process.argv[1] !== undefined && process.argv[1].endsWith("module-verif-coverage.mjs")) {
+  main();
+}

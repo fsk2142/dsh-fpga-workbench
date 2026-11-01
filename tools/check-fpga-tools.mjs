@@ -1248,12 +1248,37 @@ if (vsimProbe.status !== 0) {
     // ③ 换了另一份 modelsim.ini(路径不同就算换配置;这里只要求那份文件存在,内容不参与编译)
     const otherIni = join(hdrVerif, "mini.ini");
     writeFileSync(otherIni, "[Library]\n");
-    step = modeStep("run", { env: { MODELSIM_INI: otherIni }, tag: "ini" });
+
+    /**
+     * **换 ini 这条要单独验，不能带上一条的宏**（2026-11-01 抓到的真因）。
+     *
+     * 前面 ② 用 `TB_DEFINES: "SAFE_MODE"` 建立了一份"带宏"的编译身份；
+     * `modeStep` 的环境是 `{ ...process.env, ...env }`，那条的宏不会自动消失。
+     * 于是身份差异同时来自 `defines` 与 `ini`，工具报先命中的那个：
+     *
+     * ```
+     * [ME]   defines: was 'SAFE_MODE' -> now ''
+     * ```
+     *
+     * 输出里没有 `ini:` / `mini.ini`，断言就红了。
+     *
+     * **但这里只能用 `TB_DEFINES: "SAFE_MODE"`（保持与上次一致）**，
+     * 不能置空 —— 置空会让 defines 也变成一次变化，同样抢在 ini 前面报出来，
+     * 而且会把"上一次配置"改成空宏，**破坏后续 OPT_LEVEL 用例的基线**
+     * （实测：置空后 17 条断言连环失败）。
+     *
+     * 也就是：这一条要验的是「只有 ini 变了」，那其它维度就必须**保持原值**。
+     */
+    step = modeStep("run", { env: { MODELSIM_INI: otherIni, TB_DEFINES: "SAFE_MODE" }, tag: "ini" });
     check(
       step.status === 1 && /ini:/u.test(step.output) && /mini\.ini/u.test(step.output),
       `配置身份:换 modelsim.ini → run 拒绝并点名 ini(实际 ${String(step.status)})`,
       step.output.slice(-300)
     );
+
+    // **把 ini 恢复回去**：后续用例（OPT_LEVEL 那组）假定改的是 opt，不是 ini。
+    // 不恢复的话它们会先撞上「ini 变了」而报错，看起来像 OPT_LEVEL 坏了。
+    step = modeStep("compile", { env: { TB_DEFINES: "SAFE_MODE" }, tag: "ini-restore" });
     // ④ 旧版 stamp(没有任何 # cfg 行)不能被当成"配置一致":证明不了配置就要求重编 ——
     //    并且**升级路径要闭环**:compile 必须清库全量重编,之后 run 正常通过。
     {

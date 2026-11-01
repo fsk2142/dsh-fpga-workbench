@@ -157,9 +157,47 @@ const runVerilator = (bash, sources, strictModules, verilatorPath) => {
   ].join(" && ");
 
   const result = spawnSync(bash, ["-lc", script], { encoding: "utf8", timeout: 600_000 });
+  const stdout = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+
+  /**
+   * **R15：进程是否真的跑成功了，必须和"诊断内容"分开判。**
+   *
+   * 原来这里只返回 `status` 与输出，主逻辑再看 `%Error` / `%Warning` 的条数 ——
+   * 于是三种"根本没跑起来"的情况都会被判成通过：
+   *
+   * | 情况 | status | 输出 | 原判 |
+   * |---|---|---|---|
+   * | 命令不存在 | 127 | `command not found` | 无诊断 → **passed** |
+   * | 可执行缺失 | null + ENOENT | 空 | 无诊断 → **passed** |
+   * | 超时被杀 | null + ETIMEDOUT | 可能为空 | 无诊断 → **passed** |
+   *
+   * **"没跑起来"和"跑了且干净"必须区分开** —— 这正是本轮最该先修的一类。
+   *
+   * 判据：
+   * - `result.error` 非空 → 工具本身没起来（ENOENT / ETIMEDOUT / EACCES…）
+   * - `result.signal` 非空 → 被信号干掉（超时 kill 也走这条）
+   * - `status === 127` → shell 找不到命令
+   * - `status === null` → 进程没正常结束
+   *
+   * 这几种都不是"代码没问题"，而是**检查没有发生**。
+   */
+  const ran = result.error === undefined && result.signal === null && typeof result.status === "number" && result.status !== 127;
+
   return {
     status: result.status,
-    stdout: `${result.stdout ?? ""}${result.stderr ?? ""}`
+    stdout,
+    /** 进程是否真正执行完成（false 时下面的 errors/warnings 一律不可信）。 */
+    ran,
+    /** 没跑成时的原因，写进结果给调用方。 */
+    ranProblem: ran
+      ? undefined
+      : result.error !== undefined
+        ? `${String(result.error.code ?? "ERROR")}: ${String(result.error.message ?? "").slice(0, 160)}`
+        : result.signal !== null
+          ? `进程被信号 ${String(result.signal)} 结束（很可能是超时）`
+          : result.status === 127
+            ? "找不到 Verilator 可执行文件（status 127）"
+            : `进程未正常结束（status ${String(result.status)}）`
   };
 };
 
@@ -278,7 +316,15 @@ const main = () => {
   const important = warnings.filter((warning) => IMPORTANT.has(warning.kind));
   const others = warnings.filter((warning) => !IMPORTANT.has(warning.kind));
 
-  const passed = errors.length === 0 && important.length === 0;
+  /**
+   * **R15：没跑起来 ≠ 通过。**
+   *
+   * 进程没真正执行时（找不到可执行、超时被杀、shell 退 127）诊断输出必然是空的，
+   * 而"无 error、无 warning"就成了**假绿** —— 检查根本没发生。
+   *
+   * 所以 `passed` 必须同时要求 `result.ran`。
+   */
+  const passed = result.ran && errors.length === 0 && important.length === 0;
 
   if (options.json) {
     console.log(
@@ -287,6 +333,9 @@ const main = () => {
           root,
           sources: sources.map((file) => relative(root, file).replace(/\\/gu, "/")),
           strictModules: options.strictModules,
+          /** 进程是否真的执行完成 —— false 时下面的诊断列表一律不可信。 */
+          ran: result.ran,
+          ranProblem: result.ranProblem,
           errors: errors.map((item) => ({ ...item, file: prettyPath(item.file, root) })),
           importantWarnings: important.map((item) => ({ ...item, file: prettyPath(item.file, root) })),
           otherWarnings: others.map((item) => ({ ...item, file: prettyPath(item.file, root) })),
@@ -304,7 +353,13 @@ const main = () => {
     }
     console.log("");
 
-    if (errors.length === 0 && warnings.length === 0) {
+    // **先报"没跑成"**：那种情况下后面的诊断列表没有意义，不该往下解读。
+    if (!result.ran) {
+      console.log(`  ❌ BLOCKED：Verilator **没有真正执行** —— ${String(result.ranProblem)}`);
+      console.log("");
+      console.log("  这不是「代码没问题」，是「检查没有发生」。");
+      console.log("  修好工具链后再跑；把这次结果当通过会让 lint 形同虚设。");
+    } else if (errors.length === 0 && warnings.length === 0) {
       console.log("  ✅ 无 error、无 warning。");
     }
 
@@ -340,6 +395,12 @@ const main = () => {
     }
   }
 
+  // 退出码：
+  //   0 = 跑了且干净
+  //   1 = 跑了且有诊断（代码要改）
+  //   3 = **没跑成**（BLOCKED）—— 与「代码有问题」区分开，
+  //       也与「通过」区分开。原来这种情况会掉进 0，是最坏的一种。
+  if (!result.ran) process.exit(3);
   process.exit(passed ? 0 : 1);
 };
 

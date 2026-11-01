@@ -54,8 +54,33 @@ const SPEC_CANDIDATES = ["spec/spec.md", "doc/spec.md", "spec.md"];
 /** 验证报告的候选位置。 */
 const REPORT_CANDIDATES = ["verif/verif.md", "doc/verif.md", "verif.md"];
 
-/** 「不适用于本版本」的标记：含这些词的 AC 不计入门槛，但会单独列出。 */
-const WAIVED = /(?:不适用|不涉及|本版不做|本版本不做|已废弃|N\/A|NA\b|not[ -]applicable|deferred|out[ -]of[ -]scope)/iu;
+/**
+ * 「不适用于本版本」的标记：含这些词的 AC 不计入门槛，但会单独列出。
+ *
+ * ## R06：两道修正
+ *
+ * **① `NA` 必须有左边界。**
+ * 原来是 `NA\b` —— `\b` 只管右边，于是 `DNA` 尾部的 `NA` 也命中，
+ * 「对 DNA 输入做校验」这种**正经需求**被当成"不适用"豁免掉了。
+ * 现在两侧都要边界：`\bNA\b`。
+ *
+ * **② 不从任意描述词推断豁免。**
+ * `不适用` / `不涉及` 这类词在自然语言里太容易出现在**肯定句**中：
+ *
+ * ```
+ * AC-1: 非法输入不适用正常路径，必须报错
+ * ```
+ *
+ * 这句**要求报错**，却因为含「不适用」被豁免 —— 完全没有用例、没有记录，
+ * 需求就从门槛里消失了。
+ *
+ * 豁免必须**显式标记**。支持两种写法（见 `isExplicitlyWaived`）：
+ * - 行内标记：`AC-1: ... [不适用]` / `[NOT_APPLICABLE]` / `[N/A]`
+ * - 状态词开头：`AC-1（不适用）: ...`
+ *
+ * 光凭句子里出现「不适用」三个字不算。
+ */
+const WAIVED = /(?:\[(?:不适用|不涉及|NOT[ _-]?APPLICABLE|N\/A)\]|[（(](?:不适用|不涉及|NOT[ _-]?APPLICABLE|N\/A)[)）]|\bNA\b|not[ -]applicable|out[ -]of[ -]scope)/iu;
 
 const usage = () => {
   console.error("用法：node module-verif-ac-trace.mjs <模块根> [--spec <路径>] [--report <路径>] [--json]");
@@ -263,7 +288,28 @@ const main = () => {
   const covered = gated.filter((row) => row.mentioned);
   const missing = gated.filter((row) => !row.mentioned);
   const waived = rows.filter((row) => row.waived);
-  const passed = missing.length === 0;
+
+  /**
+   * **R06 第二半：全豁免不能冒充"完成验证"。**
+   *
+   * 原来 `passed = missing.length === 0`。当所有 AC 都被标成"不适用"时，
+   * `gated` 为空 → `missing` 也为空 → `passed = true`、退 0，
+   * 还打印「功能覆盖这道门可以过」。
+   *
+   * 但那时**一条 AC 都没验**。这与技能里「AC 追溯不等于功能覆盖」的说法
+   * 也直接冲突 —— 用户看到 100% 会以为功能覆盖过了。
+   *
+   * 现在分三档：
+   *   - 有条目且全被豁免（gated === 0 && waived > 0）→ NOT_APPLICABLE，退 3
+   *   - spec 里一条 AC 都没解析出来 → 输入不足，退 2
+   *   - 其余按 missing 判
+   */
+  const allWaived = gated.length === 0 && waived.length > 0;
+  const noAcceptance = rows.length === 0;
+  const passed = !allWaived && !noAcceptance && missing.length === 0;
+
+  /** 结论三档：PASS / NOT_APPLICABLE（全豁免）/ UNVERIFIED（有遗漏）。 */
+  const verdict = passed ? "PASS" : allWaived ? "NOT_APPLICABLE" : "UNVERIFIED";
 
   if (options.json) {
     console.log(
@@ -277,6 +323,9 @@ const main = () => {
           covered: covered.length,
           missing: missing.map((row) => ({ id: row.id, description: row.description })),
           waived: waived.map((row) => ({ id: row.id, description: row.description })),
+          /** 全部 AC 都被标成不适用 —— 这不是"通过"，是"没验"。 */
+          allWaived,
+          verdict,
           passed
         },
         null,
@@ -284,7 +333,7 @@ const main = () => {
       )
     );
   } else {
-    console.log(`AC 覆盖追踪  ${basename(root)}`);
+    console.log(`AC 记录追溯  ${basename(root)}`);
     console.log(`  spec：${specPath}`);
     console.log(`  报告：${reportPath === "" ? "（找不到验证报告）" : reportPath}`);
     console.log("");
@@ -299,27 +348,24 @@ const main = () => {
     console.log("");
 
     if (passed) {
-      console.log("  ✅ AC 覆盖 100% —— 功能覆盖这道门可以过。");
-      if (waived.length > 0) {
-        console.log("");
-        console.log(`  被剔除的 ${String(waived.length)} 条要在 verif.md 里写明依据（为什么本版本不适用）。`);
-      }
+      // **不再说「功能覆盖这道门可以过」** —— 本工具只核"每条 AC 在报告里有记录"，
+      // 不核功能覆盖（那是 covergroup 的事，见 fpga-module-verif 的覆盖率一节）。
+      console.log("  ✅ AC 记录追溯完整 —— 每条 AC 在验证报告里都有记录。");
+      console.log("     注意：这只证明「记录在」，不证明「功能覆盖到」—— 功能覆盖看 covergroup。");
+    } else if (allWaived) {
+      console.log("  ⊘ NOT_APPLICABLE：所有 AC 都标注了不适用，**一条都没验**。");
+      console.log("     这不是「通过」。要么补真实的验证记录，要么确认这些 AC 确实不适用并说明理由。");
+    } else if (noAcceptance) {
+      console.log("  ⚠️ spec 里没解析出任何 AC 条目 —— 无法判断覆盖，先补 `AC-N:` 条目。");
     } else {
-      console.log(`  ❌ 未达 100%：${String(missing.length)} 条 AC 在报告里没有记录。`);
-      console.log("");
-      console.log("  行业惯例：功能覆盖必须关闭，不能像代码覆盖那样打折 ——");
-      console.log("  `95% × 10 条 AC = 9.5 条` 这个数字本身不可解释。");
-      console.log("");
-      console.log("  处理方式（二选一）：");
-      console.log("    · 补用例，并在 verif.md 里写清该 AC 由哪个用例 / 证据覆盖；");
-      console.log("    · 确认它对本版本确实不适用，在 spec 的 AC 描述里标注");
-      console.log("      「不适用于本版本」+ 依据，工具会把它剔除（而不是当成已覆盖）。");
-      console.log("");
-      console.log("  注意：「实际使用中不太可能」不是有效理由 —— 行业规范明确这一点。");
+      console.log(`  ❌ ${String(missing.length)} 条 AC 在报告里没有记录（结论应为 UNVERIFIED）。`);
+      console.log("     在验证报告里逐条写清怎么验的；确不适用要显式标 [不适用] 并给理由。");
     }
   }
 
-  process.exit(passed ? 0 : 1);
+  // 退出码：0 追溯完整 / 1 有遗漏 / 3 全豁免（NOT_APPLICABLE，不能当通过）/ 2 输入不足
+  if (noAcceptance) process.exit(2);
+  process.exit(passed ? 0 : allWaived ? 3 : 1);
 };
 
 main();

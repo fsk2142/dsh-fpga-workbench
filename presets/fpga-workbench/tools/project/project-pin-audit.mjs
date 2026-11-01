@@ -314,7 +314,26 @@ const BANK_CHECK_NOTE =
 const readExpectation = (path) => {
   const text = readFileSync(path, "utf8");
   const ext = extname(path).toLowerCase();
-  if (ext === ".xdc") return { rows: parseXdc(text), kind: "XDC" };
+  if (ext === ".xdc") {
+    /**
+     * **R07：期望侧的 XDC 也要报「解析不了的行」。**
+     *
+     * 原来只有实际侧调 `findUnparsed`，期望侧直接 `parseXdc` ——
+     * 于是期望表里用 `$expected_pin` 这种变量写法的端口被**静默丢掉**：
+     * 期望端口数少一个，那个端口根本不会参与比对，`pinVerdict` 还是 PASS。
+     *
+     * 对使用者来说这是最坏的一种：他以为"期望表里写了 button"，
+     * 工具却当它不存在。所以两侧都要收集未解析项。
+     */
+    return {
+      rows: parseXdc(text),
+      kind: "XDC",
+      unparsed: findUnparsed(text).map((item) => ({
+        file: String(path).replace(/\\/gu, "/").split("/").pop() ?? String(path),
+        ...item
+      }))
+    };
+  }
   if (ext === ".csv" || ext === ".tsv" || ext === ".txt") {
     // .txt 可能是 report_io，也可能是分隔符表：两种都试
     const asTable = parseTable(text, path);
@@ -410,10 +429,81 @@ const main = () => {
     process.exit(2);
   }
 
-  /** 按 port 建索引（大小写与空白不敏感）。 */
-  const norm = (name) => name.trim().replace(/\s+/gu, "").toLowerCase();
+  /**
+   * 端口键：**只去空白，不改大小写**（R05）。
+   *
+   * 原来这里是 `name.trim().replace(/\s+/gu, "").toLowerCase()` —— 于是 `LED` 与 `led`
+   * 被当成同一个端口。而在 Verilog 里**它们是两个不同的信号**：
+   *
+   * - 期望表写 `LED`、实际 XDC 只约束了 `led` 时，原实现认为匹配，**漏报目标未约束**
+   * - 反过来，同一总线的 `led[0]` 与 `LED[0]` 也会被混为一谈
+   *
+   * 表头容错（中英文、大小写）是另一回事 —— 那在 `parseTable` 的 `normalized` 里
+   * 单独处理，不要混进对象标识。
+   *
+   * 空白仍然去掉：XDC 里 `{ led [0] }` 这种断行写法不应造成假不匹配。
+   */
+  const norm = (name) => name.trim().replace(/\s+/gu, "");
   const expectMap = new Map(expectation.rows.map((row) => [norm(row.port), row]));
-  const actualMap = new Map(actual.rows.filter((row) => row.pin !== "").map((row) => [norm(row.port), row]));
+
+  /**
+   * **按端口合并实际属性（R04）**。
+   *
+   * 原来这里是：
+   *
+   * ```js
+   * actual.rows.filter((row) => row.pin !== "").map((row) => [norm(row.port), row])
+   * ```
+   *
+   * 只保留「带 PACKAGE_PIN」的行 —— 于是把引脚与电平拆在两个 XDC 文件里写
+   * （很常见的组织方式）就会漏报：
+   *
+   * ```
+   * 01-pins.xdc:  set_property PACKAGE_PIN AB12 [get_ports {led}]
+   * 02-io.xdc:    set_property IOSTANDARD LVCMOS33 [get_ports {led}]
+   * ```
+   *
+   * 第二行没有 pin，被过滤掉 → `actualMap` 里 `led` 的 iostandard 为空 →
+   * 报「缺少电平标准」（假阻塞），使用者被迫去合并文件。
+   *
+   * 现在以**端口为主键**逐字段合并：pin 取第一个非空的，iostandard / drive / pull 同理。
+   * 同一字段出现不同值时记为冲突（那是真需要人确认的），不按文件枚举顺序猜。
+   */
+  const actualMap = new Map();
+  /** 每个端口的字段冲突记录：`port → { 字段: Set<值> }`。 */
+  const fieldConflicts = new Map();
+
+  for (const row of actual.rows) {
+    const key = norm(row.port);
+    if (key === "") continue;
+
+    if (!actualMap.has(key)) {
+      actualMap.set(key, { port: row.port, pin: "", iostandard: "", drive: "", pull: "" });
+    }
+    const merged = actualMap.get(key);
+
+    for (const field of ["pin", "iostandard", "drive", "pull"]) {
+      const value = row[field];
+      if (value === undefined || value === "") continue;
+
+      if (merged[field] === "") {
+        merged[field] = value;
+      } else if (merged[field] !== value) {
+        // 同字段多次赋值且不一致 —— 记下来，让上层报冲突
+        if (!fieldConflicts.has(key)) fieldConflicts.set(key, {});
+        const byField = fieldConflicts.get(key);
+        if (byField[field] === undefined) byField[field] = new Set([merged[field]]);
+        byField[field].add(value);
+      }
+    }
+  }
+
+  // 只保留**至少有一个属性**的端口（全空的行没有核对价值）
+  for (const [key, value] of [...actualMap]) {
+    if (value.pin === "" && value.iostandard === "" && value.drive === "" && value.pull === "") {
+      actualMap.delete(key);
+    }
+  }
 
   const blockers = [];
   const warnings = [];
@@ -478,6 +568,21 @@ const main = () => {
     }
   }
 
+  // ②b **跨文件字段冲突（R04）**：同一端口在不同 XDC 里被赋了不同的 pin/电平。
+  //
+  // 这是真需要人确认的 —— 到底哪次赋值生效取决于 Vivado 的读入顺序，
+  // 本工具不去猜（猜错比不报更坏）。
+  for (const [key, byField] of fieldConflicts) {
+    const port = actualMap.get(key)?.port ?? key;
+    for (const [field, values] of Object.entries(byField)) {
+      blockers.push({
+        kind: "属性冲突",
+        port,
+        detail: `${field} 被赋了多个值（${[...values].join(" / ")}）—— 生效值取决于 Vivado 读入顺序，本工具不猜`
+      });
+    }
+  }
+
   // ③ 引脚重复占用
   const pinOwners = new Map();
   for (const row of actual.rows) {
@@ -525,6 +630,20 @@ const main = () => {
           .slice(0, 5)
           .map((item) => `    ${item.file}:${String(item.line)}  ${item.text}`)
           .join("\n")
+    );
+  }
+
+  // **R07：期望侧解析不了的行同样要说**，而且性质更严重 ——
+  // 那些端口根本不在比对集合里，看上去「没有差异」其实是「没比」。
+  if (Array.isArray(expectation.unparsed) && expectation.unparsed.length > 0) {
+    unverifiedNotes.push(
+      `**期望表**里有 ${String(expectation.unparsed.length)} 行解析不了 —— 这些端口**没有被比对**：\n` +
+        expectation.unparsed
+          .slice(0, 5)
+          .map((item) => `    ${item.file}:${String(item.line)}  ${item.text}`)
+          .join("\n") +
+        "\n    期望值依赖 Tcl 求值（变量 / 命令替换）时本工具算不出目标值；" +
+        "\n    要让它们参与核对，请用 Vivado 导出的解析后结果（report_io）作为期望表。"
     );
   }
 

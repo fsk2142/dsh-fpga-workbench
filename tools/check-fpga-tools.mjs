@@ -32,7 +32,7 @@ import {
   symlinkSync,
   writeFileSync as rawWriteFileSync
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -613,7 +613,29 @@ check(
   `扫描以 rtl/ 为根(实际 ${scanned.length} 个)`
 );
 check(scanned.some((file) => file.endsWith("bad.sv")), "rtl/ 下的源码被收到");
-check(!scanned.some((file) => file.includes("/work/")), "跳过 work/ 这类生成目录(仿真库不在检查范围)");
+
+/**
+ * **R16：判"是否在 work/ 下"必须相对 `rtl` 根算，不能看绝对路径。**
+ *
+ * 原来这里是 `file.includes("/work/")`。而 `collectHdl` 返回**绝对路径**，
+ * 于是只要仓库的任意祖先目录叫 `work`，每个文件都会命中 —— 断言必红，
+ * 且与"扫描范围对不对"完全无关。
+ *
+ * 审查方就是在这个条件下真实触发的（审查副本放在 `.../workspace/work/` 下）。
+ *
+ * 现在先相对 rtl 根取路径再判；顺带把断言写得更直接：**那个文件不能出现**。
+ */
+const rtlRoot = join(SANDBOX, "bad-mod", "rtl");
+const scannedRelative = scanned.map((file) => relative(rtlRoot, file).replace(/\\/gu, "/"));
+check(
+  !scannedRelative.some((file) => file.startsWith("work/")),
+  "跳过 rtl/work/ 这类生成目录（相对 rtl 根判断，不受祖先目录名影响）",
+  scannedRelative.slice(0, 5).join(", ")
+);
+check(
+  !scanned.some((file) => file.endsWith("stale.sv")),
+  "rtl/work/stale.sv 没有被收进扫描结果"
+);
 
 // 外来代码(厂商 IP / 他人模块)放 rtl/ip/ —— 它不按本模块的格式规范检查,不跳过就会成片误报
 mkdirSync(join(SANDBOX, "ip-skip-mod", "rtl", "ip"), { recursive: true });

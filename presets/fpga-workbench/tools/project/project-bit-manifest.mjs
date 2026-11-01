@@ -53,14 +53,63 @@
  * 退出码：0 = 一致（或写入成功）；1 = 不一致；2 = 输入错误；3 = 缺 manifest（无法证明来源）。
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 
 const MANIFEST_SCHEMA = 1;
 
-/** 参与"源摘要"的目录与扩展名。只收**会影响 bitstream** 的东西。 */
-const SOURCE_DIRS = ["src/rtl", "xdc", "ip"];
-const SOURCE_EXTS = new Set([".sv", ".v", ".svh", ".vh", ".vhd", ".vhdl", ".xdc", ".tcl", ".xci", ".xcix"]);
+/**
+ * 参与「源摘要」的目录。
+ *
+ * **R02**：加了 `sym`（初始化文件常放那儿）、`constraints`（有些工程这么叫）。
+ */
+const SOURCE_DIRS = ["src/rtl", "rtl", "xdc", "constraints", "ip", "sim", "src/sim"];
+
+/**
+ * 参与「源摘要」的扩展名。
+ *
+ * ## R02：补上初始化数据与 IP 描述
+ *
+ * 原来只有 HDL + XDC + Tcl + XCI。于是**改 `init.mem` 的内容，校验照样 PASS** ——
+ * ROM/BRAM 的初始值变了，bit 必然不同，但摘要认为没变。
+ *
+ * | 类别 | 扩展名 |
+ * |---|---|
+ * | HDL | `.sv` `.v` `.svh` `.vh` `.vhd` `.vhdl` |
+ * | 约束与脚本 | `.xdc` `.sdc` `.tcl` |
+ * | **初始化数据（新补）** | `.mem` `.coe` `.mif` `.hex` `.dat` |
+ * | IP 与块设计 | `.xci` `.xcix` `.bd` |
+ * | 头/包含文件 | `.h` `.inc` |
+ *
+ * ## 但这只是**必要条件，不是充分条件**
+ *
+ * 报告说得对：补扩展名解决不了根本问题 ——
+ * 本工具**不知道这个工程实际引用了哪些文件**。真正该做的是读 Vivado 的输入清单。
+ *
+ * 在没接 Vivado 之前能做两件事：
+ * 1. 尽量广地覆盖常见输入类型（下面这张表）
+ * 2. **如实声明覆盖范围**，不把「我扫了这些」说成「所有输入都一致」
+ */
+const SOURCE_EXTS = new Set([
+  // HDL
+  ".sv", ".v", ".svh", ".vh", ".vhd", ".vhdl",
+  // 约束与脚本
+  ".xdc", ".sdc", ".tcl",
+  // **初始化数据（R02 补）**
+  ".mem", ".coe", ".mif", ".hex", ".dat",
+  // IP 与块设计
+  ".xci", ".xcix", ".bd",
+  // 头/包含文件
+  ".h", ".inc"
+]);
+
+/**
+ * 这些扩展名**必定影响 bitstream** —— 它们的摘要参与度要单独统计。
+ *
+ * 用来在结果里说清「这个工程有初始化文件，我们扫到了 N 个」，
+ * 而不是让使用者以为「扫了 HDL 就等于扫了全部输入」。
+ */
+const CRITICAL_EXTS = new Set([".mem", ".coe", ".mif", ".hex", ".xci", ".xcix", ".bd"]);
 
 const usage = (code = 2) => {
   const write = code === 0 ? console.log : console.error;
@@ -78,7 +127,7 @@ const usage = (code = 2) => {
 };
 
 const parseArgs = (argv) => {
-  const options = { root: "", write: false, top: "", part: "", json: false };
+  const options = { root: "", write: false, top: "", part: "", json: false, force: false };
   const rest = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -96,6 +145,11 @@ const parseArgs = (argv) => {
     }
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    // **R10**：默认不覆盖已有 manifest（那是来源记录，盖掉就掩盖了不一致）。
+    if (arg === "--force") {
+      options.force = true;
       continue;
     }
     if (arg === "-h" || arg === "--help") usage(0);
@@ -151,7 +205,28 @@ const sourceDigest = (root) => {
     }
     hash.update("\0");
   }
-  return { sha256: hash.digest("hex"), files: files.length, list: files };
+
+  /**
+   * **R02：如实统计「扫到了什么」**，别让「我扫了 HDL」被读成「所有输入都一致」。
+   *
+   * `critical` 是其中**必定影响 bitstream** 的那几类（初始化数据、IP）。
+   * 它等于 0 时不能断言"输入完整"，只能说"没扫到这类输入"。
+   */
+  const critical = files.filter((rel) => {
+    const dot = rel.lastIndexOf(".");
+    return dot >= 0 && CRITICAL_EXTS.has(rel.slice(dot).toLowerCase());
+  });
+
+  return {
+    sha256: hash.digest("hex"),
+    files: files.length,
+    list: files,
+    /** 扫过的目录（写进结果，让覆盖范围可见）。 */
+    scannedDirs: SOURCE_DIRS,
+    /** 其中必定影响 bitstream 的输入（初始化数据 / IP）数量。 */
+    criticalFiles: critical.length,
+    criticalList: critical
+  };
 };
 
 /** 算文件摘要。 */
@@ -214,7 +289,15 @@ const main = () => {
       top: options.top,
       part,
       bit: { file: `${options.top}.bit`, sha256: bitInfo?.sha256 ?? "", bytes: bitInfo?.bytes ?? 0 },
-      inputs: { sha256: digest.sha256, files: digest.files },
+      // **R02**：把「扫了哪些目录、其中多少是必定影响 bitstream 的输入」也记下来。
+      // 这样看 manifest 的人能自己判断覆盖够不够，而不是以为「有摘要 = 全扫了」。
+      inputs: {
+        sha256: digest.sha256,
+        files: digest.files,
+        scannedDirs: digest.scannedDirs,
+        criticalFiles: digest.criticalFiles,
+        criticalList: digest.criticalList
+      },
       build: {
         tool: process.env.VIVADO_VERSION ?? "",
         runId: process.env.IMPL_RUN_ID ?? "",
@@ -223,6 +306,45 @@ const main = () => {
     };
 
     const out = join(bitDir, `${options.top}.manifest.json`);
+
+    /**
+     * **R10：默认不覆盖已有 manifest。**
+     *
+     * 原来无条件 `writeFileSync` —— 重复 `--write` 会把旧清单**直接抹掉**，
+     * 既不拒绝也不备份。两种坏后果：
+     *
+     * - 操作失误丢掉旧的来源记录
+     * - **用新快照盖掉之前的不一致**：改完源码再补一次 `--write`，
+     *   「源码与 bit 对不上」这件事就被掩盖了
+     *
+     * 与仓库其它生成器的约定一致：默认不覆盖，`--force` 才覆盖且先留快照。
+     */
+    const exists = existsSync(out);
+    if (exists && !options.force) {
+      const message = [
+        `manifest 已存在，未覆盖：${out}`,
+        "",
+        "覆盖会丢掉旧的来源记录 —— 而且**改完源码再补写一次**就能把",
+        "「源码与 bit 对不上」这件事掩盖掉。所以默认拒绝。",
+        "",
+        "要更新：显式加 --force（会先留 .bak-<时间戳> 快照）。"
+      ].join("\n");
+      if (options.json) {
+        console.log(JSON.stringify({ written: false, manifest: out, reason: "exists", hint: "--force" }, null, 2));
+      } else {
+        console.log(message);
+      }
+      process.exit(3);
+    }
+
+    /** 覆盖前留快照（可恢复，不删除）。 */
+    let backupPath;
+    if (exists) {
+      const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
+      backupPath = `${out}.bak-${stamp}`;
+      copyFileSync(out, backupPath);
+    }
+
     writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
     if (options.json) {

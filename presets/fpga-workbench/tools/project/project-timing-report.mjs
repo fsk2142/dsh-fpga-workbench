@@ -100,6 +100,8 @@ const parseDesignSummary = (text) => {
   if (headerAt < 0) return undefined;
 
   const headers = lines[headerAt].trim().split(/\s{2,}/u);
+  /** 解析出来的非法单元格（列名 + 原文 + 行号）。 */
+  const badCells = [];
 
   for (let i = headerAt + 1; i < lines.length; i += 1) {
     const line = lines[i].trim();
@@ -107,13 +109,41 @@ const parseDesignSummary = (text) => {
     const cells = line.split(/\s{2,}/u).filter((cell) => cell !== "");
     if (cells.length < 2) continue;
 
+    /**
+     * **R09：数值解析失败不能悄悄变成 NA。**
+     *
+     * 原来这行是：
+     *
+     * ```js
+     * values[key] = /^NA$/iu.test(raw) ? null : Number(raw);
+     * ```
+     *
+     * `Number("TRUNCATED")` 得到 `NaN`，而 JSON 把 `NaN` 序列化成 `null` ——
+     * 与合法的 `NA` **长得一模一样**。于是「报告被截断 / 列错位」看起来像
+     * 「这些值本来就不适用」，`hasConstraints` 仍然 true、退出 0。
+     *
+     * 现在三态分开：
+     * - 合法数字 → 数值
+     * - 明确的 `NA` → null（真的不适用）
+     * - **其它** → 记进 `badCells`，由调用方按输入错误处理
+     */
     const values = {};
     for (let column = 0; column < Math.min(headers.length, cells.length); column += 1) {
       const key = headers[column].replace(/\(ns\)/u, "").trim();
       const raw = cells[column];
-      values[key] = /^NA$/iu.test(raw) ? null : Number(raw);
+      if (/^NA$/iu.test(raw)) {
+        values[key] = null;
+        continue;
+      }
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        badCells.push({ column: key, raw: raw.slice(0, 24), line: i + 1 });
+        values[key] = undefined;
+        continue;
+      }
+      values[key] = parsed;
     }
-    return { values, raw: line };
+    return { values, raw: line, badCells };
   }
   return undefined;
 };
@@ -180,6 +210,23 @@ const main = () => {
   if (summary === undefined) {
     console.error(`读不到 Design Timing Summary：${located.file}`);
     console.error("提示：这是 report_timing_summary 的输出吗？普通 report_timing 没有这段。");
+    process.exit(2);
+  }
+
+  /**
+   * **R09：解析出非数字、非 NA 的单元格 → 输入错误，不当"没有约束"。**
+   *
+   * 这类输入的典型来源：报告被截断、列错位、或者根本不是这一版 Vivado 的格式。
+   * 继续往下算只会给出**看起来正常、实际无意义**的数字。
+   */
+  if (Array.isArray(summary.badCells) && summary.badCells.length > 0) {
+    console.error(`Design Timing Summary 里有 ${String(summary.badCells.length)} 个单元格不是数字也不是 NA：`);
+    for (const cell of summary.badCells.slice(0, 8)) {
+      console.error(`  第 ${String(cell.line)} 行  列「${cell.column}」= ${JSON.stringify(cell.raw)}`);
+    }
+    console.error("");
+    console.error("这通常说明：报告被截断 / 列错位 / 不是这一版 Vivado 的格式。");
+    console.error("本工具不去猜那些值 —— 猜出来的数字看起来正常，实际没有意义。");
     process.exit(2);
   }
 

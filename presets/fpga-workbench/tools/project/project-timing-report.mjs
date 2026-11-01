@@ -70,18 +70,70 @@ const parseArgs = (argv) => {
   return options;
 };
 
-/** 找到报告文件（给目录时按常见命名找）。 */
+/**
+ * 找到报告文件（给目录时按常见命名找）。
+ *
+ * ## R08：多份 routed 报告不能"取第一个"
+ *
+ * 原来是 `candidates.find((path) => /routed/iu.test(path))` ——
+ * 取的是 `readdirSync` 顺序里的第一个。而目录枚举顺序**既不等于生成时间、
+ * 也不等于 run 的新旧**：`a_routed_timing_summary.rpt`（旧，WNS=+1）与
+ * `z_routed_timing_summary.rpt`（新，WNS=-2）并存时会读到旧的那份，
+ * 给上层一个**错误版本的事实**。
+ *
+ * 工具本身不判 PASS，但它报的数字是上层判据的输入 —— 版本错了后面全错。
+ *
+ * 现在：
+ * 1. routed 优先（那才是最终结果），同档按 **mtime 取最新**
+ * 2. **把选择依据打印出来**（多个候选时列出被放弃的）
+ * 3. 候选里混着 synth/impl 时明确说明
+ */
 const locateReport = (target) => {
   if (!existsSync(target)) return { error: `路径不存在：${target}` };
   const stat = statSync(target);
-  if (stat.isFile()) return { file: target };
+  if (stat.isFile()) return { file: target, picked: [{ file: target, reason: "直接用给定文件" }] };
 
   const candidates = readdirSync(target)
     .filter((name) => /timing.*summary.*\.rpt$/iu.test(name))
     .map((name) => join(target, name));
   if (candidates.length === 0) return { error: `${target} 里没有 timing summary 报告` };
-  const routed = candidates.find((path) => /routed/iu.test(path));
-  return { file: routed ?? candidates[0] };
+
+  // 按 mtime 降序；routed 优先
+  const withMeta = candidates.map((path) => {
+    let mtime = 0;
+    try {
+      mtime = statSync(path).mtimeMs;
+    } catch {
+      // 读不到时间就排最后
+    }
+    return { path, mtime, routed: /routed/iu.test(path) };
+  });
+  withMeta.sort((a, b) => {
+    if (a.routed !== b.routed) return a.routed ? -1 : 1;
+    return b.mtime - a.mtime;
+  });
+
+  const chosen = withMeta[0];
+  const others = withMeta.slice(1);
+
+  return {
+    file: chosen.path,
+    picked: [
+      {
+        file: chosen.path,
+        reason:
+          candidates.length === 1
+            ? "唯一候选"
+            : `${String(candidates.length)} 个候选里选 ${chosen.routed ? "routed 优先 + " : ""}mtime 最新`,
+        /** 被放弃的候选（让上层能看出来是否选错了版本）。 */
+        skipped: others.map((item) => ({
+          file: item.path,
+          mtime: item.mtime,
+          routed: item.routed
+        }))
+      }
+    ]
+  };
 };
 
 /**
@@ -244,7 +296,9 @@ const main = () => {
     checks: Object.fromEntries(checks),
     corners,
     clocks,
-    reportVerdict
+    reportVerdict,
+    /** **R08**：多份候选时选的是哪份、为什么，被放弃的是哪些。 */
+    picked: located.picked ?? []
   };
 
   if (options.json) {
@@ -253,6 +307,19 @@ const main = () => {
   }
 
   console.log(`报告：${basename(located.file)}（${String(payload.sizeKB)} KB）`);
+
+  // **R08**：选择依据要说出来 —— 多份 routed 报告并存时不说明就可能读的是旧版
+  for (const item of payload.picked) {
+    if (item.reason !== undefined && item.reason !== "直接用给定文件" && item.reason !== "唯一候选") {
+      console.log(`  选择依据：${item.reason}`);
+    }
+    if (Array.isArray(item.skipped) && item.skipped.length > 0) {
+      const names = item.skipped.map((x) => basename(x.file)).join("、");
+      console.log(`  未采用：${names}`);
+      console.log("  **注意**：目录里有多份候选报告时，本工具按 mtime 取最新 ——");
+      console.log("  但时间新不等于「属于目标 run」。要绝对确定就显式给报告路径。");
+    }
+  }
   console.log("");
 
   // Design Timing Summary

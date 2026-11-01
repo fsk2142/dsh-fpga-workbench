@@ -204,8 +204,26 @@ async function syncMcpClientNow(
     return inspection.reason === "未设置" ? "未启用" : `不可用:${inspection.reason}`;
   }
 
-  // 路径没变:什么都不做(避免每次保存设置都重启一次会话)。
-  if (state.fiber !== undefined && state.path === wanted) return "已连接";
+  /**
+   * 路径没变 → 什么都不做（避免每次保存设置都重启一次会话）。
+   *
+   * **R12：但「有 fiber 且路径相同」不等于「已连接」。**
+   *
+   * 启动失败 + 清理也失败时，状态是这样：`fiber` 保留、`path` 保留、
+   * `pendingDispose` 也保留。此时用户再保存同一个路径，原实现直接返回
+   * 「已连接」—— 而实际上：
+   *
+   * - 那份 fiber **启动就失败了**，从来没连上
+   * - 它的 dispose 还欠着一次（`pendingDispose`）
+   *
+   * 于是 UI 显示「已连接」，MCP 工具却一个都不可用，而且**再也不会重试清理**。
+   *
+   * 所以短路条件要加一条：**没有待清理对象**。有 pendingDispose 就必须往下走
+   * （`unload` 会先重试它，成功后再尝试正常挂载）。
+   */
+  if (state.fiber !== undefined && state.path === wanted && state.pendingDispose === undefined) {
+    return "已连接";
+  }
 
   const previousPath = state.path;
 

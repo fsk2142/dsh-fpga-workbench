@@ -159,11 +159,31 @@ if {![file isfile $bit_keep] || [file size $bit_keep] == 0} {
   fail "archived bitstream missing or empty: $bit_keep"
 }
 set ltx_src [file join $RUN_DIR "${TOP}.ltx"]
+set ltx_keep [file join $BIT_ROOT "${TOP}.ltx"]
 if {[file isfile $ltx_src]} {
-  step "archive debug probes to bit/" { file copy -force $ltx_src [file join $BIT_ROOT "${TOP}.ltx"] }
-  puts "\[run_bitstream\] debug probes: [string map {\\ /} [file join $BIT_ROOT "${TOP}.ltx"]]"
+  step "archive debug probes to bit/" { file copy -force $ltx_src $ltx_keep }
+  puts "\[run_bitstream\] debug probes: [string map {\\ /} $ltx_keep]"
 } else {
   puts "\[run_bitstream\] no .ltx (no ILA/VIO debug probes in this build)"
+  #
+  # **R14：本次没有 ltx 时，别让旧 ltx 冒充「当前探针」。**
+  #
+  # bit 是新的、ltx 是上一版留下的 —— 下游（Vivado 硬件管理器 auto-detect、
+  # 或按约定读 bit/<TOP>.ltx 的脚本）会加载**与新 bit 不匹配的探针表**。
+  # 现象是「探针连上了但信号全错 / 全 0」，极难查。
+  #
+  # 按项目「不永久删除」的约定：**改名保留成带时间戳的失效备份**，不删。
+  # 旧文件还能恢复，而 bit/<TOP>.ltx 这个名字不再指向过期内容。
+  #
+  if {[file isfile $ltx_keep]} {
+    set stale_name "${ltx_keep}.stale-[clock format [clock seconds] -format %Y%m%d-%H%M%S]"
+    if {[catch {file rename $ltx_keep $stale_name} err]} {
+      puts "\[run_bitstream\] WARN: 旧 .ltx 改名失败($err) —— 它可能被当成当前探针，请手工处理: $ltx_keep"
+    } else {
+      puts "\[run_bitstream\] 旧 .ltx 已标记失效: [string map {\\ /} $stale_name]"
+      puts "\[run_bitstream\] 本次构建没有调试探针；旧探针表与新 bit 不匹配，不要使用"
+    }
+  }
 }
 
 puts "\n\[run_bitstream\] BITSTREAM_OUTPUT_GENERATED: [string map {\\ /} $bit_keep]"

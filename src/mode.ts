@@ -172,7 +172,20 @@ async function applyMcp(ctx: ModeContext, state: McpState): Promise<void> {
   try {
     const values = readValues(ctx);
     const wanted = String((values as Record<string, unknown> | undefined)?.[MCP_PATH_KEY] ?? "").trim();
-    if (wanted === state.path) return; // 没变:不重启 MCP 会话
+
+    /**
+     * **R12：不要在 mode 层做「路径没变就跳过」。**
+     *
+     * 原来这里是 `if (wanted === state.path) return;` —— 它把
+     * `syncMcpClient` 整个短路掉。后果：
+     *
+     * - 启动失败 + 清理也失败后，`pendingDispose` 还欠着一次 dispose
+     * - 用户再保存同一个路径 → 这一行直接 return → **永远没有重试机会**
+     *
+     * 「同路径要不要跳过」的判断已经收进 `syncMcpClient`（那里能看到
+     * `fiber` / `pendingDispose` 的完整状态）。**状态一致性只该有一处负责** ——
+     * 两个地方各判一半，必然出现某一半漏掉的情况。
+     */
     const status = await syncMcpClient(ctx as never, wanted, state as never);
     if (wanted !== "" && status !== "已连接") {
       ctx.logger?.info?.(`fpga-workbench: Vivado MCP ${status}`);

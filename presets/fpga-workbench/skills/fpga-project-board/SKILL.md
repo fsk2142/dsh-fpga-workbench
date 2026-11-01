@@ -50,10 +50,29 @@ description: 把 bit/ 中与当前代码对应的 bitstream 下载到板卡验�
 时间上完全分不开。所以上板前两项都要过:
 
 ```
-node project-bit-manifest.mjs <工程根>     # 0=一致 / 1=不一致 / 3=缺 manifest
+node project-bit-manifest.mjs <工程根>     # 0=文件一致 / 1=不一致 / 2=输入错误 / 3=缺 manifest
 ```
 
-缺 manifest 记 `UNVERIFIED` —— 那时**只有**时间证据,不能说「bit 与源码匹配」。
+**注意 `0` 有两个档次的含义**,看输出里的「来源」那一行:
+
+| provenance | 含义 | 能不能说「来源已验证」 |
+|---|---|---|
+| `verified` | 走过 `--begin` / `--end` 两阶段,**构建期间输入未变** | ✅ 能 |
+| `hand-recorded` | 手工补录,只记了写那一刻的哈希 | ❌ **不能** |
+| `unknown` | 旧版 manifest 没这个字段 | ❌ 不能 |
+
+**`hand-recorded` 为什么不能当证据**:先改源码、再补一次 `--write` 也会得到同样的
+文件一致 —— 哈希能证明文件没变,不能单独证明因果关系。
+
+要真证明来源,用两阶段:
+
+```
+node project-bit-manifest.mjs <工程根> --begin --top <顶层名>   # 跑 Vivado 之前
+（跑 Vivado 出 bit,期间不要改 RTL/XDC/IP）
+node project-bit-manifest.mjs <工程根> --end   --top <顶层名>   # 出完 bit 之后
+```
+
+`--end` 会核对构建期间的输入摘要;**变了就拒绝**,不会写出 manifest。
 
 **为什么这四项是硬性的**:
 

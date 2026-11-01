@@ -105,19 +105,34 @@ bit/<顶层>.ltx
 bit/<顶层>.manifest.json    ← 来源身份,见下
 ```
 
-**拷完立刻写 manifest**(记下这份 bit 是**由哪份源码**构建的):
+**写 manifest 有两种方式,结论强度不同 —— 用两阶段的那条。**
 
 ```
-node project-bit-manifest.mjs <工程根> --write --top <顶层名>
+# ① 构建前(跑 Vivado 之前)
+node project-bit-manifest.mjs <工程根> --begin --top <顶层名>
+
+# ② 跑 Vivado 出 bit,期间不要改 RTL/XDC/IP
+
+# ③ 构建后(出完 bit、拷进 bit/ 之后)
+node project-bit-manifest.mjs <工程根> --end --top <顶层名>
 ```
 
-它记 PART、顶层、源摘要(RTL/XDC/IP 合并 sha256)、bit 的 sha256、时间。
-**为什么必须要**:文件修改时间证明不了来源 —— 把另一版设计的旧 bit 复制过来,
-mtime 就变成今天,时间上完全分不开。有了 manifest 才能回答
-「这份 bit 是不是这份源码构建的」。
+这样得到的 `provenance` 是 **`verified`** —— `--end` 会核对构建期间的输入摘要,
+**变了就拒绝**,不写 manifest。那才是「这份 bit 由这份源码构建」的证据。
 
-上板前用 `project-bit-manifest.mjs <工程根>` 核对:
-源摘要或 bit 摘要任一对不上 → 这份 bit 不能当当前源码的产物。
+`--write` 也能生成 manifest,但只记「写这一刻」的哈希,标 **`hand-recorded`**:
+
+| provenance | 含义 | 上板前能不能说「来源已验证」 |
+|---|---|---|
+| `verified` | 两阶段,构建期间输入未变 | ✅ |
+| `hand-recorded` | 手工补录,**无构建过程佐证** | ❌ |
+
+**为什么 `hand-recorded` 不算证据**:先改源码、再补一次 `--write`,
+文件照样一致 —— 哈希能证明文件没变,不能单独证明因果关系。
+
+上板前用 `project-bit-manifest.mjs <工程根> --top <顶层名>` 核对:
+文件不一致 → 这份 bit 不能当当前源码的产物;文件一致但 `hand-recorded` →
+来源仍**未验证**,别写成"匹配"。
 
 上板、发布以 `bit/` 为准。拷完在 `doc/impl.md` 写明来源 run 与时间,并更新 `doc/files.md`。
 

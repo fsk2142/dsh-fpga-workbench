@@ -15,18 +15,38 @@
  *
  * ## 做什么
  *
- * 两个动作：
+ * 三个动作：
  *
  * | 动作 | 命令 | 时机 |
  * |---|---|---|
- * | **写** | `--write` | 出完 bit 之后，把身份写进 `bit/<顶层>.manifest.json` |
- * | **核** | 默认 | 上板前（P0-4）核对 manifest 与当前源码是否对得上 |
+ * | **构建前** | `--begin` | 跑 Vivado **之前**：记下输入摘要与时间戳 |
+ * | **构建后** | `--end` | 出完 bit **之后**：核对输入没变，写 manifest（`provenance=verified`） |
+ * | **核** | 默认 | 上板前（P0-4）核对 manifest 与当前源码 |
+ *
+ * 另有 `--write`：**没有 begin/end 时的手工补录**，写出来的
+ * `provenance=hand-recorded`，**不能当"构建来源已验证"**。
+ *
+ * ## R03：`provenance` 是要紧的那个字段
+ *
+ * 报告指出的核心问题：**哈希能证明文件没变，不能单独证明因果关系。**
+ *
+ * > 这不是恶意篡改场景，普通的「先改源码，后补清单」就会发生。
+ *
+ * 所以结论分成两件事，别混着说：
+ *
+ * | 结论 | 含义 | 谁给的 |
+ * |---|---|---|
+ * | `files consistent` | 文件与快照一致（哈希比得过） | 任何模式 |
+ * | `provenance` | 构建来源是否**已验证** | 只有 `--begin` + `--end` 能给 `verified` |
+ *
+ * `--write` 只是「写这一刻两组文件的哈希」—— 它不知道 bit 是哪次构建出来的。
+ * 那正是 `hand-recorded` 的含义：**有记录，但没有构建过程佐证**。
  *
  * manifest 内容：
  *
  * ```json
  * {
- *   "schema": 1,
+ *   "schema": 2,
  *   "top": "top",
  *   "part": "xc7a100tfgg484-2",
  *   "bit": { "file": "top.bit", "sha256": "...", "bytes": 1234567 },
@@ -56,7 +76,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 
-const MANIFEST_SCHEMA = 1;
+const MANIFEST_SCHEMA = 2;
 
 /**
  * 参与「源摘要」的目录。
@@ -113,24 +133,54 @@ const CRITICAL_EXTS = new Set([".mem", ".coe", ".mif", ".hex", ".xci", ".xcix", 
 
 const usage = (code = 2) => {
   const write = code === 0 ? console.log : console.error;
-  write("用法：node project-bit-manifest.mjs <工程根> [--write] [--top <名>] [--part <part>] [--json]");
+  write("用法：node project-bit-manifest.mjs <工程根> [--begin|--end|--write] [--top <名>] [--part <part>] [--force] [--json]");
   write("");
   write("  默认：核对 bit/<顶层>.manifest.json 与当前源码是否一致。");
-  write("  --write：出完 bit 之后写 manifest（把构建身份记下来）。");
+  write("");
+  write("  两种记录来源的方式，结论强度不同：");
+  write("");
+  write("    --begin / --end    **构建前/后两阶段**（能证明来源）");
+  write("         --begin   跑 Vivado **之前**执行：记下输入摘要");
+  write("         --end     出完 bit **之后**执行：核对输入没变 → provenance=verified");
+  write("         --end 时如果输入摘要与 --begin 不符，会**拒绝**并说「构建期间源码变了」");
+  write("");
+  write("    --write            手工补录（provenance=hand-recorded）");
+  write("         只记录「写这一刻」两组文件的哈希 —— 它不知道 bit 是哪次构建出来的。");
+  write("         **不能当「构建来源已验证」**。普通的「先改源码、后补清单」就会用到它。");
   write("");
   write("  --top <名>    顶层名（写入时必填；校验时缺省则读 manifest 里的）");
-  write("  --part <名>   器件型号（写入时可选，缺省读 doc/spec.md 或留空）");
+  write("  --part <名>   器件型号；**校验时给了就比对**，不符即失败");
+  write("  --force       覆盖已有 manifest（默认拒绝，先留 .bak 快照）");
   write("  --json        机器可读输出");
   write("");
-  write("退出码：0 一致/写入成功；1 不一致；2 输入错误；3 缺 manifest（来源无法证明）。");
+  write("退出码：0 一致/写入成功；1 不一致；2 输入错误；3 缺 manifest / 来源未验证。");
   process.exit(code);
 };
 
 const parseArgs = (argv) => {
-  const options = { root: "", write: false, top: "", part: "", json: false, force: false };
+  const options = {
+    root: "",
+    write: false,
+    begin: false,
+    end: false,
+    top: "",
+    part: "",
+    json: false,
+    force: false
+  };
   const rest = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    // **R03**：两阶段 —— 构建前 `--begin`、构建后 `--end`。
+    // 只有走这两步才拿得到 `provenance=verified`。
+    if (arg === "--begin") {
+      options.begin = true;
+      continue;
+    }
+    if (arg === "--end") {
+      options.end = true;
+      continue;
+    }
     if (arg === "--write") {
       options.write = true;
       continue;
@@ -268,7 +318,135 @@ const main = () => {
   const bitDir = join(root, "bit");
   const digest = sourceDigest(root);
 
-  // ── 写入模式 ──
+  /** 「构建意图」文件：`--begin` 写、`--end` 读。 */
+  const INTENT_FILE = ".fpga-build-intent.json";
+
+  // ── R03 `--begin`：构建前记下输入摘要 ──
+  if (options.begin) {
+    if (options.top === "") {
+      console.error("--begin 需要 --top <顶层名>。");
+      process.exit(2);
+    }
+    const intent = {
+      schema: 1,
+      top: options.top,
+      part: options.part !== "" ? options.part : partFromSpec(root),
+      inputs: { sha256: digest.sha256, files: digest.files },
+      begunAt: new Date().toISOString()
+    };
+    const intentPath = join(root, INTENT_FILE);
+    writeFileSync(intentPath, `${JSON.stringify(intent, null, 2)}\n`, "utf8");
+
+    if (options.json) {
+      console.log(JSON.stringify({ begun: true, intent: intentPath, body: intent }, null, 2));
+    } else {
+      console.log(`已记录构建意图：${intentPath}`);
+      console.log(`  顶层：${intent.top}   器件：${intent.part === "" ? "(未填)" : intent.part}`);
+      console.log(`  输入摘要：${digest.sha256.slice(0, 16)}…（${String(digest.files)} 个文件）`);
+      console.log("");
+      console.log("现在去跑 Vivado 出 bit；出完用 --end 收尾。");
+      console.log("**构建期间不要改 RTL/XDC/IP** —— --end 会核对这一点，改了会被拒。");
+    }
+    return;
+  }
+
+  // ── R03 `--end`：构建后核对输入没变，再写 manifest（verified）──
+  if (options.end) {
+    const intentPath = join(root, INTENT_FILE);
+    if (!existsSync(intentPath)) {
+      console.error(`找不到构建意图：${intentPath}`);
+      console.error("");
+      console.error("--end 必须配 --begin 用 —— 没有构建前的记录，就无法证明");
+      console.error("「这份 bit 是由这份源码构建的」。");
+      console.error("");
+      console.error("如果你只是想补一条记录，用 --write（会标成 hand-recorded）。");
+      process.exit(2);
+    }
+
+    let intent;
+    try {
+      intent = JSON.parse(readFileSync(intentPath, "utf8"));
+    } catch (error) {
+      console.error(`构建意图读不了：${error instanceof Error ? error.message : String(error)}`);
+      process.exit(2);
+    }
+
+    const top = options.top !== "" ? options.top : String(intent.top ?? "");
+    if (top === "") {
+      console.error("--end 需要 --top（或 --begin 时记过）。");
+      process.exit(2);
+    }
+
+    /**
+     * **R03 的核心：构建期间输入不能变。**
+     *
+     * 如果变了，说明这份 bit 对应的不是当前源码 —— 那正是
+     * 「先改源码、后补清单」会掩盖的情况。这里直接拒绝。
+     */
+    if (digest.sha256 !== intent.inputs?.sha256) {
+      console.error("构建期间源码变了 —— 拒绝关联。");
+      console.error("");
+      console.error(`  --begin 时：${String(intent.inputs?.sha256).slice(0, 16)}…（${String(intent.inputs?.files)} 个文件）`);
+      console.error(`  现在：      ${digest.sha256.slice(0, 16)}…（${String(digest.files)} 个文件）`);
+      console.error("");
+      console.error("这份 bit 对应的不是当前源码。重新构建，或把源码改回去。");
+      process.exit(1);
+    }
+
+    const bitFile = join(bitDir, `${top}.bit`);
+    if (!existsSync(bitFile)) {
+      console.error(`找不到 bit：${bitFile}`);
+      process.exit(2);
+    }
+
+    const bitInfo = fileDigest(bitFile);
+    const manifest = {
+      schema: MANIFEST_SCHEMA,
+      top,
+      part: options.part !== "" ? options.part : String(intent.part ?? ""),
+      /** **R03**：走 begin/end 两阶段才有的标记。 */
+      provenance: "verified",
+      provenanceNote: `由 --begin(${String(intent.begunAt)}) 与 --end 两阶段记录；构建期间输入摘要未变`,
+      bit: { file: `${top}.bit`, sha256: bitInfo?.sha256 ?? "", bytes: bitInfo?.bytes ?? 0 },
+      inputs: {
+        sha256: digest.sha256,
+        files: digest.files,
+        scannedDirs: digest.scannedDirs,
+        criticalFiles: digest.criticalFiles,
+        criticalList: digest.criticalList
+      },
+      build: {
+        tool: process.env.VIVADO_VERSION ?? "",
+        runId: process.env.IMPL_RUN_ID ?? "",
+        at: new Date().toISOString(),
+        beganAt: intent.begunAt
+      }
+    };
+
+    const out = join(bitDir, `${top}.manifest.json`);
+    if (existsSync(out) && !options.force) {
+      console.error(`manifest 已存在，未覆盖：${out}`);
+      console.error("要更新：显式加 --force（会先留 .bak 快照）。");
+      process.exit(3);
+    }
+    if (existsSync(out)) {
+      const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
+      copyFileSync(out, `${out}.bak-${stamp}`);
+    }
+    writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+    if (options.json) {
+      console.log(JSON.stringify({ written: true, provenance: "verified", manifest: out }, null, 2));
+    } else {
+      console.log(`已写入：${out}`);
+      console.log(`  来源：**verified**（--begin 与 --end 两阶段，构建期间输入未变）`);
+      console.log(`  bit sha256：${manifest.bit.sha256.slice(0, 16)}…`);
+      console.log(`  输入摘要：${digest.sha256.slice(0, 16)}…（${String(digest.files)} 个文件）`);
+    }
+    return;
+  }
+
+  // ── 写入模式（手工补录 → hand-recorded）──
   if (options.write) {
     if (options.top === "") {
       console.error("写入模式需要 --top <顶层名>（manifest 要按顶层名找 manifest 文件）。");
@@ -288,6 +466,18 @@ const main = () => {
       schema: MANIFEST_SCHEMA,
       top: options.top,
       part,
+      /**
+       * **R03：手工补录只能到 hand-recorded。**
+       *
+       * `--write` 记的是「写这一刻」两组文件的哈希 —— 它**不知道 bit 是哪次构建
+       * 出来的**。普通的「先改源码、后补清单」就会走到这条路上。
+       *
+       * 所以这里如实标成 hand-recorded，校验时**不能**升级成「来源已验证」。
+       */
+      provenance: "hand-recorded",
+      provenanceNote:
+        "手工补录：只记录写这一刻的输入与 bit 哈希，没有构建过程佐证。" +
+        "要证明来源需用 --begin / --end 两阶段。",
       bit: { file: `${options.top}.bit`, sha256: bitInfo?.sha256 ?? "", bytes: bitInfo?.bytes ?? 0 },
       // **R02**：把「扫了哪些目录、其中多少是必定影响 bitstream 的输入」也记下来。
       // 这样看 manifest 的人能自己判断覆盖够不够，而不是以为「有摘要 = 全扫了」。
@@ -370,6 +560,32 @@ const main = () => {
         .map((name) => join(existsSync(bitDir) ? bitDir : root, name))
     : [join(bitDir, `${top}.manifest.json`)];
 
+  /**
+   * **R03a：多份 manifest 时不许静默取第一份。**
+   *
+   * 原来 `const manifestPath = candidates[0]` —— 目录里同时有 `top.manifest.json`
+   * 与 `other.manifest.json` 时，读到哪份取决于目录枚举顺序。
+   * 更糟的是：**可能拿别的工程的 manifest 来"证明"这份 bit**。
+   *
+   * 现在要求 `--top` 显式指定。
+   */
+  if (top === "" && candidates.length > 1) {
+    const names = candidates.map((path) => path.split(/[\\/]/u).pop()).join("、");
+    const message = [
+      `目录里有 ${String(candidates.length)} 份 manifest，无法确定核对哪一份：`,
+      `  ${names}`,
+      "",
+      "用 --top <顶层名> 明确指定。",
+      "**不自动取第一份** —— 那可能拿别的工程的记录来证明这份 bit。"
+    ].join("\n");
+    if (options.json) {
+      console.log(JSON.stringify({ verdict: "UNVERIFIED", reason: "ambiguous-manifest", candidates }, null, 2));
+    } else {
+      console.log(message);
+    }
+    process.exit(2);
+  }
+
   const manifestPath = candidates[0];
   if (manifestPath === undefined || !existsSync(manifestPath)) {
     const message = [
@@ -378,7 +594,12 @@ const main = () => {
       "时间检查只能说明「bit 文件比源码新」，证明不了「bit 由这份源码构建」。",
       "把另一版设计的旧 bit 复制过来，mtime 就变成今天 —— 时间上分不开。",
       "",
-      "补法（出完 bit 之后跑一次）：",
+      "补法（推荐：构建前后两阶段）：",
+      `  node project-bit-manifest.mjs <工程根> --begin --top ${top === "" ? "<顶层名>" : top}`,
+      "  ...跑 Vivado 出 bit...",
+      `  node project-bit-manifest.mjs <工程根> --end --top ${top === "" ? "<顶层名>" : top}`,
+      "",
+      `或手工补录（会标成 hand-recorded，不能当"来源已验证"）：`,
       `  node project-bit-manifest.mjs <工程根> --write --top ${top === "" ? "<顶层名>" : top}`,
       "",
       "在此之前，P0-4 只能报「时间新鲜」，**不能报「来源一致」**。"
@@ -402,8 +623,30 @@ const main = () => {
   /** 逐项核对，收集不一致。 */
   const problems = [];
 
-  if (manifest.schema !== MANIFEST_SCHEMA) {
-    problems.push(`manifest schema 是 ${String(manifest.schema)}，本工具认 ${String(MANIFEST_SCHEMA)} —— 请重新生成`);
+  /** **R03a：给了 `--part` 就与实际比对**（原来接受但不比对）。 */
+  if (options.part !== "") {
+    const recorded = String(manifest.part ?? "");
+    if (recorded === "") {
+      problems.push(`manifest 里没记器件型号，无法与 --part ${options.part} 比对`);
+    } else if (recorded !== options.part) {
+      problems.push(`器件型号不符：manifest 记 ${recorded}，你指定 ${options.part} —— 可能拿错 bit`);
+    }
+  }
+
+  /**
+   * schema 版本：**旧版可以被读，但要标出来**。
+   *
+   * schema 1 的 manifest 没有 `provenance` 字段 —— 那些记录只能证明"文件一致"，
+   * 证明不了来源。直接判 FAIL 会让人困惑（文件明明没变），
+   * 所以改成：**能读、能比哈希，但来源按 unknown 处理**（见下面 verdict 那段的提示）。
+   *
+   * 只有比当前**更新**的 schema 才拒绝 —— 那种情况本工具不知道有没有漏读字段。
+   */
+  if (typeof manifest.schema === "number" && manifest.schema > MANIFEST_SCHEMA) {
+    problems.push(
+      `manifest schema 是 ${String(manifest.schema)}，比本工具认的 ${String(MANIFEST_SCHEMA)} 更新 —— ` +
+        "请升级工具，本版本可能漏读字段"
+    );
   }
 
   // ① bit 内容
@@ -432,11 +675,30 @@ const main = () => {
 
   const verdict = problems.length === 0 ? "PASS" : "FAIL";
 
+  /**
+   * **R03：`provenance` 与「文件一致」是两个结论，别混着说。**
+   *
+   * | provenance | 含义 |
+   * |---|---|
+   * | `verified` | 走过 `--begin` / `--end`，**构建期间输入未变** |
+   * | `hand-recorded` | 手工补录，只记了写那一刻的哈希，**没有构建过程佐证** |
+   * | `unknown` | 老版本 manifest 没这个字段 |
+   *
+   * 原来的 PASS 文案说「这才叫 bit 是这份源码构建出来的」——
+   * 而 `--write` 路径根本证明不了因果：先改源码、再补清单照样 PASS。
+   */
+  const provenance = typeof manifest.provenance === "string" ? manifest.provenance : "unknown";
+
   if (options.json) {
     console.log(
       JSON.stringify(
         {
           verdict,
+          /** 文件与快照是否一致（哈希比对）。 */
+          filesConsistent: problems.length === 0,
+          /** 构建来源是否已验证 —— 与上面那一行**不是同一件事**。 */
+          provenance,
+          provenanceNote: manifest.provenanceNote,
           manifest: manifestPath,
           top: manifest.top,
           part: manifest.part,
@@ -452,10 +714,35 @@ const main = () => {
     console.log(`manifest：${manifestPath}`);
     console.log(`  顶层：${manifest.top ?? "(未记)"}   器件：${manifest.part === "" ? "(未记)" : (manifest.part ?? "(未记)")}`);
     console.log(`  写于：${manifest.build?.at ?? "(未记)"}${manifest.build?.tool === "" ? "" : `  工具：${manifest.build?.tool}`}`);
+    console.log(`  来源：${
+      provenance === "verified"
+        ? "**verified**（--begin/--end 两阶段，构建期间输入未变）"
+        : provenance === "hand-recorded"
+          ? "**hand-recorded**（手工补录，无构建过程佐证）"
+          : "**unknown**（旧版 manifest 没记这个字段）"
+    }`);
     console.log("");
+
     if (verdict === "PASS") {
-      console.log("PASS：bit 内容与源摘要都和 manifest 一致 —— **来源一致**。");
-      console.log("      这才叫「bit 是这份源码构建出来的」，时间新鲜只是必要条件。");
+      console.log("文件一致：bit 内容与源摘要都和 manifest 记的一致。");
+
+      // **这正是 R03 要修的地方** —— 不能说「这才叫构建出来的」。
+      if (provenance === "verified") {
+        console.log("来源已验证：这份 bit 由 `--end` 那次构建产生，构建期间输入摘要未变。");
+      } else if (provenance === "hand-recorded") {
+        console.log("");
+        console.log("⚠️  但**来源未验证** —— 这是手工补录的记录。");
+        console.log("    它只说明「写清单那一刻，这两组文件的哈希是这样」。");
+        console.log("    **先改源码、再补一次 `--write` 也会得到同样的 PASS。**");
+        console.log("");
+        console.log("    要证明「bit 是这份源码构建的」，用两阶段：");
+        console.log("      --begin（构建前）→ 跑 Vivado → --end（构建后）");
+        console.log("    `--end` 会核对构建期间输入没变，那才是因果证据。");
+      } else {
+        console.log("");
+        console.log("⚠️  这份 manifest 没记 `provenance`（旧版工具写的），来源**无法判定**。");
+        console.log("    重新用 --begin/--end 记一次，或至少 --write 重写以标注 hand-recorded。");
+      }
     } else {
       console.log(`FAIL：${String(problems.length)} 项对不上：`);
       for (const problem of problems) console.log(`  ✗ ${problem}`);

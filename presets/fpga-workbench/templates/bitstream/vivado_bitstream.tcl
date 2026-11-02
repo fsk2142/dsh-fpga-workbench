@@ -226,9 +226,36 @@ if {[file isfile $ltx_src]} {
   # 旧文件还能恢复，而 bit/<TOP>.ltx 这个名字不再指向过期内容。
   #
   if {[file isfile $ltx_keep]} {
-    set stale_name "${ltx_keep}.stale-[clock format [clock seconds] -format %Y%m%d-%H%M%S]"
+    #
+    # **G01：改名失败不能只 WARN 就继续当成功。**
+    #
+    # 上一版这里 catch 住只打 WARN，然后照样走到 `exit 0` 与
+    # `BITSTREAM_ARCHIVED` —— 而磁盘上 `bit/<TOP>.bit`（新）与
+    # `bit/<TOP>.ltx`（旧）**并存**，下游按同名对选探针就会读到旧表。
+    #
+    # 现在：**先尝试失效，成功才继续**；失败就退非零，并说清"已经发生了什么"。
+    #
+    # 备份名不用 `clock`：精简 tclsh（如 Vivado 自带的 `tclsh86t` 在 init.tcl
+    # 缺失时）没有这个命令，用了会让整份脚本崩在归档阶段。
+    # 用「找下一个不冲突的名字」代替时间戳 —— 天然避免同秒撞名。
+    #
+    set suffix 0
+    set stale_name "${ltx_keep}.stale"
+    while {[file exists $stale_name]} {
+      incr suffix
+      set stale_name "${ltx_keep}.stale-${suffix}"
+      if {$suffix > 99} { break }
+    }
     if {[catch {file rename $ltx_keep $stale_name} err]} {
-      puts "\[run_bitstream\] WARN: 旧 .ltx 改名失败($err) —— 它可能被当成当前探针，请手工处理: $ltx_keep"
+      puts "\[run_bitstream\] FAIL: 旧 .ltx 无法失效($err)"
+      puts "\[run_bitstream\]   现役产物集合不一致：bit/${TOP}.bit 是本次新产物，"
+      puts "\[run_bitstream\]   而 bit/${TOP}.ltx 仍是上一次的调试探针表。"
+      puts "\[run_bitstream\]   下游按同名对加载探针时会读到与新 bit 不匹配的旧表。"
+      puts "\[run_bitstream\]   已经发生：bit 已归档到 [string map {\\ /} $bit_keep]；旧 ltx 未动。"
+      puts "\[run_bitstream\]   处置：关掉占用 bit/${TOP}.ltx 的程序（Vivado 硬件管理器 / 编辑器），重跑本脚本；"
+      puts "\[run_bitstream\]         或手工把它改名留档，再重跑。**不要**直接连板子。"
+      catch { close_project }
+      exit 2
     } else {
       puts "\[run_bitstream\] 旧 .ltx 已标记失效: [string map {\\ /} $stale_name]"
       puts "\[run_bitstream\] 本次构建没有调试探针；旧探针表与新 bit 不匹配，不要使用"

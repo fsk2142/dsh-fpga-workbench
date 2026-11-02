@@ -4316,6 +4316,91 @@ if (vsimPath === undefined) {
       trickyResult.output.slice(-250)
     );
   }
+
+  /**
+   * bit 来源清单（project-bit-manifest.mjs）—— provenance 语义。
+   *
+   * **G02 / N01**：旧版工具的两阶段**不跑 Vivado 也会写 `verified`**。
+   * 那版已被替换，但写在磁盘上的清单还在。读取时必须降级，
+   * 否则升级代码不解决已经落盘的错误结论。
+   */
+  console.log("\n=== bit 来源清单（project-bit-manifest.mjs）===");
+  {
+    const manifestTool = projectTool("project-bit-manifest.mjs");
+
+    /** 造工程：一个 RTL + 一份 bit。 */
+    const makeBitProj = (label) => {
+      const dir = scratch(label, {
+        "src/rtl/top.sv": "module top; endmodule\n",
+        "bit/top.bit": "BIT_CONTENT"
+      });
+      return dir;
+    };
+
+    const runManifest = (proj, args) => runTool(manifestTool, [proj, ...args], proj);
+
+    // ① 两阶段 → input-snapshot-matched（不是 verified）
+    const twoPhase = makeBitProj("manifest-two-phase");
+    const begin = runManifest(twoPhase, ["--begin", "--top", "top"]);
+    check(begin.status === 0, `--begin 成功(实际 ${String(begin.status)})`, begin.output.slice(-250));
+    const end = runManifest(twoPhase, ["--end", "--top", "top"]);
+    check(end.status === 0, `--end 成功(实际 ${String(end.status)})`, end.output.slice(-250));
+    check(/input-snapshot-matched/u.test(end.output), "--end 标 input-snapshot-matched（不是 verified）", end.output.slice(-300));
+    check(!/provenance=verified|来源已验证/u.test(end.output), "**不**宣称 verified", end.output.slice(-300));
+
+    // ② 构建期间改源码 → --end 拒绝
+    const changed = makeBitProj("manifest-changed");
+    runManifest(changed, ["--begin", "--top", "top"]);
+    writeFileSync(join(changed, "src", "rtl", "top.sv"), "module top; wire x; endmodule\n");
+    const changedEnd = runManifest(changed, ["--end", "--top", "top"]);
+    check(changedEnd.status === 1, `构建期间改源码 → 拒绝(实际 ${String(changedEnd.status)})`, changedEnd.output.slice(-300));
+    // 「构建期间源码变了」这句走 stderr（runTool 只接 stdout）——
+    // 退出码 1 本身就是「拒绝关联」的证据，文案另有直接验证。
+
+    // ③ --end 的 top 与 --begin 不一致 → 拒绝
+    const mismatch = makeBitProj("manifest-top-mismatch");
+    runManifest(mismatch, ["--begin", "--top", "top"]);
+    const mismatchEnd = runManifest(mismatch, ["--end", "--top", "other"]);
+    check(mismatchEnd.status === 2, `top 与 --begin 不一致 → 退 2(实际 ${String(mismatchEnd.status)})`, mismatchEnd.output.slice(-300));
+
+    /**
+     * ④ **G02**：旧版写的 `verified` 读取时降级为 `legacy-unverified`。
+     *
+     * 用**本工具写出正确哈希**，再只改 provenance 字段 —— 模拟旧版（7ef3792）
+     * 正常生成的那份清单（它确实会写 verified）。
+     */
+    const legacy = makeBitProj("manifest-legacy-verified");
+    runManifest(legacy, ["--write", "--top", "top"]);
+    const legacyPath = join(legacy, "bit", "top.manifest.json");
+    if (existsSync(legacyPath)) {
+      const body = JSON.parse(readFileSync(legacyPath, "utf8"));
+      body.provenance = "verified";
+      body.provenanceNote = "由 --begin(...) 与 --end 两阶段记录；构建期间输入摘要未变";
+      writeFileSync(legacyPath, JSON.stringify(body, null, 2));
+
+      const legacyResult = runManifest(legacy, ["--top", "top", "--json"]);
+      check(
+        /"provenance":\s*"legacy-unverified"/u.test(legacyResult.output),
+        "**旧版 verified 降级为 legacy-unverified**",
+        legacyResult.output.slice(-400)
+      );
+      check(/"recordedProvenance":\s*"verified"/u.test(legacyResult.output), "recordedProvenance 保留原值（历史事实）", legacyResult.output.slice(-400));
+      check(/"downgraded":\s*true/u.test(legacyResult.output), "downgraded=true", legacyResult.output.slice(-400));
+      check(/"filesConsistent":\s*true/u.test(legacyResult.output), "文件一致仍如实报（不走极端）", legacyResult.output.slice(-400));
+
+      const legacyText = runManifest(legacy, ["--top", "top"]);
+      check(!/来源已验证/u.test(legacyText.output), "**文本里也不说「来源已验证」**", legacyText.output.slice(-400));
+    } else {
+      check(false, "旧版清单夹具没生成出来");
+    }
+
+    // ⑤ 手工补录 → hand-recorded，且不降级
+    const hand = makeBitProj("manifest-hand");
+    runManifest(hand, ["--write", "--top", "top"]);
+    const handResult = runManifest(hand, ["--top", "top", "--json"]);
+    check(/"provenance":\s*"hand-recorded"/u.test(handResult.output), "手工补录标 hand-recorded", handResult.output.slice(-400));
+    check(/"downgraded":\s*false/u.test(handResult.output), "hand-recorded 不降级", handResult.output.slice(-400));
+  }
 }
 
 console.log(failures.length > 0 ? `\nFAIL (${failures.length}): ${failures.join(" | ")}` : "\nPASS: 自带工具脚本判定正确(含自带模板自洽)");

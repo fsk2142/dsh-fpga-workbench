@@ -20,7 +20,7 @@
  * | 动作 | 命令 | 时机 |
  * |---|---|---|
  * | **构建前** | `--begin` | 跑 Vivado **之前**：记下输入摘要与时间戳 |
- * | **构建后** | `--end` | 出完 bit **之后**：核对输入没变，写 manifest（`provenance=verified`） |
+ * | **构建后** | `--end` | 出完 bit **之后**：核对输入没变，写 manifest（`provenance=input-snapshot-matched`） |
  * | **核** | 默认 | 上板前（P0-4）核对 manifest 与当前源码 |
  *
  * 另有 `--write`：**没有 begin/end 时的手工补录**，写出来的
@@ -139,9 +139,10 @@ const usage = (code = 2) => {
   write("");
   write("  两种记录来源的方式，结论强度不同：");
   write("");
-  write("    --begin / --end    **构建前/后两阶段**（能证明来源）");
+  write("    --begin / --end    **构建前/后两阶段**（核对输入摘要前后一致）");
   write("         --begin   跑 Vivado **之前**执行：记下输入摘要");
-  write("         --end     出完 bit **之后**执行：核对输入没变 → provenance=verified");
+  write("         --end     出完 bit **之后**执行：核对输入没变 → provenance=input-snapshot-matched");
+  write("                   **注意**：这只说明前后摘要一致，不证明构建真的发生过。");
   write("         --end 时如果输入摘要与 --begin 不符，会**拒绝**并说「构建期间源码变了」");
   write("");
   write("    --write            手工补录（provenance=hand-recorded）");
@@ -172,7 +173,7 @@ const parseArgs = (argv) => {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     // **R03**：两阶段 —— 构建前 `--begin`、构建后 `--end`。
-    // 只有走这两步才拿得到 `provenance=verified`。
+    // 只有走这两步才拿得到 `provenance=input-snapshot-matched`。
     if (arg === "--begin") {
       options.begin = true;
       continue;
@@ -710,18 +711,45 @@ const main = () => {
   const verdict = problems.length === 0 ? "PASS" : "FAIL";
 
   /**
-   * **R03：`provenance` 与「文件一致」是两个结论，别混着说。**
+   * **R03 / G02：`provenance` 要分开「记录里写的」与「当前工具实际认的」。**
    *
-   * | provenance | 含义 |
+   * ## G02：为什么读取时也要降级
+   *
+   * 上一版（7ef3792）的 `--begin/--end` **不跑 Vivado 也会写 `verified`**。
+   * 那个版本已经被换掉了，但它**写在磁盘上的清单还在**。
+   *
+   * 如果校验时原样信任 `manifest.provenance`，那些旧清单会继续显示
+   * 「来源已验证」—— 升级代码不解决已经落盘的错误结论。
+   *
+   * ## 现在两个字段
+   *
+   * | 字段 | 含义 |
    * |---|---|
-   * | `verified` | 走过 `--begin` / `--end`，**构建期间输入未变** |
-   * | `hand-recorded` | 手工补录，只记了写那一刻的哈希，**没有构建过程佐证** |
-   * | `unknown` | 老版本 manifest 没这个字段 |
+   * | `recordedProvenance` | **记录里写的原值**（历史事实，不改写文件） |
+   * | `provenance` | **当前工具实际认的状态**（可能比记录低） |
    *
-   * 原来的 PASS 文案说「这才叫 bit 是这份源码构建出来的」——
-   * 而 `--write` 路径根本证明不了因果：先改源码、再补清单照样 PASS。
+   * 当前工具不再产出 `verified`（那需要受控构建调用记录，本版本没有）。
+   * 所以读到 `verified` 时一律降成 `legacy-unverified` —— 不要求用户覆盖旧清单，
+   * 读取时就如实降级并给迁移说明。
    */
-  const provenance = typeof manifest.provenance === "string" ? manifest.provenance : "unknown";
+  const recordedProvenance = typeof manifest.provenance === "string" ? manifest.provenance : "unknown";
+
+  /**
+   * 把「记录里写的」翻成「当前工具认的」。
+   *
+   * - `input-snapshot-matched` → 原样（那是本版本刚写的，语义已经如实）
+   * - `hand-recorded` → 原样
+   * - **`verified` → `legacy-unverified`**（旧版两阶段写的，没有受控构建证据）
+   * - 其它/缺失 → `unknown`
+   */
+  const DOWNGRADE = {
+    "input-snapshot-matched": "input-snapshot-matched",
+    "hand-recorded": "hand-recorded",
+    verified: "legacy-unverified",
+    unknown: "unknown"
+  };
+  const provenance = DOWNGRADE[recordedProvenance] ?? "unknown";
+  const downgraded = recordedProvenance !== provenance;
 
   if (options.json) {
     console.log(
@@ -730,8 +758,17 @@ const main = () => {
           verdict,
           /** 文件与快照是否一致（哈希比对）。 */
           filesConsistent: problems.length === 0,
-          /** 构建来源是否已验证 —— 与上面那一行**不是同一件事**。 */
+          /**
+           * **当前工具实际认的来源状态** —— 与上面那一行**不是同一件事**。
+           *
+           * 只有本版本写出的 `input-snapshot-matched` / `hand-recorded` 会原样保留；
+           * 旧版的 `verified` 一律降成 `legacy-unverified`（见 G02）。
+           */
           provenance,
+          /** **记录里写的原值**（历史事实，不改写文件）。与 `provenance` 不同即说明被降级。 */
+          recordedProvenance,
+          /** `true` 表示记录声称的来源比当前工具能认的更高，已被降级。 */
+          downgraded,
           provenanceNote: manifest.provenanceNote,
           manifest: manifestPath,
           top: manifest.top,
@@ -751,8 +788,8 @@ const main = () => {
     console.log(`  来源：${
       provenance === "input-snapshot-matched"
         ? "**input-snapshot-matched**（两阶段，构建前后输入一致）"
-        : provenance === "verified"
-          ? "**verified**（声称有构建过程佐证 —— 本版本工具不再产出这种状态）"
+        : provenance === "legacy-unverified"
+          ? `**legacy-unverified**（记录写的是 \`${recordedProvenance}\`，当前工具不认）`
           : provenance === "hand-recorded"
             ? "**hand-recorded**（手工补录，无构建过程佐证）"
             : "**unknown**（旧版 manifest 没记这个字段）"
@@ -763,10 +800,10 @@ const main = () => {
       console.log("文件一致：bit 内容与源摘要都和 manifest 记的一致。");
 
       /**
-       * **N01：`input-snapshot-matched` 也不能说「来源已验证」。**
+       * **N01 / G02：三种状态都不能说「来源已验证」。**
        *
-       * 它只证明「构建前后输入摘要相同」—— 而两次人工执行之间
-       * **可以什么都没做**（不跑 Vivado 直接 `--end` 也会得到这个状态）。
+       * 本版本没有受控构建调用记录，所以**任何** provenance 都够不上
+       * 那个结论。区别只在"为什么够不上"。
        */
       if (provenance === "input-snapshot-matched") {
         console.log("");
@@ -777,18 +814,24 @@ const main = () => {
         console.log("");
         console.log("    要真证明来源，需要**受控构建调用**记录 run / 工具返回状态 / 产物身份。");
         console.log("    在那之前，别把这份记录写成「bit 由当前源码构建」。");
-      } else if (provenance === "verified") {
-        console.log("来源已验证（外部记录）：manifest 声称走过受控构建。");
-        console.log("  **本版本工具不再产出这种状态** —— 请核对是哪一版工具写的。");
+      } else if (provenance === "legacy-unverified") {
+        console.log("");
+        console.log(`⚠️  **来源未验证** —— 这份清单是旧版工具写的，它声称 \`${recordedProvenance}\`。`);
+        console.log("    但那个版本的两阶段**不跑 Vivado 也会写 verified**，所以那个标记不可信。");
+        console.log("    本工具读取时已把它降级为 `legacy-unverified`（不改你磁盘上的文件）。");
+        console.log("");
+        console.log("    要重新拿一个如实的状态：用本版本重跑一次 --begin / --end，");
+        console.log("    或用 --write --force 重写为 hand-recorded。");
+        console.log("    **别因为这份旧清单写着 verified 就连板子。**");
       } else if (provenance === "hand-recorded") {
         console.log("");
         console.log("⚠️  但**来源未验证** —— 这是手工补录的记录。");
         console.log("    它只说明「写清单那一刻，这两组文件的哈希是这样」。");
         console.log("    **先改源码、再补一次 `--write` 也会得到同样的 PASS。**");
         console.log("");
-        console.log("    要证明「bit 是这份源码构建的」，用两阶段：");
+        console.log("    要更接近因果，用两阶段：");
         console.log("      --begin（构建前）→ 跑 Vivado → --end（构建后）");
-        console.log("    `--end` 会核对构建期间输入没变，那才是因果证据。");
+        console.log("    但那也只是「输入快照一致」，不是构建证明 —— 见上面那档的说明。");
       } else {
         console.log("");
         console.log("⚠️  这份 manifest 没记 `provenance`（旧版工具写的），来源**无法判定**。");

@@ -217,6 +217,40 @@ step "set top" {
   set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE $STRATEGY [get_runs synth_1]
 }
 
+# ---- 综合前的 RTL 检查（必跑）---------------------------------------------- #
+#
+# 仿真通过只说明「功能对」，不说明「能综合成你想要的电路」。
+# Verilator 与仿真器跑的是**行为模型**，允许很多综合器不接受、或不按你想的方式
+# 实现的东西（initial 块、锁存器、无复位寄存器、多驱动）。这些在仿真里完全正常，
+# 综合时才暴露 —— 而那时往往已经花了几十分钟。
+#
+# `synth_design -rtl` 只做 RTL 展开（elaboration），不跑综合，几十秒出结果。
+# 它抓的是：语法/结构错误、不可综合构造、位宽与连接问题。
+#
+# **它失败就不许继续**：那时 launch_runs 一定会失败，只是晚几十分钟。
+step "synth_design -rtl (RTL elaboration check)" {
+  if {[catch { synth_design -rtl -name rtl_check } rtl_err]} {
+    fail "RTL elaboration check failed before synthesis: $rtl_err
+          this usually means non-synthesizable constructs or width/connection errors.
+          Verilator and the simulator accept behaviour models that Vivado rejects --
+          fix it here, do not just run synthesis and hope."
+  }
+  # elaboration 通过不代表没有警告；把关键几类挑出来
+  set rtl_crit {}
+  foreach msg [get_msg_config -severity {CRITICAL WARNING} -count true] {
+    lappend rtl_crit $msg
+  }
+  if {[llength $rtl_crit] > 0} {
+    puts "\[run_synth\] RTL check: [llength $rtl_crit] critical warning(s) during elaboration"
+  }
+  puts "\[run_synth\] RTL elaboration check: PASSED"
+}
+
+# 回到干净的工程状态，让 launch_runs 从头跑（rtl_check 那次 elab 不留中间产物）
+step "reset after rtl check" {
+  catch { close_design }
+}
+
 # ---- 跑综合(批处理,全程不弹图形界面) --------------------------------------- #
 step "launch_runs synth_1" {
   launch_runs synth_1
@@ -314,6 +348,38 @@ step "report_utilization" {
 }
 step "report_timing_summary" {
   report_timing_summary -file [file join $RPT "timing_summary.rpt"]
+}
+
+# ---- 综合后的 DRC（必跑）---------------------------------------------------- #
+#
+# 综合前那次 `synth_design -rtl` 抓的是**语言层面**（不可综合结构、位宽/连接）。
+# 这一道抓的是**器件层面**：引脚/电平未约束、时钟配置、IP 配置冲突、BRAM/DSP
+# 用法与器件不匹配等 —— 那些只有真正映射到器件之后才存在。
+#
+# 两道是互补的，不是重复：`-rtl` 早几十秒发现问题，DRC 兜底。
+step "report_drc" {
+  set drc [report_drc -return_string]
+  set fh [open [file join $RPT "drc.rpt"] w]
+  puts $fh $drc
+  close $fh
+
+  # 只把 **Error / Critical Warning** 当阻塞项；Warning 逐条判，不整体忽略
+  set drc_err  0
+  set drc_crit 0
+  foreach line [split $drc "\n"] {
+    if {[regexp {^ERROR} $line]}            { incr drc_err }
+    if {[string first "CRITICAL WARNING" $line] >= 0} { incr drc_crit }
+  }
+  if {$drc_err > 0} {
+    fail "report_drc found $drc_err error(s) -- see [file join $RPT drc.rpt]
+          device-level rules are not satisfiable by this netlist; fix before archiving."
+  }
+  if {$drc_crit > 0} {
+    fail "report_drc found $drc_crit critical warning(s) -- see [file join $RPT drc.rpt]
+          these are usually unconstrained pins / IOSTANDARD / clock config.
+          a bitstream built from this would be unsafe to load."
+  }
+  puts "\[run_synth\] report_drc: no error, no critical warning -> $RPT/drc.rpt"
 }
 if {$GEN_STUB} {
   # stub **必须落在 `rtl/ip/<顶层>/` 下**:仿真的 run.do 只跳过 `rtl/ip/` 下的

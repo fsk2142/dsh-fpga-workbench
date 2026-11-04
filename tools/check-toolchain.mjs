@@ -671,7 +671,25 @@ check(
   VISIBLE.every((field) => ["common", "module", "project"].includes(field.section) && field.sectionLabel === SETTINGS_SECTIONS.find((section) => section.key === field.section)?.label),
   "每个可见字段都有三层布局元数据"
 );
-check(CAPABILITY_SELECTS.every((field) => field?.control === "select" && field.default === "auto"), "七张能力卡默认都是 auto");
+/**
+ * **环节首选工具：默认 auto，且控件隐藏。**
+ *
+ * 原来断言 `control === "select"` —— 那在设置页上就是 7 个「工具」下拉。
+ *
+ * 但它们**从来没硬约束过执行**：真正决定用哪个工具的是模板
+ * （用 `modelsim_run.do` 就是用 ModelSim，选 xsim 也不会变）。
+ * 于是界面上出现 7 个「改了不生效」的开关 —— 用户以为切换了仿真器，实际没有。
+ *
+ * 现在控件是 `hidden`：字段仍在（迁移与 capabilities 照常读），
+ * 默认值仍是 `auto`（由 AI 从已就绪工具判断），只是不再让用户选。
+ *
+ * 这条断言就是**守住这两点**：默认 auto 不变、控件确实是隐藏的。
+ * 哪天有人把它改回 `select`，说明又要把「不生效的开关」放回界面了。
+ */
+check(
+  CAPABILITY_SELECTS.every((field) => field?.control === "hidden" && field.default === "auto"),
+  "七张能力卡的工具首选默认 auto 且控件隐藏（不提供不生效的开关）"
+);
 check(
   CAPABILITY_SELECTS.every((field) => field.options[0]?.value === "auto" && field.options.at(-1)?.value === "none"),
   "每张能力卡都明确区分 auto 与 none"

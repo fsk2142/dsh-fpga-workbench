@@ -104,6 +104,24 @@ node "<自带命令目录>\module\module-rtl-new.mjs" <模块根> <模块名> --
 Verilator 补的是 `vlog` 不报的那一类(`UNUSEDSIGNAL` / `UNDRIVEN` / `WIDTHTRUNC` /
 `LATCH` / `CASEINCOMPLETE` 等)—— **须逐条判定,不得整体忽略**。
 
+### 改完 RTL 必须重跑,且必须清零「代码问题」
+
+**每次改完 RTL 都要重跑 Verilator**,不能凭"上次是干净的"跳过 —— 改一处可能带出新的
+`UNDRIVEN` 或位宽截断,而 `vlog` 不会报。
+
+判定时**把告警分成两类**,处理方式不同:
+
+| 类别 | 例子 | 处理 |
+|---|---|---|
+| **代码问题** | `UNUSEDSIGNAL`(拼错/漏接)、`UNDRIVEN`(信号恒 X)、`WIDTHTRUNC`(隐式截断)、`LATCH`(漏赋值)、`CASEINCOMPLETE` | **必须修**。修不掉要停下问,不许"下次再说" |
+| **环境问题** | 缺 XPM/IP 库(`MODMISSING`)、找不到 include 目录、Verilator 版本不支持某语法 | 可放过,但**要在报告里写明哪条、为什么算环境问题** |
+
+**判据**:「这条告警是改代码能消掉的吗?」能消掉就是代码问题。
+`MODMISSING` 是环境(库里没有厂商 IP),`UNUSEDSIGNAL` 是代码 —— 后者没有借口。
+
+**不许这样**:把 `-Wno-*` 加到命令里让告警消失,或整体 `--warn-no-fatal` 了事。
+那等于把检查关掉。
+
 ## 第三步:逐条核对规范
 
 先跑机械检查(见附录「机械检查覆盖什么」),再按 [RTL 规范清单](references/rtl-style-and-checks.md)

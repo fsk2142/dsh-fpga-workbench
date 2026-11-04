@@ -217,37 +217,86 @@ step "set top" {
   set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE $STRATEGY [get_runs synth_1]
 }
 
-# ---- 综合前的 RTL 检查（必跑）---------------------------------------------- #
+# ---- 综合前的 RTL 检查（必跑，两道）----------------------------------------- #
 #
 # 仿真通过只说明「功能对」，不说明「能综合成你想要的电路」。
 # Verilator 与仿真器跑的是**行为模型**，允许很多综合器不接受、或不按你想的方式
 # 实现的东西（initial 块、锁存器、无复位寄存器、多驱动）。这些在仿真里完全正常，
 # 综合时才暴露 —— 而那时往往已经花了几十分钟。
 #
-# `synth_design -rtl` 只做 RTL 展开（elaboration），不跑综合，几十秒出结果。
-# 它抓的是：语法/结构错误、不可综合构造、位宽与连接问题。
+# 两道互补，**顺序不能反、不能合并**：
 #
-# **它失败就不许继续**：那时 launch_runs 一定会失败，只是晚几十分钟。
+#   ① `synth_design -lint` —— Vivado RTL Linter 的 14 条可综合性规则
+#      （ASSIGN-*：算术溢出 / 混合符号 / 位宽；LATCH-*；等），结果写成报告文件
+#   ② `synth_design -rtl`  —— elaboration：展开设计，查连通性/结构错误
+#
+# **2026-11-04 真机验证过**（Vivado 2025.2，工程模式下实测）：
+#   · 两道在**工程模式**（create_project 之后）都合法可用
+#   · `-lint` 与 `-rtl` **互斥**：同时给报
+#     `Command failed: -lint and -rtl are mutually exclusive` —— 必须拆两条
+#   · `-lint` 之后**立即**读消息能拿到（实测 ERROR=1 / CW=1）；
+#     跑到下一步再读就归零了（仓库 `vivado_rtl_lint.tcl` 里记的同一条经验）
+#   · 计数用 `get_msg_config -count -severity {...}`，**`-count` 后面不加值**；
+#     带 `true` 会报 `Too many positional options when parsing 'true'`
+#   · **它返回的是单个整数（消息条数），不是列表** —— 实测：
+#       ERROR → `0`，CRITICAL WARNING → `1`，WARNING → `2`
+#     所以**不能**用 `llength` 去数：`llength 0` = 1（误报）、`llength 2` = 1（少报）。
+#     直接 `string trim` 取整数（与仓库 `vivado_rtl_lint.tcl` 的写法一致）。
+#   · `synth_design -rtl` 在带 IP 的工程上约 34 秒 —— 远快于完整综合
+#
+# **任一道失败就不许继续**：那时 launch_runs 一定也会失败，只是晚几十分钟。
+step "synth_design -lint (Vivado RTL Linter)" {
+  set lint_rpt [file join $RPT "rtl_lint.rpt"]
+  if {[catch { synth_design -lint -top $TOP -part $PART -file $lint_rpt } lint_err]} {
+    fail "Vivado RTL linter failed: $lint_err
+          this is the lint pass, before any elaboration. Fix the RTL or the lint
+          invocation (see templates/linter/vivado_rtl_lint.tcl) and re-run."
+  }
+  if {![file exists $lint_rpt]} {
+    fail "RTL linter did not write $lint_rpt -- cannot judge the result, refusing to pass."
+  }
+
+  # **立即**读消息：跑到下一步就看不到这一步的 CRITICAL WARNING 了。
+  #
+  # `-count` 返回单个整数，不是列表 —— 见上面注释里的实测值。
+  set n_err  0
+  set n_crit 0
+  if {![catch { set n_err [expr {int([string trim [get_msg_config -count -severity {ERROR}]])}] }]} {
+    # 读到了
+  } else {
+    set n_err 0
+  }
+  if {![catch { set n_crit [expr {int([string trim [get_msg_config -count -severity {CRITICAL WARNING}]])}] }]} {
+    # 读到了
+  } else {
+    set n_crit 0
+  }
+
+  # **ERROR 判死**；lint 报的其它问题逐条列出、不判死（与 fpga-project-lint 一致）
+  if {$n_err > 0} {
+    fail "RTL linter reported $n_err ERROR(s) -- see $lint_rpt
+          these are hard problems (unparsable / unsupported constructs), not style."
+  }
+  if {$n_crit > 0} {
+    puts "\[run_synth\] WARN: RTL linter reported $n_crit CRITICAL WARNING(s) -- see $lint_rpt"
+    puts "\[run_synth\]       （不判死，但必须逐条列进结论：可综合性风险要人判）"
+  } else {
+    puts "\[run_synth\] RTL linter: no error, no critical warning -> $lint_rpt"
+  }
+}
+
 step "synth_design -rtl (RTL elaboration check)" {
-  if {[catch { synth_design -rtl -name rtl_check } rtl_err]} {
+  if {[catch { synth_design -rtl -top $TOP -part $PART -name rtl_check } rtl_err]} {
     fail "RTL elaboration check failed before synthesis: $rtl_err
           this usually means non-synthesizable constructs or width/connection errors.
           Verilator and the simulator accept behaviour models that Vivado rejects --
           fix it here, do not just run synthesis and hope."
   }
-  # elaboration 通过不代表没有警告；把关键几类挑出来
-  set rtl_crit {}
-  foreach msg [get_msg_config -severity {CRITICAL WARNING} -count true] {
-    lappend rtl_crit $msg
-  }
-  if {[llength $rtl_crit] > 0} {
-    puts "\[run_synth\] RTL check: [llength $rtl_crit] critical warning(s) during elaboration"
-  }
   puts "\[run_synth\] RTL elaboration check: PASSED"
 }
 
-# 回到干净的工程状态，让 launch_runs 从头跑（rtl_check 那次 elab 不留中间产物）
-step "reset after rtl check" {
+# 回到干净的工程状态，让 launch_runs 从头跑（前面两次 synth_design 不留中间产物）
+step "reset after rtl checks" {
   catch { close_design }
 }
 
@@ -357,29 +406,80 @@ step "report_timing_summary" {
 # 用法与器件不匹配等 —— 那些只有真正映射到器件之后才存在。
 #
 # 两道是互补的，不是重复：`-rtl` 早几十秒发现问题，DRC 兜底。
+#
+# **2026-11-04 真机验证过**（Vivado 2025.2，工程模式综合后实测）：
+#   · `report_drc -return_string` 可用，报告落盘留证
+#   · **必须**先跑 `report_drc`，`get_drc_violations` 才有结果
+#     （直接调报 `Vivado_Tcl 4-50 Result '' not found`）
+#   · `get_drc_violations` 返回对象，用 `get_property SEVERITY` 读严重度 ——
+#     **不要字符串解析**：真实报告里严重度写在表格列里（`| NSTD-1 | Critical Warning |`），
+#     没有以 `ERROR` 开头的行，正则数出来永远是 0（假绿）。
 step "report_drc" {
-  set drc [report_drc -return_string]
-  set fh [open [file join $RPT "drc.rpt"] w]
-  puts $fh $drc
+  set drc_txt [report_drc -return_string]
+  set drc_file [file join $RPT "drc.rpt"]
+  set fh [open $drc_file w]
+  puts $fh $drc_txt
   close $fh
 
-  # 只把 **Error / Critical Warning** 当阻塞项；Warning 逐条判，不整体忽略
-  set drc_err  0
-  set drc_crit 0
-  foreach line [split $drc "\n"] {
-    if {[regexp {^ERROR} $line]}            { incr drc_err }
-    if {[string first "CRITICAL WARNING" $line] >= 0} { incr drc_crit }
+  # 用对象 API 读严重度，不解析文本
+  set n_err  0
+  set n_crit 0
+  set crit_rules {}
+  foreach v [get_drc_violations] {
+    set sev [get_property SEVERITY $v]
+    set nm  [get_property NAME $v]
+    if {[string equal -nocase $sev "Error"]} {
+      incr n_err
+    } elseif {[string equal -nocase $sev "Critical Warning"]} {
+      incr n_crit
+      lappend crit_rules $nm
+    }
   }
-  if {$drc_err > 0} {
-    fail "report_drc found $drc_err error(s) -- see [file join $RPT drc.rpt]
+
+  if {$n_err > 0} {
+    fail "report_drc found $n_err error(s) -- see $drc_file
           device-level rules are not satisfiable by this netlist; fix before archiving."
   }
-  if {$drc_crit > 0} {
-    fail "report_drc found $drc_crit critical warning(s) -- see [file join $RPT drc.rpt]
-          these are usually unconstrained pins / IOSTANDARD / clock config.
-          a bitstream built from this would be unsafe to load."
+
+  # **Critical Warning 要分规则判，不能一律判死。**
+  #
+  # 模块级综合**本来就不该有引脚/电平约束** —— 模块是被别人例化使用的，
+  # 引脚由上层工程决定。所以 NSTD-1（未指定 IOSTANDARD）与 UCIO-1（未约束端口）
+  # 在模块级是**正常状态**，判死会误杀每一次模块综合。
+  #
+  # 工程级不同：那边的 DRC 在 `vivado_implementation.tcl` 里，判据更严
+  # （而且处理了 `write_bitstream` 会把这两条升级成 ERROR 的事实）。
+  #
+  # 所以这里：**引脚/电平类的 Critical Warning 只列出、不判死；
+  # 其它 Critical Warning 判死**（那多半是真问题，如时钟配置、IP 冲突）。
+  set PIN_LEVEL_RULES {NSTD-1 UCIO-1}
+  set n_crit_fatal 0
+  set fatal_rules  {}
+  set n_crit_ok    0
+  set ok_rules     {}
+  foreach rule $crit_rules {
+    # 规则名形如 "NSTD-1#1"，取 # 之前的部分比对
+    set base [lindex [split $rule "#"] 0]
+    if {[lsearch -exact $PIN_LEVEL_RULES $base] >= 0} {
+      incr n_crit_ok
+      lappend ok_rules $rule
+    } else {
+      incr n_crit_fatal
+      lappend fatal_rules $rule
+    }
   }
-  puts "\[run_synth\] report_drc: no error, no critical warning -> $RPT/drc.rpt"
+
+  if {$n_crit_fatal > 0} {
+    fail "report_drc found $n_crit_fatal critical warning(s) needing attention: [join $fatal_rules {, }] -- see $drc_file
+          these are not pin/IOSTANDARD related, so they are not the expected
+          'module has no board constraints yet' state -- fix before archiving."
+  }
+  if {$n_crit_ok > 0} {
+    puts "\[run_synth\] report_drc: [join $ok_rules {, }] -- 引脚/电平未约束"
+    puts "\[run_synth\]   模块级预期如此（引脚由上层工程决定），**不判死**；"
+    puts "\[run_synth\]   上板前由工程级 impl 的 DRC 把关。详见 $drc_file"
+  }
+  puts "\[run_synth\] report_drc: no fatal error/critical -> $drc_file"
 }
 if {$GEN_STUB} {
   # stub **必须落在 `rtl/ip/<顶层>/` 下**:仿真的 run.do 只跳过 `rtl/ip/` 下的

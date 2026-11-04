@@ -172,6 +172,69 @@ if {$STUB_DIR ne ""} {
   puts "\[run_prj_synth\] stub: [string map {\\ /} [file join $STUB_ROOT "${TOP}_stub.v"]]"
 }
 
+# ---- 综合前的 RTL 检查（必跑，两道）----------------------------------------- #
+#
+# 仿真通过只说明「功能对」，不说明「能综合成你想要的电路」。
+# 综合器跑的是**行为模型**，允许很多综合器不接受、或不按你想的方式实现的东西
+# （initial 块、锁存器、无复位寄存器、多驱动）。这些在仿真里完全正常，
+# 综合时才暴露 —— 而那时往往已经花了几十分钟。
+#
+# 两道互补，**顺序不能反、不能合并**：
+#   ① `synth_design -lint` —— Vivado RTL Linter 的 14 条可综合性规则
+#   ② `synth_design -rtl`  —— elaboration：查连通性/结构错误
+#
+# **2026-11-04 真机验证过**（Vivado 2025.2，工程模式下实测）：
+#   · 两道在工程模式下都合法可用
+#   · `-lint` 与 `-rtl` **互斥**（同时给报 `-lint and -rtl are mutually exclusive`）
+#   · `-lint` 之后**立即**读消息才拿得到计数；跑到下一步就归零
+#   · `get_msg_config -count -severity {...}` **返回单个整数，不是列表** ——
+#     实测 ERROR→`0`、CRITICAL WARNING→`1`、WARNING→`2`。
+#     所以用 `string trim` 取整数；**用 `llength` 会数错**
+#     （`llength 0` = 1 误报，`llength 2` = 1 少报）。
+#
+# **放在复用判断之前**：否则 RESET_POLICY=auto 复用旧 run 时会整个跳过检查。
+step "synth_design -lint (Vivado RTL Linter)" {
+  set lint_rpt [file join $RPT "rtl_lint.rpt"]
+  if {[catch { synth_design -lint -top $TOP -part $PART -file $lint_rpt } lint_err]} {
+    fail "Vivado RTL linter failed: $lint_err
+          this is the lint pass, before any elaboration. Fix the RTL or the lint
+          invocation (see templates/linter/vivado_rtl_lint.tcl) and re-run."
+  }
+  if {![file exists $lint_rpt]} {
+    fail "RTL linter did not write $lint_rpt -- cannot judge the result, refusing to pass."
+  }
+  set n_err  0
+  set n_crit 0
+  if {![catch { set n_err [expr {int([string trim [get_msg_config -count -severity {ERROR}]])}] }]} {} else { set n_err 0 }
+  if {![catch { set n_crit [expr {int([string trim [get_msg_config -count -severity {CRITICAL WARNING}]])}] }]} {} else { set n_crit 0 }
+
+  if {$n_err > 0} {
+    fail "RTL linter reported $n_err ERROR(s) -- see $lint_rpt
+          these are hard problems (unparsable / unsupported constructs), not style."
+  }
+  if {$n_crit > 0} {
+    puts "\[run_prj_synth\] WARN: RTL linter reported $n_crit CRITICAL WARNING(s) -- see $lint_rpt"
+    puts "\[run_prj_synth\]       （不判死，但必须逐条列进结论：可综合性风险要人判）"
+  } else {
+    puts "\[run_prj_synth\] RTL linter: no error, no critical warning -> $lint_rpt"
+  }
+}
+
+step "synth_design -rtl (RTL elaboration check)" {
+  if {[catch { synth_design -rtl -top $TOP -part $PART -name rtl_check } rtl_err]} {
+    fail "RTL elaboration check failed before synthesis: $rtl_err
+          this usually means non-synthesizable constructs or width/connection errors.
+          The simulator accepts behaviour models that Vivado rejects --
+          fix it here, do not just run synthesis and hope."
+  }
+  puts "\[run_prj_synth\] RTL elaboration check: PASSED"
+}
+
+# 回到干净的工程状态，让后面的 launch_runs 从头跑
+step "reset after rtl checks" {
+  catch { close_design }
+}
+
 # ---- 跑综合:auto 下先看 run 状态,能复用就不重跑(Project Mode 自己管 run state)- #
 # 为什么不再默认每次 reset_run(2026-09-24;审查报告 T-07):reset 之后**一定**重新综合一遍,
 # 源码/约束/IP 都没动也一样 —— 反复迭代时每次白等;而"可靠"不等于"每次重跑"。
@@ -279,6 +342,20 @@ step "open_run $RUN" { open_run $RUN }
 step "report_utilization" { report_utilization -file [file join $RPT "utilization.rpt"] }
 step "report_timing_summary" { report_timing_summary -file [file join $RPT "timing_summary.rpt"] }
 puts "\[run_prj_synth\] reports: [string map {\\ /} [file join $RPT "utilization.rpt"]] / [string map {\\ /} [file join $RPT "timing_summary.rpt"]]"
+
+# ---- 注意：这里**故意不做 DRC** --------------------------------------------- #
+#
+# 工程流的分工是：**synth 只做综合，DRC 属于 impl**（见 `fpga-project-synth` 技能：
+# 「只做 synthesis。布局布线、DRC、出 bit 在 fpga-project-impl」）。
+#
+# `vivado_implementation.tcl` 里已有完整的 DRC 门，而且比这里能写的更准确 ——
+# 它专门处理了 NSTD-1 / UCIO-1 在 `write_bitstream` 阶段会被升级成 ERROR 这件事
+# （综合阶段的它们只是 Critical Warning，判据不同）。
+#
+# 所以这里不重复实现：在综合阶段拿 Critical Warning 判死会**误杀**
+# （综合后没约束引脚是常见的中间状态，impl 补上约束是正常流程）。
+#
+# 模块级不同：模块只到综合为止，没有 impl 环节，所以那边必须有 DRC。
 
 puts "\n\[run_prj_synth\] PASS: project synthesis completed (reports in [string map {\\ /} $RPT])"
 exit 0

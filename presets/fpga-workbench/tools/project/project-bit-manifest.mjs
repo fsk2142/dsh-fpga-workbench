@@ -158,6 +158,10 @@ const usage = (code = 2) => {
   process.exit(code);
 };
 
+const inputError = (message) => { console.error(message); process.exit(2); };
+const objectRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const safeTop = (value) => typeof value === "string" && value.trim() !== "" && value !== "." && value !== ".." && !/[\\/\x00:]/u.test(value);
+
 const parseArgs = (argv) => {
   const options = {
     root: "",
@@ -204,8 +208,12 @@ const parseArgs = (argv) => {
       continue;
     }
     if (arg === "-h" || arg === "--help") usage(0);
+    if (arg.startsWith("-")) inputError(`未知选项：${arg}`);
     rest.push(arg);
   }
+  if (rest.length > 1) inputError("只能指定一个工程根目录");
+  if ([options.begin, options.end, options.write].filter(Boolean).length > 1) inputError("--begin / --end / --write 不能同时使用");
+  if (options.top !== "" && !safeTop(options.top)) inputError("顶层名必须是单个文件名，不能含路径或盘符");
   options.root = rest[0] ?? "";
   return options;
 };
@@ -372,6 +380,7 @@ const main = () => {
       process.exit(2);
     }
 
+    if (!objectRecord(intent) || !safeTop(intent.top) || !objectRecord(intent.inputs) || typeof intent.inputs.sha256 !== "string") inputError("构建意图结构无效");
     const top = options.top !== "" ? options.top : String(intent.top ?? "");
     if (top === "") {
       console.error("--end 需要 --top（或 --begin 时记过）。");
@@ -655,6 +664,11 @@ const main = () => {
     process.exit(2);
   }
 
+  if (!objectRecord(manifest) || !safeTop(manifest.top) || !objectRecord(manifest.bit) || !objectRecord(manifest.inputs)) inputError("manifest 结构无效");
+  if (!Number.isInteger(manifest.schema) || manifest.schema < 1) inputError("manifest schema 无效");
+  if (manifest.bit.file !== `${manifest.top}.bit`) inputError("manifest bit 文件必须与顶层同名且位于 bit/ 内");
+  if (options.top !== "" && manifest.top !== options.top) inputError("manifest 顶层与 --top 不一致");
+
   /** 逐项核对，收集不一致。 */
   const problems = [];
 
@@ -748,7 +762,7 @@ const main = () => {
     verified: "legacy-unverified",
     unknown: "unknown"
   };
-  const provenance = DOWNGRADE[recordedProvenance] ?? "unknown";
+  const provenance = Object.hasOwn(DOWNGRADE, recordedProvenance) ? DOWNGRADE[recordedProvenance] : "unknown";
   const downgraded = recordedProvenance !== provenance;
 
   if (options.json) {

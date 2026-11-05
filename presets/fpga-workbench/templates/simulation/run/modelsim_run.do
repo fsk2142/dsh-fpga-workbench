@@ -1,5 +1,16 @@
 # ============================================================================ #
-# ModelSim / QuestaSim template -- compile AND run in ONE file (2026-09-23)      #
+# QuestaSim / ModelSim template -- compile AND run in ONE file (2026-09-23)      #
+# ============================================================================ #
+# **QuestaSim 是首选仿真器**（2026-11-05 定案：本机 Questa Sim 2024.1 实测通过，
+# ModelSim 计划卸载）。两者命令集一致，同一份脚本都能跑 —— 文件名里的 "modelsim"
+# 是历史命名，不代表只能用于 ModelSim。
+#
+# 实测确认（Questa Sim-64 2024.1 / Simulator 2024.02）：
+#   · vlib / vlog / vcom / vopt / vsim 全部可用
+#   · `vlog -O5`、`vopt -O5`、`vsim -c` 均正常（跑过最小 TB，输出正确）
+#   · modelsim.ini 在安装根（C:\questasim64_2024.1\），与 ModelSim 同名同格式
+#   · **注意**：Questa 2024 的 `-help` 文本不再逐条列出 -O5，但**实际可用** ——
+#     不要靠 grep `-help` 判断开关是否支持，要真跑一次。
 # ============================================================================ #
 # Usage (run from the module verif/ directory, or a project's root sim/):
 #   vsim -c -do "do run.do compile; quit -f"

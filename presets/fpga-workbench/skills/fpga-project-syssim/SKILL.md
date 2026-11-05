@@ -10,7 +10,8 @@ description: 验证 FPGA 工程的模块接口、背压、跨时钟或整机行�
 
 - 测试文件与脚本、日志:**`sim/`**(根目录;不放 `src/` 下)
 - 仿真器:**由模板决定,不由设置决定**。选哪份仿真脚本模板就等于选哪个仿真器 ——
-  本仓库只带 ModelSim 版(`modelsim_run.do`);走 Vivado 工程流则用 XSim。
+  本仓库只带一份 `modelsim_run.do`,它是 **QuestaSim / ModelSim 通用**的
+  （两者命令集一致;**Questa 是首选**,2026-11-05 定案）；走 Vivado 工程流则用 XSim。
   设置里登记的是「这台机器装了什么」,是**事实记录,不是开关**。
   一份工程**只用一个仿真器**,并在报告里写明用的哪个。
 - 结论:**`doc/syssim.md`**
@@ -64,10 +65,11 @@ description: 验证 FPGA 工程的模块接口、背压、跨时钟或整机行�
 
 **两套跑法都要会**,按选中的模板走对应那支:
 
-- **ModelSim / QuestaSim**:同一份 `sim/run.do` 先跑 compile 模式(`vlib` / `vlog`)、再跑 run 模式(`vsim -c` / `run -all` / `quit -f`);**这一份脚本按「仿真脚本」模板抄改**(编译与运行本来就是同一份模板,路径见会话提示;工程级没有 `*-new` 起文件命令,不要对工程根跑 `module-verif-new`)。从工程 `sim/` 跑时把编译脚本 `RTL_DIR` 改成 `{../src/rtl}`(模块布局是 `{../rtl}`);编译与运行**两步**都带上 ini(`$env:MODELSIM_INI` 或 `INI_OVERRIDE`)。`quit` 与成败 gate 写进 `.do`
-- **Vivado XSim**:`xvlog` / `xelab` / `xsim` 三步;**不要跑 `.do`**(那是 ModelSim 方言)
+- **QuestaSim / ModelSim**（**Questa 首选**）:同一份 `sim/run.do` 先跑 compile 模式(`vlib` / `vlog`)、再跑 run 模式(`vsim -c` / `run -all` / `quit -f`);**这一份脚本按「仿真脚本」模板抄改**(编译与运行本来就是同一份模板,路径见会话提示;工程级没有 `*-new` 起文件命令,不要对工程根跑 `module-verif-new`)。从工程 `sim/` 跑时把编译脚本 `RTL_DIR` 改成 `{../src/rtl}`(模块布局是 `{../rtl}`);编译与运行**两步**都带上 ini(`$env:MODELSIM_INI` 或 `INI_OVERRIDE`)。`quit` 与成败 gate 写进 `.do`
+- **Vivado XSim**:`xvlog` / `xelab` / `xsim` 三步;**不要跑 `.do`**(那是 Questa/ModelSim 方言)
 
-本仓库自带那份模板是 ModelSim 版(`modelsim_run.do`)—— 用它就是用 ModelSim;
+本仓库自带那份模板(`modelsim_run.do`)是 **QuestaSim / ModelSim 通用**的 ——
+文件名里的 "modelsim" 是历史命名，不代表只能用于 ModelSim（两者命令集一致）。
 走 Vivado 工程流(`launch_simulation`)则是 XSim。**一份工程只用一个**,不要混。
 
 **报告里必须写明用的哪个仿真器、哪份模板** —— 这是唯一强制的部分。

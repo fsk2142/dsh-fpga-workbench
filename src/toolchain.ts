@@ -466,7 +466,8 @@ const MISSING_TOOL_HINTS = [
   { tool: "python", why: "脚本工具:参考模型、测试向量生成与日志比对都要用它" },
   { tool: "verilator", why: "编译检查:最快的 RTL lint,免费" },
   { tool: "vivado", why: "综合与实现:模块/工程综合、时序、bitstream 都靠它(装了 Quartus 可跳过)" },
-  { tool: "modelsim", why: "仿真:跑测试平台并产出波形(装了 QuestaSim 可跳过)" }
+  // QuestaSim 优先：本机主力仿真器（2026-11-05 定案，ModelSim 计划卸载）
+  { tool: "questa", why: "仿真:跑测试平台并产出波形(装了 ModelSim 也可用它)" }
 ];
 
 /** 工具设置卡片的固定分类；顺序只用于展示，不表示调用顺序。 */
@@ -501,7 +502,19 @@ export const STAGE_BY_KEY = Object.fromEntries(STAGES.map((stage) => [stage.key,
 const ROLE_TOOLS: Record<string, string[]> = {
   script: ["python"],
   compiler: ["verilator", "iverilog", "custom-compiler"],
-  simulator: ["modelsim", "questa", "xsim", "custom-simulator"],
+  /**
+   * **仿真器优先级：QuestaSim 第一（2026-11-05 用户定案）。**
+   *
+   * 本机装了 Questa Sim 2024.1（`C:\questasim64_2024.1\win64`），
+   * 实测 `vlib` / `vlog` / `vcom` / `vopt` / `vsim` 全部可用，
+   * 模板用到的 `-O5`、`-c`、增量编译也都支持 —— 与 ModelSim 命令集一致。
+   *
+   * 用户计划**卸载 ModelSim**，所以 Questa 提为最优先。
+   *
+   * ModelSim 保留在列表里（第二）而不是删掉：别人的机器上可能只有 ModelSim，
+   * 而且两者可执行文件同名、靠路径区分，检测逻辑不需要改。
+   */
+  simulator: ["questa", "modelsim", "xsim", "custom-simulator"],
   fpga: ["vivado", "quartus", "custom-fpga"]
 };
 

@@ -11,10 +11,57 @@
 //   · 无子路径时，主入口存在
 import { openSync, readSync, closeSync } from "node:fs";
 import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
-const ASAR =
-  process.env.DSH_ASAR ??
-  "C:\\Users\\FSK\\AppData\\Local\\Programs\\DeepSeek Harness\\resources\\app.asar";
+/**
+ * 宿主 asar 的位置**不能硬编码**（会泄露用户名，而且在别人机器上永远失效）。
+ *
+ * 探测顺序：
+ *   1. `DSH_ASAR` 环境变量（显式指定，便于排查）
+ *   2. 从 `DSH_APP_DIR` 推（宿主目录 → `../app.asar`）
+ *   3. 常见安装位置（%LOCALAPPDATA% / Program Files）
+ *
+ * 全都不中 → 退出码 2 说清楚「找不到宿主」，与「找到但名字解析不了」的 1 区分开。
+ */
+const findAsar = () => {
+  const fromEnv = process.env.DSH_ASAR;
+  if (fromEnv !== undefined && fromEnv !== "" && existsSync(fromEnv)) return fromEnv;
+
+  const appDir = process.env.DSH_APP_DIR;
+  if (appDir !== undefined && appDir !== "") {
+    // 宿主目录形如 .../resources/app.asar/dsh 或 .../resources/app
+    const idx = appDir.replace(/\\/gu, "/").indexOf("/app.asar");
+    if (idx >= 0) {
+      const cand = `${appDir.slice(0, idx)}/app.asar`.replace(/\//gu, "\\");
+      if (existsSync(cand)) return cand;
+    }
+    const sibling = join(appDir, "..", "app.asar");
+    if (existsSync(sibling)) return sibling;
+  }
+
+  const roots = [
+    process.env.LOCALAPPDATA,
+    process.env.ProgramFiles,
+    process.env["ProgramFiles(x86)"]
+  ].filter((x) => x !== undefined && x !== "");
+  for (const root of roots) {
+    for (const exe of ["DeepSeek Harness", "deepseek-harness"]) {
+      for (const mid of ["", "Programs"]) {
+        const cand = mid === ""
+          ? join(root, exe, "resources", "app.asar")
+          : join(root, mid, exe, "resources", "app.asar");
+        if (existsSync(cand)) return cand;
+      }
+    }
+  }
+  return undefined;
+};
+
+const ASAR = findAsar();
+if (ASAR === undefined) {
+  console.error("  找不到 DSH 宿主 asar —— 设 DSH_ASAR 或 DSH_APP_DIR 后再跑。");
+  process.exit(2);
+}
 
 /**
  * **两种运行环境，必须分开处理。**

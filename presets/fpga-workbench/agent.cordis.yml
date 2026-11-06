@@ -309,8 +309,24 @@
     - id: tool-subagent-control
       name: '@deepseek-ai/dsh-tool-subagent-control'
 
-    - id: tool-subagent-list-agents
-      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+    # **`tool-subagent-list-agents` 已删除（2026-11-06，DSH 0.2.2-rc.1）。**
+    #
+    # 原来这里是：
+    #   - id: tool-subagent-list-agents
+    #     name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+    #
+    # 新版宿主把这个子路径**合并进主入口**了：
+    #   · `dsh-tool-subagent-control` 的 `exports` 只剩 `.` / `./src/*` /
+    #     `./package.json` / `./locale/*.json` —— **没有 `./list-agents`**
+    #   · 主 `lib/index.js` 内联了 `//#region lib/types/list-agents.js`，
+    #     `list_agents` 工具由主入口注册
+    #
+    # 子路径解析不到 → 该行永远起不来 → discovery 把整个预设判成 broken，
+    # 选择器里显示「加载失败 / never started」。
+    #
+    # 这正是本文件开头那条警告说的情况：
+    #   「DSH 升级后 standard 若增删行，这份与 cordis.patch.yml 内联的行集合都要同步」
+    # 以后升级宿主若又报 never started，先查该包 exports 有没有那个子路径。
 
     - id: tool-subagent
       name: '@deepseek-ai/dsh-tool-subagent'
